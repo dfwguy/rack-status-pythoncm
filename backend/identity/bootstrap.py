@@ -97,39 +97,51 @@ def unclaimed_admin(store: IdentityStore) -> User | None:
     return only
 
 
-def ensure_admin(store: IdentityStore, *, emit: bool = True) -> str | None:
+def ensure_admin(store: IdentityStore, *, emit: bool = True, force: bool = False) -> str | None:
     """Make sure a usable administrator credential exists, and return it when one was issued.
 
-    Two cases issue a password, and the second is new:
+    **A password is issued in exactly two cases, and only these two:**
 
-    * **no users at all** — create `admin`, as FR-10 requires;
-    * **an administrator nobody has claimed** — issue a *fresh* password for it.
+    * **there is no `admin` user** — a fresh install, or a deployment upgrading from shared-token
+      auth with no identity store yet (FR-10b); create `admin`, as FR-10 requires. The condition is
+      the *admin account's* absence, not the store's emptiness: a store that holds other accounts
+      but no administrator still has no way in, and still gets one.
+    * **`force=True`** — an operator has deliberately asked for a reset (`cli.py
+      reset-admin-password`), because the one-time password was missed or lost. This re-issues the
+      admin credential and invalidates every earlier copy.
 
-    **The second case looks like it contradicts AC-19 and in fact serves it.** AC-19's concern is a
-    shared password sitting in the deployment's logs, and the reason it forbade re-printing was that
-    the printed value stayed *valid*. That was the worse arrangement: one credential, printed once,
-    accepted indefinitely, and recoverable by anyone who reads a log from any point in the
-    deployment's life. Re-issuing invalidates every earlier copy, so a stale log line is worthless
-    — the standing shared secret is what disappears.
+    **If an `admin` user already exists, its password is left exactly as it is** — whether or not it
+    has been claimed (changed from the bootstrap credential). A plain restart issues nothing. This
+    is the correction to the 2026-09/10 behaviour that re-minted on *every* start while the admin
+    was still "unclaimed" (`must_change_password=True`). That turned every restart of a not-yet-
+    claimed deployment into a lockout: the password an operator had copied from the startup banner
+    stopped working the next time the container cycled, and nothing said why. Confirmed on the Nscale
+    NC deployment — four boots, four different passwords, each invalidating the last. Recoverability
+    does not require auto-reminting; it requires an *explicit* reset, which `force` provides and
+    which cannot be triggered by merely restarting the process.
 
-    It is also what makes a deployment recoverable. The password is shown once and stored nowhere,
-    so an operator who missed it — a scrolled-past console, a container started detached, a restart
-    while nobody was watching — previously had a deployment nobody could sign into and no supported
-    way back in. A restart now issues a new one.
+    **The condition is read from the store, never from the environment.** "Does an `admin` account
+    exist?" is a durable fact the store answers directly; gating on it is idempotent against the
+    store itself, so the several entry points that call this within one real start —
+    `startup_gate.prepare` in the gunicorn arbiter, `app._bootstrap_identity_at_startup` in each
+    forked worker, `cli.py serve` before it `execv`s — converge without coordinating: the first
+    caller creates `admin`, and every later caller finds it present and returns `None`. No
+    boot-scoped marker, no cross-`fork`/`execv` env state, nothing to drift. That machinery existed
+    only to contain the re-mint-on-every-call behaviour this function no longer has.
 
-    **Nothing is re-issued once the deployment is claimed.** A changed password, or any second
-    account, means somebody has real access; regenerating then would be a lockout of a live
-    operator and a back door for anyone who can restart the process. `unclaimed_admin` draws that
-    line, and it is the whole safety argument for this function.
+    **Nothing is re-issued once the admin exists unless `force` is set.** Leaving a live credential
+    in place is the point; regenerating it on a restart would lock out whoever holds it and hand a
+    back door to anyone who can cycle the process. The restart path cannot set `force`, so the
+    process gains nobody access it did not already have.
     """
-    admin = unclaimed_admin(store)
-    if not needed(store) and admin is None:
+    existing = store.get_user(canonical_login(ADMIN_LOGIN))
+    if existing is not None and not force:
         return None
 
     password = generate_password()
     salt, verifier = srp.enroll(ADMIN_LOGIN, password)
 
-    if admin is None:
+    if existing is None:
         store.create_user(
             User(
                 login=canonical_login(ADMIN_LOGIN),
@@ -142,14 +154,14 @@ def ensure_admin(store: IdentityStore, *, emit: bool = True) -> str | None:
         )
     else:
         # `edited` rather than a fresh User, so nothing else on the record is silently reset — and
-        # `must_change_password` stays True, because a re-issued credential is still a bootstrap
-        # credential and still has to be replaced by its holder.
+        # `must_change_password` stays True, because a forced reset is still a bootstrap credential
+        # and still has to be replaced by its holder.
         store.update_user(
-            admin.edited(srp_salt=salt, srp_verifier=verifier, must_change_password=True)
+            existing.edited(srp_salt=salt, srp_verifier=verifier, must_change_password=True)
         )
 
     if emit:
-        _emit(password, reissued=admin is not None)
+        _emit(password, reissued=existing is not None)
     return password
 
 
@@ -173,9 +185,9 @@ def _emit(password: str, *, reissued: bool = False) -> None:
         else "  IDENTITY STORE INITIALISED - ONE-TIME ADMINISTRATOR CREDENTIAL"
     )
     why = (
-        "  Re-issued because nobody has signed in yet. Every restart replaces it\n"
-        "  until the password is changed, which is what makes a missed credential\n"
-        "  recoverable - and what stops the printed one being a standing secret.\n"
+        "  Re-issued by an explicit reset (reset-admin-password). The previous\n"
+        "  password no longer works. A plain restart does NOT replace it - only\n"
+        "  this deliberate reset does.\n"
         if reissued
         else "  You will be asked to change it at first login.\n"
     )

@@ -134,35 +134,27 @@ class TestFR3ThePasswordIsNotRecoverable:
 
 
 class TestAC19ASecondBootChangesNothing:
-    """**AC-19 amended 2026-09-08: a second boot changes nothing once the deployment is CLAIMED.**
+    """**AC-19: a second boot changes nothing once an `admin` account exists.**
 
-    It previously meant "on any second boot", and two tests here pinned that. The reason given was
-    that re-printing turns a one-time password into a shared one sitting in the deployment's logs —
-    but the arrangement it protected was worse than that: one credential, printed once, accepted
-    *indefinitely*, recoverable from any log written at any point in the deployment's life.
-
-    Re-issuing while nobody has claimed the deployment invalidates every earlier copy, so the
-    standing shared secret is what disappears; and it makes a deployment recoverable when the
-    operator missed the console, which is a real failure that happened during this work — the
-    password is stored nowhere, so there was no supported way back in.
-
-    The half of AC-19 that mattered is intact and is asserted below: nothing is re-issued once
-    somebody holds real access. `test_identity_admin_reissue.py` holds the full boundary.
+    This held universally, was amended in 2026-09 to "once CLAIMED" so an unclaimed deployment
+    re-minted on every start, and the amendment caused a lockout in the field — a restart silently
+    invalidated the password the operator had copied (the Nscale NC deployment, four boots, four
+    passwords). The rule is back to its original form: once an administrator is present, no boot
+    touches its credential. The one supported way to replace a live credential is an explicit
+    ``force`` (``cli.py reset-admin-password``), which a restart cannot trigger —
+    `test_identity_admin_reissue.py` holds that full boundary.
     """
 
-    def test_it_re_issues_while_the_deployment_is_unclaimed(self, store, caplog):
+    def test_a_second_boot_does_not_re_issue(self, store, caplog):
         first = bootstrap.ensure_admin(store, emit=False)
         assert first
 
         with caplog.at_level(logging.WARNING, logger="identity.bootstrap"):
             second = bootstrap.ensure_admin(store)  # emit=True on purpose
 
-        assert second and second != first
-        assert caplog.records, "a re-issued credential must be printed, or nobody can use it"
-        assert "RE-ISSUED" in caplog.text, (
-            "the banner must say the previous password is dead, or an operator holding one from an "
-            "older log line discovers it at the login screen"
-        )
+        assert second is None, "a restart re-issued the credential and invalidated the first password"
+        assert not caplog.records, "a no-op boot must not print a banner"
+        assert _verifies_admin(store, first), "the first password stopped working on a restart"
 
     def test_the_claimed_admin_is_untouched(self, store):
         """The property AC-19 exists for, asserted against a *claimed* administrator."""
@@ -458,3 +450,59 @@ class TestTheAdminPolicyDocumentStaysValid:
         buried in a policy file tells an auditor less than the allow-all engine does."""
         actions = bootstrap.admin_policy_document()["statements"][0]["actions"]
         assert "*" not in actions
+
+
+class TestRedundantCallersInOneBootConverge:
+    """The product calls `ensure_admin` from several entry points within one real start —
+    `startup_gate.prepare()` in the gunicorn arbiter, `app._bootstrap_identity_at_startup()` in each
+    worker it forks, `cli.py serve` before it hands off. They must mint exactly one credential
+    between them.
+
+    This used to need a boot-scoped env marker (`ensure_admin_once_per_boot`), because `ensure_admin`
+    re-issued on every call and a second caller minted a second password — confirmed 2026-09-28 on
+    the Nscale NC deployment, two banners two seconds apart with only the second valid. The marker is
+    gone: `ensure_admin` now mints only when no `admin` exists, so the first caller creates the
+    account and every later caller in the same boot finds it present and no-ops. The convergence is a
+    property of the store, not of any coordinating state between the callers.
+    """
+
+    def test_a_second_caller_for_the_same_store_does_nothing(self, store):
+        """The regression case: the second entry point must not mint a password that invalidates the
+        one the first already printed."""
+        first = bootstrap.ensure_admin(store, emit=False)
+        second = bootstrap.ensure_admin(store, emit=False)
+
+        assert second is None
+        assert _verifies_admin(store, first)
+
+    def test_several_callers_print_one_banner(self, store, caplog):
+        """Only the first, creating caller emits — so an operator sees exactly one credential, not a
+        stream of them each superseding the last."""
+        with caplog.at_level(logging.WARNING, logger="identity.bootstrap"):
+            first = bootstrap.ensure_admin(store)
+            bootstrap.ensure_admin(store)
+            bootstrap.ensure_admin(store)
+
+        assert first and _verifies_admin(store, first)
+        assert caplog.text.count("ONE-TIME ADMINISTRATOR CREDENTIAL") == 1
+
+    def test_a_different_store_still_bootstraps(self, store, tmp_path):
+        """No shared guard between stores: a second, independently-configured store in the same
+        process still gets its own administrator."""
+        other = IdentityStore(str(tmp_path / "other-identity.json"))
+        try:
+            bootstrap.ensure_admin(store, emit=False)
+            other_password = bootstrap.ensure_admin(other, emit=False)
+            assert other_password
+            assert _verifies_admin(other, other_password)
+        finally:
+            other.close()
+
+
+def _verifies_admin(store_handle: IdentityStore, password: str) -> bool:
+    user = store_handle.get_user(bootstrap.ADMIN_LOGIN)
+    assert user is not None
+    recomputed = srp.verifier_for_salt(
+        bootstrap.ADMIN_LOGIN, password, bytes.fromhex(user.srp_salt)
+    ).hex()
+    return recomputed == user.srp_verifier

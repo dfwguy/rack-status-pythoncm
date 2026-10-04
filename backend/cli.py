@@ -74,6 +74,10 @@ def build_parser() -> argparse.ArgumentParser:
         ("check", "Report what `serve` would do, without creating an admin or a policy."),
         ("reconcile-admin-policy",
          "Add resource types newer than the administrators policy to it."),
+        ("reset-admin-password",
+         "Re-issue the admin one-time password for a missed or lost credential."),
+        ("attach-admin-policy",
+         "Attach the administrators policy to the admin account (repair a lockout)."),
     ):
         cmd = sub.add_parser(name, help=help_text, description=help_text)
         _add_path_options(cmd)
@@ -475,6 +479,135 @@ def _reconcile_admin_policy(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _reset_admin_password(args: argparse.Namespace) -> int:
+    """Force a fresh one-time `admin` credential, for a password missed or lost on first boot.
+
+    **Why this is a deliberate command and not something a restart does.** `ensure_admin` mints only
+    when no `admin` account exists; once one is present its password is left untouched across every
+    restart, because re-issuing it automatically would lock out whoever holds it and hand a back door
+    to anyone who can cycle the process. The real recovery need — an operator who never captured the
+    startup banner — is served here instead: an explicit act, run on demand, that re-issues the
+    credential and invalidates every earlier copy. It travels through no configuration and no
+    environment variable, so it cannot re-fire on the next restart the way a serve-time flag would.
+
+    Creates nothing from thin air: if there is no identity store yet, there is no deployment to
+    recover a login for, and `serve` is what brings the administrator into being. This reports that
+    rather than minting into a store it just created.
+    """
+    from identity import bootstrap as identity_bootstrap
+    from identity import store as identity_store_module
+    from identity.models import IdentityError
+    from identity.store import IdentityStore
+
+    path = Path(identity_store_module.identity_file())
+    if not path.is_file():
+        print(
+            f"reset-admin-password: no identity store at {path}. Start the server once (`serve`) to "
+            "create the administrator and print its one-time password; there is nothing to reset "
+            "yet.",
+            file=sys.stderr,
+        )
+        return EXIT_FAULT
+
+    store = None
+    try:
+        store = IdentityStore(str(path))
+        # `emit=False`: this command owns its output rather than relying on the logging handler a
+        # bare CLI invocation may not have configured. `force=True` is the whole point — re-issue
+        # even though an admin already exists.
+        password = identity_bootstrap.ensure_admin(store, emit=False, force=True)
+    except (OSError, ValueError, IdentityError) as exc:
+        print(f"reset-admin-password: could not reset the credential: {exc}", file=sys.stderr)
+        return EXIT_FAULT
+    finally:
+        if store is not None:
+            store.close()
+
+    if not password:  # defensive: force=True always issues
+        print("reset-admin-password: nothing was issued", file=sys.stderr)
+        return EXIT_FAULT
+
+    print("reset-admin-password: a new one-time administrator credential was issued; the previous "
+          "one no longer works.")
+    print()
+    print(f"    login:    {identity_bootstrap.ADMIN_LOGIN}")
+    print(f"    password: {password}")
+    print()
+    print("Copy it now — it is not stored and cannot be shown again. You will be asked to change it "
+          "at next login.")
+    return EXIT_OK
+
+
+def _attach_admin_policy(args: argparse.Namespace) -> int:
+    """Attach the `administrators` policy to the `admin` account, if it is not already.
+
+    **A separate, single-purpose repair from password reset.** The two lock an operator out for
+    unrelated reasons and recover differently, so keeping them apart keeps each one obvious:
+    `reset-admin-password` is about the credential; this is about the policy *attachment*, which
+    lives in the identity store and links the admin to the grant.
+
+    The case it exists for: the `administrators` policy is present but attached to nobody — a
+    redeploy that started a fresh identity store while the policy store persisted on the state
+    volume (the attachment is in the identity store, so it was lost; the policy is in the policy
+    store, so it survived). The admin then authenticates and is refused every action under
+    default-deny, with nothing tying the symptom to the cause. Confirmed on the Nscale NC deployment
+    2026-10-04.
+
+    It does one thing. It does **not** create the policy (that is a fresh deployment's bootstrap)
+    and does **not** touch any credential (that is `reset-admin-password`). If the policy or the
+    admin is missing, it says so and changes nothing.
+    """
+    from authz import store as policy_store
+    from identity import bootstrap as identity_bootstrap
+    from identity import store as identity_store_module
+    from identity.models import IdentityError
+    from identity.store import IdentityStore
+
+    path = Path(identity_store_module.identity_file())
+    if not path.is_file():
+        print(f"attach-admin-policy: no identity store at {path}; there is no admin to attach a "
+              "policy to.", file=sys.stderr)
+        return EXIT_FAULT
+
+    subject = f"user:{identity_bootstrap.ADMIN_LOGIN}"
+    policy_id = identity_bootstrap.ADMIN_POLICY_ID
+    store = None
+    try:
+        store = IdentityStore(str(path))
+        if store.get_user(identity_bootstrap.ADMIN_LOGIN) is None:
+            print(f"attach-admin-policy: no '{identity_bootstrap.ADMIN_LOGIN}' account exists; run "
+                  "`serve` to bootstrap one first.", file=sys.stderr)
+            return EXIT_FAULT
+
+        try:
+            have_policy = any(getattr(d, "id", None) == policy_id for d in policy_store.read_all())
+        except (policy_store.PolicyStoreError, OSError) as exc:
+            print(f"attach-admin-policy: policy set unreadable: {exc}", file=sys.stderr)
+            return EXIT_FAULT
+        if not have_policy:
+            print(f"attach-admin-policy: no '{policy_id}' policy exists to attach. A fresh `serve` "
+                  "writes one on first boot; this command only links an existing policy to the "
+                  "admin.", file=sys.stderr)
+            return EXIT_FAULT
+
+        if subject in store.subjects_with_policy(policy_id):
+            print(f"attach-admin-policy: '{policy_id}' is already attached to "
+                  f"{identity_bootstrap.ADMIN_LOGIN}; nothing to do.")
+            return EXIT_OK
+
+        store.attach_policy(subject, policy_id)
+    except (OSError, ValueError, IdentityError) as exc:
+        print(f"attach-admin-policy: could not attach the policy: {exc}", file=sys.stderr)
+        return EXIT_FAULT
+    finally:
+        if store is not None:
+            store.close()
+
+    print(f"attach-admin-policy: attached '{policy_id}' to {identity_bootstrap.ADMIN_LOGIN}. The "
+          "administrator can now act under default-deny.")
+    return EXIT_OK
+
+
 #: Keys an old env file (`rack-config.env`) may carry that must not move into `rackstatus.toml`,
 #: each with the reason `init-config --from-env-file` prints.
 NOT_FOR_THE_CONFIG_FILE: dict[str, str] = {
@@ -624,6 +757,10 @@ def main(argv: list[str] | None = None) -> int:
         return _report(_plan(), applied, args.as_json)
     if args.command == "reconcile-admin-policy":
         return _reconcile_admin_policy(args)
+    if args.command == "reset-admin-password":
+        return _reset_admin_password(args)
+    if args.command == "attach-admin-policy":
+        return _attach_admin_policy(args)
     if args.command == "init-config":
         return _init_config(args)
     return _serve(args)

@@ -181,6 +181,145 @@ class TestTheJsonReportIsMachineReadable:
         assert payload["applied"]["NVIS_IDENTITY_FILE"] == str(paths["identity"])
 
 
+class TestResetAdminPassword:
+    """The deliberate recovery path for a one-time password missed on first boot. It re-issues the
+    credential — the one thing allowed to replace a live one — and, unlike a serve-time flag, carries
+    no standing state that would re-fire on the next restart."""
+
+    def _seed_admin(self, paths):
+        paths["identity"].parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [sys.executable, "-c",
+             ("import sys; sys.path.insert(0, 'backend');"
+              "from identity.store import IdentityStore;"
+              "import identity.bootstrap as b;"
+              "s = IdentityStore(sys.argv[1]); b.ensure_admin(s, emit=False); s.close()"),
+             str(paths["identity"])],
+            cwd=REPO_ROOT, check=True, capture_output=True,
+            env={**os.environ, "RACK_WEB_SECRET_KEY": "cli-test-secret"},
+        )
+
+    def _reset(self, paths):
+        return subprocess.run(
+            [sys.executable, "backend/cli.py", "reset-admin-password",
+             "--identity-file", str(paths["identity"])],
+            capture_output=True, text=True, cwd=REPO_ROOT, check=False,
+            env={**os.environ, "RACK_STATUS_DEMO": "1", "RACK_WEB_SECRET_KEY": "cli-test-secret"},
+        )
+
+    def test_it_reissues_for_an_existing_admin(self, paths):
+        self._seed_admin(paths)
+        got = self._reset(paths)
+        assert got.returncode == 0, got.stderr
+        assert "password:" in got.stdout
+        assert "no longer works" in got.stdout
+
+    def test_two_resets_issue_different_passwords(self, paths):
+        """Each reset is a fresh credential from the CSPRNG; a bug that reprinted a cached value
+        would show as two identical passwords."""
+        import re
+
+        self._seed_admin(paths)
+        # Anchored to line start, or it matches the "reset-admin-password:" prefix line too.
+        pattern = r"(?m)^\s*password:\s+(\S+)\s*$"
+        first = re.search(pattern, self._reset(paths).stdout)
+        second = re.search(pattern, self._reset(paths).stdout)
+        assert first and second and first.group(1) != second.group(1)
+
+    def test_it_refuses_and_creates_nothing_without_a_store(self, paths):
+        """No store means no deployment to recover a login for. `serve` creates the administrator;
+        this must not mint one into a store it just brought into being."""
+        got = self._reset(paths)
+        assert got.returncode == cli.EXIT_FAULT
+        assert "no identity store" in got.stderr
+        assert not paths["identity"].exists()
+
+
+class TestAttachAdminPolicy:
+    """The separate repair for a policy-attachment lockout — distinct from a password reset. The
+    `administrators` policy exists (persisted on the state volume) but is attached to nobody, so the
+    freshly bootstrapped admin authenticates and is then refused everything under default-deny."""
+
+    def _seed_orphan(self, paths):
+        """An admin plus an `administrators` policy that is attached to no one — a reset identity
+        store beside a persisted policy store."""
+        paths["identity"].parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [sys.executable, "-c",
+             ("import sys; sys.path.insert(0, 'backend');"
+              "from identity.store import IdentityStore;"
+              "import identity.bootstrap as b; from authz import store as ps;"
+              "s = IdentityStore(sys.argv[1]); b.ensure_admin(s, emit=False);"
+              "ps.create(b.admin_policy_document()); s.close()"),
+             str(paths["identity"])],
+            cwd=REPO_ROOT, check=True, capture_output=True,
+            env={**os.environ, "RACK_WEB_POLICY_FILE": str(paths["policy"]),
+                 "RACK_WEB_SECRET_KEY": "cli-test-secret"},
+        )
+
+    def _attach(self, paths):
+        return subprocess.run(
+            [sys.executable, "backend/cli.py", "attach-admin-policy",
+             "--identity-file", str(paths["identity"]), "--policy-file", str(paths["policy"])],
+            capture_output=True, text=True, cwd=REPO_ROOT, check=False,
+            env={**os.environ, "RACK_STATUS_DEMO": "1", "RACK_WEB_SECRET_KEY": "cli-test-secret"},
+        )
+
+    def _attached_subjects(self, paths):
+        out = subprocess.run(
+            [sys.executable, "-c",
+             ("import sys; sys.path.insert(0, 'backend');"
+              "from identity.store import IdentityStore; import identity.bootstrap as b;"
+              "s = IdentityStore(sys.argv[1]);"
+              "print(s.subjects_with_policy(b.ADMIN_POLICY_ID)); s.close()"),
+             str(paths["identity"])],
+            cwd=REPO_ROOT, check=True, capture_output=True, text=True,
+            env={**os.environ, "RACK_WEB_POLICY_FILE": str(paths["policy"]),
+                 "RACK_WEB_SECRET_KEY": "cli-test-secret"},
+        )
+        return out.stdout.strip()
+
+    def test_it_attaches_an_orphaned_policy(self, paths):
+        self._seed_orphan(paths)
+        assert "user:admin" not in self._attached_subjects(paths)
+
+        got = self._attach(paths)
+        assert got.returncode == 0, got.stderr
+        assert "attached" in got.stdout
+        assert "user:admin" in self._attached_subjects(paths)
+
+    def test_it_is_idempotent(self, paths):
+        self._seed_orphan(paths)
+        self._attach(paths)
+        again = self._attach(paths)
+        assert again.returncode == 0
+        assert "already attached" in again.stdout
+
+    def test_it_refuses_without_a_store(self, paths):
+        got = self._attach(paths)
+        assert got.returncode == cli.EXIT_FAULT
+        assert "no identity store" in got.stderr
+        assert not paths["identity"].exists()
+
+    def test_it_refuses_without_the_policy(self, paths):
+        """Admin present, but no administrators policy to attach — a different problem, and this
+        command must not invent a policy (that is bootstrap's job)."""
+        paths["identity"].parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [sys.executable, "-c",
+             ("import sys; sys.path.insert(0, 'backend');"
+              "from identity.store import IdentityStore; import identity.bootstrap as b;"
+              "s = IdentityStore(sys.argv[1]); b.ensure_admin(s, emit=False); s.close()"),
+             str(paths["identity"])],
+            cwd=REPO_ROOT, check=True, capture_output=True,
+            env={**os.environ, "RACK_WEB_POLICY_FILE": str(paths["policy"]),
+                 "RACK_WEB_SECRET_KEY": "cli-test-secret"},
+        )
+        got = self._attach(paths)
+        assert got.returncode == cli.EXIT_FAULT
+        assert "no 'administrators' policy" in got.stderr
+
+
 class TestTheParser:
     def test_a_subcommand_is_required(self):
         with pytest.raises(SystemExit):
