@@ -64,6 +64,29 @@ class TestReadingMarkers:
         by_node = {e["node"]: e["status"] for e in healthcheck_evidence.post_run_events()}
         assert by_node == {"gpu1-su19": "PASS", "gpu2-su19": "FAIL"}
 
+    def test_event_conforms_to_the_post_run_run_shape(self, root):
+        # The post-run table renders a health marker through the same row path as a Slurm run,
+        # so every field that path reads must be present and typed -- a missing `state` crashed
+        # the view (undefined.toLowerCase). `state` carries the verdict so the colour maps.
+        _node(root, "gpu1-su19", "clean", epoch="1700000000")
+        ev = healthcheck_evidence.post_run_events()[0]
+        for field in ("node", "rack", "job_id", "tool", "state", "started_at", "reason",
+                      "attributed_failure", "failed_job", "source"):
+            assert field in ev, f"missing run field: {field}"
+        assert ev["state"] == "PASS"
+        assert ev["tool"] == "node-healthcheck"
+        assert ev["attributed_failure"] is False
+        assert ev["started_at"].startswith("2023-")  # ISO-8601 from the epoch, not a bare int
+
+    def test_a_non_numeric_timestamp_sanitises_to_empty_not_a_bad_date(self, root):
+        # A half-written marker's timestamp must not reach the client as a non-date string.
+        directory = root / "gpu9-su19"
+        directory.mkdir()
+        (directory / ".last-check").write_text("not-a-number clean\n", encoding="utf-8")
+        ev = healthcheck_evidence.post_run_events()[0]
+        assert ev["started_at"] == ""
+        assert ev["state"] == "PASS"
+
     def test_a_failure_carries_the_log_tail_as_its_reason(self, root):
         # A red row with no reason sends the operator to the filesystem anyway.
         _node(root, "n01", "failed", log="GPU4 ECC uncorrectable\nfan 3 stalled\n")

@@ -72,8 +72,10 @@ function formatWhen(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
-function stateColor(state: string): "green" | "red" | "yellow" | "blue" | "gray" {
-  const low = state.toLowerCase();
+function stateColor(state: string | null | undefined): "green" | "red" | "yellow" | "blue" | "gray" {
+  // Defensive: a run merged from an external evidence feed may omit `state`; never assume
+  // the field is a string (the API type says so, the data does not always agree).
+  const low = (state ?? "").toLowerCase();
   if (low === "idle" || low === "completed" || low === "pass") return "green";
   if (low.includes("drain") || low === "down" || low === "failed" || low === "fail") return "red";
   if (low === "running" || low === "alloc" || low === "warning") return "yellow";
