@@ -89,9 +89,66 @@ function report(withAudit: boolean): PostRunNodeReportResponse {
   };
 }
 
+function manyRacksReport(count: number): PostRunNodeReportResponse {
+  const racks = Array.from({ length: count }, (_, i) => {
+    const rack = `rack-${String(i).padStart(2, "0")}`;
+    const n: PostRunNode = {
+      node: `${rack}-gpu1-su1`,
+      rack,
+      slurm_state: "idle",
+      slurm_reason: "",
+      participation_count: 0,
+      failed_job_participations: 0,
+      failure_count: 0,
+      distinct_failure_runs: 0,
+      flagged: false,
+      trend: "flat",
+      last_run_at: "",
+      last_failure_at: "",
+      findings: [],
+      hardware_status: null,
+      network_status: null,
+      runs: [],
+    };
+    return { rack, nodes: [n] };
+  });
+  return {
+    ok: true,
+    generated_at: "2026-08-13T19:17:27Z",
+    history_path: "/app/var/post-run.json",
+    summary: { nodes: count, participations: 0, attributed_failures: 0, flagged_nodes: 0, drained_nodes: 0 },
+    racks,
+    nodes: racks.map((r) => r.nodes[0]),
+    refresh: { activities: 0, merge: {}, accounting_error: "", inventory_error: "" },
+  };
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
+});
+
+describe("PostRunNodeReportView pagination", () => {
+  it("shows at most 10 rack rows and a pager when the floor is larger", async () => {
+    service.fetchPostRunNodeReport.mockResolvedValue(manyRacksReport(12));
+    render(<PostRunNodeReportView />);
+
+    // First page: racks 00-09 render; 10 and 11 are on page 2.
+    expect(await screen.findByText("rack-00")).toBeInTheDocument();
+    expect(screen.getByText("rack-09")).toBeInTheDocument();
+    expect(screen.queryByText("rack-10")).not.toBeInTheDocument();
+    expect(screen.queryByText("rack-11")).not.toBeInTheDocument();
+
+    // The pager reports the filtered total, not the page size.
+    expect(screen.getByText(/of 12 racks/)).toBeInTheDocument();
+  });
+
+  it("renders no pager when everything fits on one page", async () => {
+    service.fetchPostRunNodeReport.mockResolvedValue(manyRacksReport(4));
+    render(<PostRunNodeReportView />);
+    expect(await screen.findByText("rack-03")).toBeInTheDocument();
+    expect(screen.queryByText(/of 4 racks/)).not.toBeInTheDocument();
+  });
 });
 
 describe("PostRunNodeReportView deep-audit launch", () => {

@@ -41,6 +41,8 @@ import {
 } from "lucide-react";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
+import { TablePager } from "../components/TablePager";
+import { usePagedRows } from "../hooks/usePagedRows";
 import {
   fetchDeepAudit,
   fetchDeepAuditOutput,
@@ -197,6 +199,9 @@ export function PostRunNodeReportView() {
       }))
       .filter((row) => row.nodes.length > 0);
   }, [data, rack, search]);
+  // The floor can be thousands of racks; page the groups so the history view is one screen,
+  // not an endless scroll. 10 per page by default (the pager still offers larger sizes).
+  const pagedRacks = usePagedRows(filteredRacks, 10);
 
   const openNode = (node: PostRunNode) => {
     setSelected(node);
@@ -323,7 +328,7 @@ export function PostRunNodeReportView() {
 
       {section === "history" ? (
         <Flex direction="column" gap="4">
-          {filteredRacks.map((rackRow) => (
+          {pagedRacks.visible.map((rackRow) => (
             <Paper key={rackRow.rack} variant="outlined" sx={{ p: 2 }}>
               <Flex align="center" gap="2" style={{ marginBottom: 12 }}>
                 <Text kind="body/bold/md">{rackRow.rack}</Text>
@@ -365,6 +370,7 @@ export function PostRunNodeReportView() {
               </Box>
             </Paper>
           ))}
+          <TablePager {...pagedRacks} noun="racks" />
         </Flex>
       ) : (
         <TableContainer component={Paper} variant="outlined">
