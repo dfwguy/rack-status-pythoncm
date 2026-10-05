@@ -130,6 +130,30 @@ def test_extract_rack_ids_from_cmsh_text_cbr_rk_lines(monkeypatch):
     assert ids == ["CBR01-DH01-SVR-CN0102", "CBR01-DH01-SVR-CN0104"]
 
 
+def test_extract_rack_ids_anchorless_template_ignores_member_hostname_substrings(monkeypatch):
+    """An anchorless rack template must not invent racks from member-hostname substrings.
+
+    Nscale NC's rack ids are a bare ``[A-Z][\\d+]`` (``U19``, ``Q26``) and the ``rack; list`` rows
+    carry member hostnames like ``sys1-gso1-p-phy-gpu1-su19``. A whole-text scan of that output
+    matched ``gso1``->``o1``, ``gpu1``->``u1``, ``su19``->``u19`` and produced ~150 phantom racks.
+    The rack name is always the first column, so that column is authoritative and the scan is
+    skipped when the template has no literal to anchor on.
+    """
+    monkeypatch.setenv("NVIS_RACK_ID", r"[A-Z][\d+]")
+    monkeypatch.delenv("NVIS_CT_ID", raising=False)
+    import native_status
+
+    native_status.invalidate_job_env_file_cache()
+
+    text = (
+        "Q26   17 26 42   sys1-gso1-p-phy-gpu19-su36,sys1-gso1-p-phy-nvs10-su36\n"
+        "R2    18  2 42   sys1-gso1-p-phy-gpu1-su26,sys1-gso1-p-phy-nvs1-su26\n"
+        "U19   21 19 42   sys1-gso1-p-phy-gpu1-su19,sys1-gso1-p-phy-gpu9-su19\n"
+    )
+    ids = native_status.extract_rack_ids_from_cmsh_text(text)
+    assert ids == ["Q26", "R2", "U19"]  # only the first-column rack names, no o1/u1/u19 phantoms
+
+
 def test_rack_id_from_log_basename_clusterkit_root_ck():
     n = nid.NvisNaming.from_templates(nid.CBR_NVIS_RACK_ID, nid.CBR_NVIS_CT_ID)
     assert n.rack_id_from_log_basename("root-CK-CBR01-DH01-SVR-CN0102-829.txt") == "CBR01-DH01-SVR-CN0102"

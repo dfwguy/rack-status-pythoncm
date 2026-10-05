@@ -190,6 +190,10 @@ def high_overlay(
     _put(out, "NVIS_NVSW_ID", n.nvsw_id_template)
     _put(out, "NVIS_CT_JOINER", n.ct_joiner)
     _put(out, "NVIS_SLURM_HOSTLIST", n.slurm_hostlist)
+    # How nodes are placed on the floor: 'direct' parses the rack from the hostname template,
+    # 'translate' takes rack/slot from the provider and the SU grouping from scalable_units.
+    # Read by native_status; see catalog.models.RACK_MAPPING_MODES.
+    _put(out, "NVIS_RACK_MAPPING_MODE", cluster.rack_mapping_mode)
     _put(out, "RACK_PLATFORM", cluster.cluster_manager)
     # Which backend runs work, read by `schedulers.factory.build_scheduler`. On the cluster
     # record rather than in the environment so one instance can serve a Slurm site and a

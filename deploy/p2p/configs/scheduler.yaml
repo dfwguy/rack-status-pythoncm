@@ -1,0 +1,70 @@
+server:
+  advertiseIP: 10.41.112.3
+  advertisePort: 12002
+  listenIP: 10.41.112.3
+  port: 12002
+  logDir: /home/hlakshminara/NVIS-P2P/state/scheduler/logs
+  pluginDir: /home/hlakshminara/NVIS-P2P/state/scheduler/plugins
+  dataDir: /home/hlakshminara/NVIS-P2P/state/scheduler/data
+
+scheduler:
+  algorithm: default
+  backToSourceCount: 1
+  retryBackToSourceLimit: 3
+  retryLimit: 5
+  retryInterval: 1s
+  gc:
+    pieceDownloadTimeout: 45m
+    peerGCInterval: 10s
+    peerTTL: 24h
+    taskGCInterval: 30m
+    hostGCInterval: 5m
+    hostTTL: 1h
+
+# Persistent tasks created by dfstore require Redis. Keep scheduler task
+# metadata in dedicated databases so it cannot collide with Manager state.
+database:
+  redis:
+    addrs:
+      - 127.0.0.1:15379
+    brokerDB: 3
+    backendDB: 4
+    # Roughly four thousand simultaneous peers announce and reschedule during
+    # a fleet wave. Avoid queueing them behind the former 40-connection pool.
+    poolSize: 1024
+    poolTimeout: 10s
+
+dynConfig:
+  refreshInterval: 1m
+
+manager:
+  addr: 10.41.112.3:12003
+  schedulerClusterID: 1
+  keepAlive:
+    interval: 5s
+
+host:
+  idc: nscaletx
+  location: appserver
+
+seedPeer: {}
+
+job:
+  enable: false
+
+storage:
+  maxSize: 100
+  maxBackups: 10
+  bufferSize: 100
+
+metrics:
+  enable: true
+  addr: 10.41.112.3:12001
+  enableHost: true
+
+network:
+  enableIPv6: false
+
+console: true
+pprofPort: -1
+applications: []

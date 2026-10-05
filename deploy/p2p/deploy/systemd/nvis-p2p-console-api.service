@@ -1,0 +1,29 @@
+[Unit]
+Description=NVIS-P2P console operations API
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hlakshminara
+Group=cmods
+# Override these values in a systemd drop-in when deploying to another cluster.
+Environment=NVIS_P2P_ROOT=/home/hlakshminara/NVIS-P2P
+Environment=NVIS_P2P_ELIGIBLE_NODES=/home/hlakshminara/NVIS-P2P/inventory/SU1-SU14-live-eligible-3951.nodes
+Environment=NVIS_P2P_MANAGER=127.0.0.1:12004
+Environment=NVIS_P2P_CONSOLE_API_LISTEN=127.0.0.1
+Environment=NVIS_P2P_CONSOLE_API_PORT=14300
+Environment=NVIS_P2P_OBJECT_STORE_HEALTH_URL=https://10.41.112.3:19000/minio/health/live
+ExecStart=/usr/bin/python3 ${NVIS_P2P_ROOT}/services/console-api/server.py
+Restart=always
+RestartSec=5s
+Nice=5
+CPUQuota=400%
+MemoryMax=4G
+TasksMax=8192
+LimitNOFILE=65536
+StandardOutput=append:/home/hlakshminara/NVIS-P2P/state/console-api.log
+StandardError=append:/home/hlakshminara/NVIS-P2P/state/console-api.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+[Unit]
+Description=NVIS-P2P Dragonfly peer
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hlakshminara
+Group=cmods
+ExecStart=/opt/containers/.nvis-p2p/bin/dfdaemon --config /opt/containers/.nvis-p2p/peer.yaml --log-dir /opt/containers/.nvis-p2p/logs --console
+Restart=always
+RestartSec=5s
+# Do not impose NVIS CPU, memory, nice, or I/O throttles. Dragonfly is allowed
+# to use the node's available resources and the physical fabric is the limit.
+TasksMax=1024
+LimitNOFILE=1048576
+StandardOutput=append:/opt/containers/.nvis-p2p/logs/dfdaemon-service.log
+StandardError=append:/opt/containers/.nvis-p2p/logs/dfdaemon-service.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,29 @@
+# NVIS-P2P pinned binary artifacts.
+#
+# These are the Dragonfly binaries the P2P control plane and compute peers run. They are NOT
+# committed to git (~300 MB); they are staged into deploy/p2p/dist/ and checksum-verified at image
+# build time by deploy/p2p/bin/stage-artifacts.sh, so the image is self-contained for an air-gapped
+# deploy while the repository stays lean. This file is the reproducibility anchor: the exact bytes a
+# build is allowed to bake in.
+#
+#   Dragonfly core   v2.5.1  (commit 5523218a3710b2d5bc8fbdb0b1473d3a4d64916d)  -> manager, scheduler
+#   Dragonfly client v1.4.9                                                     -> dfdaemon, dfget, dfstore
+#
+# Two client builds:
+#   client-amd64-v1.4.9      official upstream release (x86-64 seeds / origin / control plane)
+#   client-arm64-64k-v1.4.9  CUSTOM build for aarch64 GB300 compute with a 64 KiB page size
+#                            (built via deploy/p2p/scripts/build-dragonfly-client.sh; no upstream
+#                             release carries the 64 KiB ELF alignment, so it is provisioned from a
+#                             staged artifact set, never fetched).
+#
+# Verify a staged tree:   cd deploy/p2p/dist && sha256sum -c ../artifacts.lock
+#
+# Format is sha256sum(1) -c compatible: "<sha256>  <path-relative-to-dist/>".
+378e65516f09a8e055aab32920fe3883bbc3d6ba27d672975227081419dd4392  core/manager
+f6975b992db3d81e0c68815d246a8153d32d2fe1334f3bcf280691e5cdf14ad9  core/scheduler
+1275cecfb59fc52e60f551ebe4ea4bd460c3d2ba6532d36768c991ece2d7e52f  client-amd64-v1.4.9/dfdaemon
+8c85d814b11c1b55d39b4de3fa74ef122576bc2fdd946689b8eaf186d3990fc9  client-amd64-v1.4.9/dfget
+1a5b2f9ab4f54c7428ec8f54ed43c0a01caf37d5be63137ff339bcf2850ece33  client-amd64-v1.4.9/dfstore
+90780f4a9c602707e5db5696d78a8c431cf99fa0e71915fd5158d18e61d1d531  client-arm64-64k-v1.4.9/dfdaemon
+8ac10afc58dc40e5f435df978a3e75694c81319656eedbbc3bd3c88ca9050457  client-arm64-64k-v1.4.9/dfget
+beeba50931647fcef20840281a8c0162a908b511a910d27bc680b0a91d3d78e9  client-arm64-64k-v1.4.9/dfstore

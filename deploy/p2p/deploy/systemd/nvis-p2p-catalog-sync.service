@@ -1,0 +1,29 @@
+[Unit]
+Description=NVIS-P2P Dragonfly catalog materialization
+Documentation=https://d7y.io/docs/next/reference/commands/client/dfstore/
+Wants=network-online.target nvis-p2p-peer.service
+After=network-online.target nvis-p2p-peer.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+User=hlakshminara
+Group=cmods
+EnvironmentFile=/opt/containers/.nvis-p2p/secrets/dfstore-readonly.env
+Environment=NVIS_P2P_BASE=/opt/containers/.nvis-p2p
+ExecStart=/opt/containers/.nvis-p2p/bin/dfstore-sync-catalog.sh
+StandardOutput=append:/opt/containers/.nvis-p2p/logs/catalog-sync.log
+StandardError=append:/opt/containers/.nvis-p2p/logs/catalog-sync.log
+# Do not impose NVIS CPU, memory, nice, or I/O throttles.
+Restart=on-failure
+RestartSec=10min
+TimeoutStartSec=24h
+RemainAfterExit=yes
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/containers
+
+[Install]
+WantedBy=multi-user.target

@@ -180,6 +180,34 @@ def _ds_node_line_re() -> re.Pattern[str]:
     return _ds_line_re_compiled
 
 
+def _rack_mapping_mode() -> str:
+    """'direct' (rack from the hostname), 'translate' (rack from the provider), or 'pool' (no rack).
+
+    See ``catalog.models.RACK_MAPPING_MODES``. Anything unrecognised is treated as 'direct',
+    the historical behaviour, so a stale or empty value never hides a cluster's racks. Only the
+    three known values are honoured; 'pool' must be set explicitly (a blank value never means pool).
+    """
+    mode = _native_env_ds("NVIS_RACK_MAPPING_MODE", "direct").strip().lower()
+    if mode in ("translate", "pool"):
+        return mode
+    return "direct"
+
+
+def _hostname_encodes_rack() -> bool:
+    """Only 'direct' mode parses the rack out of the hostname.
+
+    'translate' takes placement from the provider and 'pool' has no placement at all, so in
+    neither case may the hostname be parsed for a rack -- doing so would invent a wrong rack
+    from a mis-set CT template (translate) or fabricate a rack where none exists (pool).
+    """
+    return _rack_mapping_mode() == "direct"
+
+
+def is_pool_mode() -> bool:
+    """True when the cluster has no placement data and renders as a flat node pool."""
+    return _rack_mapping_mode() == "pool"
+
+
 def _nvis_rack_id_template() -> str:
     return _native_env_ds("NVIS_RACK_ID", _nvis_ids.DEFAULT_NVIS_RACK_ID)
 
@@ -203,10 +231,33 @@ def _legacy_ds_configured() -> bool:
     return False
 
 
+def rack_mapping_mode() -> str:
+    """Public accessor for the active cluster's rack mapping mode ('direct' | 'translate' | 'pool')."""
+    return _rack_mapping_mode()
+
+
 def validate_nvis_naming_settings(
     rack_t: str, ct_t: str, nvsw_t: str = ""
 ) -> str | None:
-    """Syntax validation for NVIS_* templates (no hardcoded sample hostnames)."""
+    """Syntax validation for NVIS_* templates (no hardcoded sample hostnames).
+
+    The rack-prefixes-CT rule the triplet enforces only makes sense in 'direct' mode, where the
+    rack id is parsed out of the hostname. In 'translate' mode NVIS_CT_ID is not a placement
+    source (rack/slot come from the provider), so that cross-template constraint is not applied;
+    each template is still validated for syntax individually.
+    """
+    if rack_mapping_mode() == "translate":
+        for label, tpl in (
+            ("NVIS_RACK_ID", rack_t),
+            ("NVIS_CT_ID", ct_t),
+            ("NVIS_NVSW_ID", nvsw_t),
+        ):
+            if not (tpl or "").strip():
+                continue
+            err = _nvis_ids.validate_nvis_template(tpl, label=label)
+            if err:
+                return err
+        return None
     return _nvis_ids.validate_nvis_naming_triplet(rack_t, ct_t, nvsw_t)
 
 
@@ -496,14 +547,35 @@ def canonical_rack_id(rid: str) -> str | None:
     return _nvis_naming().canonical_rack_id(rid)
 
 
+def _rack_template_scan_safe(naming: _nvis_ids.NvisNaming) -> bool:
+    """Whether a whole-text rack-id scan of ``cmsh rack; list`` won't invent phantom racks.
+
+    The scan matches the rack pattern anywhere in the output, including inside the member
+    hostnames each row lists. That is fine for an anchored template (``bos01-a05``, ``p5-r03``):
+    the literal prefix keeps it from matching hostname substrings. But an anchorless template --
+    a bare ``[A-Z][\\d+]``, all slots and no literals -- matches ``gso1``->``o1``, ``su19``->``u19``,
+    ``gpu1``->``u1`` inside the members and invents racks that do not exist (Nscale NC produced
+    ~150 phantom rows this way). With no literal to anchor on, the first-column parse is the only
+    trustworthy source, so the scan is skipped.
+    """
+    return any(
+        seg[0] == "lit" and seg[1].strip(" -_/:.")
+        for seg in naming.rack_template.segments
+    )
+
+
 def extract_rack_ids_from_cmsh_text(text: str) -> list[str]:
     """Parse rack ids from ``cmsh -c 'rack; list'`` using ``NVIS_RACK_ID`` (legacy regex when configured)."""
     text = text or ""
     naming = _nvis_naming()
     canon: set[str] = set()
     if not _legacy_ds_configured():
-        for rid in naming.extract_rack_ids_from_text(text):
-            canon.add(rid)
+        # Only scan the whole output when the template is anchored; otherwise the first-column
+        # parse below is authoritative and the scan would fabricate racks from hostname
+        # substrings. See _rack_template_scan_safe.
+        if _rack_template_scan_safe(naming):
+            for rid in naming.extract_rack_ids_from_text(text):
+                canon.add(rid)
     else:
         legacy = re.compile(r"\bp\d+-r\d+\b", re.IGNORECASE)
         for m in legacy.finditer(text):
@@ -794,7 +866,17 @@ def sinfo_state_trim(s: str) -> str:
 
 
 def collect_sinfo_nodes() -> dict[str, str]:
-    """Actual Slurm NodeNames and states, independent of rack naming or placement.
+    """Actual Slurm NodeNames and states (shape discarded). See collect_sinfo_nodes_and_shapes."""
+    return collect_sinfo_nodes_and_shapes()[0]
+
+
+def collect_sinfo_nodes_and_shapes() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    """Slurm NodeNames+states and per-node GPU shape, from one ``sinfo -N`` call.
+
+    State and shape ride the same ``-o '%N %t %G'`` read: GRES is config (not a probe), so it
+    covers DOWN nodes and costs nothing beyond the inventory call already made. Shape is parsed
+    tolerantly -- a missing or ``(null)`` GRES simply yields no shape for that node, never an error,
+    because the node *roster* must not fail over an enrichment field.
 
     No bare-name ``which("sinfo")`` guard: the Slurm CLI is not on PATH here
     (``plat.sinfo_cmd()`` supplies the absolute path plus ``SLURM_CONF``), so that probe
@@ -805,7 +887,7 @@ def collect_sinfo_nodes() -> dict[str, str]:
     """
     plat = _get_platform()
     opts = (os.environ.get("SINFO_OPTS") or "").strip()
-    extra = "-N -h -o '%N %t'"
+    extra = "-N -h -o '%N %t %G'"
     if opts:
         extra += f" {opts}"
     try:
@@ -818,15 +900,20 @@ def collect_sinfo_nodes() -> dict[str, str]:
     if proc.returncode != 0:
         raise RuntimeError(f"Slurm node inventory failed (exit {proc.returncode})")
     nodes: dict[str, str] = {}
+    shapes: dict[str, dict[str, Any]] = {}
     spelling: dict[str, str] = {}
     for line in (proc.stdout or "").splitlines():
         line = line.strip()
         if not line:
             continue
         parts = line.split()
-        if len(parts) != 2:
+        # ``%N %t`` is two columns; ``%N %t %G`` adds a third (GRES, no internal spaces). Accept
+        # both so older fixtures and a plain SINFO_OPTS override still parse; reject only < 2.
+        if len(parts) < 2:
             raise RuntimeError("Slurm node inventory returned a malformed row")
         node, st_raw = parts[0], parts[1]
+        gres = parts[2] if len(parts) > 2 else ""
+        shape = parse_gres_gpu(gres)
         # %t has a compact state plus optional suffix flags. A login
         # banner must never become a compute node after dropping rack-name filters.
         # The manual's summary omits BOOT, INVAL and others: use all return values of
@@ -867,7 +954,9 @@ def collect_sinfo_nodes() -> dict[str, str]:
             states = set(nodes.get(actual, "").split("+")) - {""}
             states.update(st.split("+"))
             nodes[actual] = "+".join(sorted(states))
-    return nodes
+            if shape and actual not in shapes:
+                shapes[actual] = shape
+    return nodes, shapes
 
 
 def sinfo_counts_for_nodes(nodes: dict[str, str]) -> dict[tuple[str, str], int]:
@@ -888,16 +977,144 @@ def collect_sinfo_counts() -> dict[tuple[str, str], int]:
     return sinfo_counts_for_nodes(collect_sinfo_nodes())
 
 
+# --- per-node GPU shape (how many GPUs to draw per tile) ---------------------
+#
+# Shape is orthogonal to placement: a pool-mode cluster with no racks still has a GPU count
+# per node, and a translate/direct cluster benefits from reading its real count instead of
+# hardcoding a tray width. The source depends on the provider -- Slurm GRES is cheap and central
+# (one sinfo call, covers DOWN nodes because GRES is config not a probe), nvidia-smi is a per-node
+# remote probe used only when the scheduler cannot answer. All of this is ENRICHMENT: every
+# collector here is tolerant and returns {} on any failure rather than raising, so a shape probe
+# can never take down the node inventory.
+
+#: A Slurm GRES gpu token: ``gpu:<type>:<count>`` or ``gpu:<count>`` with an optional ``(S:0-1)``
+#: socket-affinity suffix we ignore. Type is optional (generic ``gpu:8``).
+_GRES_GPU_RE = re.compile(r"gpu:(?:(?P<type>[A-Za-z0-9_.-]+):)?(?P<count>\d+)")
+
+
+def parse_gres_gpu(gres: str) -> dict[str, Any] | None:
+    """Parse a Slurm GRES string -> ``{"gpu_count": N, "gpu_type": str}`` or None.
+
+    ``gpu:nvidia:8(S:0-1)`` -> ``{"gpu_count": 8, "gpu_type": "nvidia"}``; a CPU-only or
+    ``(null)`` GRES yields None. Multiple gpu tokens (mixed models) sum their counts and keep the
+    first concrete type. A type of ``(null)``/``none`` is treated as no type.
+    """
+    text = (gres or "").strip()
+    if not text or text.lower() == "(null)":
+        return None
+    total = 0
+    gpu_type = ""
+    for m in _GRES_GPU_RE.finditer(text):
+        try:
+            n = int(m.group("count"))
+        except (TypeError, ValueError):
+            continue
+        if n <= 0:
+            continue
+        total += n
+        t = (m.group("type") or "").strip()
+        if not gpu_type and t and t.lower() not in {"null", "none"}:
+            gpu_type = t
+    if total <= 0:
+        return None
+    out: dict[str, Any] = {"gpu_count": total}
+    if gpu_type:
+        out["gpu_type"] = gpu_type
+    return out
+
+
+#: ``nvidia-smi --query-gpu=count --format=csv,noheader`` prints the count once per GPU; counting
+#: lines is the robust read. ``nvidia-smi -L`` lists one ``GPU N: <name>`` line per GPU, which also
+#: gives the model. We support both so the provider can pick the cheaper call.
+_SMI_L_RE = re.compile(r"^GPU\s+\d+:\s*(?P<name>.+?)\s*(?:\(UUID|$)", re.MULTILINE)
+
+
+def parse_nvidia_smi_l(text: str) -> dict[str, Any] | None:
+    """Parse ``nvidia-smi -L`` output -> ``{"gpu_count": N, "gpu_type": str}`` or None."""
+    names = [m.group("name").strip() for m in _SMI_L_RE.finditer(text or "")]
+    names = [n for n in names if n]
+    if not names:
+        return None
+    out: dict[str, Any] = {"gpu_count": len(names)}
+    # Collapse e.g. "NVIDIA RTX 6000 Ada Generation" -> a short, stable type label.
+    first = names[0]
+    out["gpu_type"] = first
+    return out
+
+
+def sample_node_gpu_shapes_via_smi(
+    records: list[dict[str, Any]] | None, node_states: dict[str, str] | None,
+) -> dict[str, dict[str, Any]]:
+    """nvidia-smi fallback for clusters whose scheduler can't report GRES (e.g. pythoncm).
+
+    Cost control: the fleet is assumed homogeneous within a BCM category, so we probe ONE
+    reachable (up) node per category via ``pdsh`` and apply its shape to every node in that
+    category. DOWN/unreachable nodes are never probed. Enrichment only -- any failure yields no
+    shape for that category rather than raising. Results are keyed by host so the caller merges
+    them exactly like the GRES map.
+    """
+    if not records:
+        return {}
+    up = set()
+    for host, state in (node_states or {}).items():
+        if set((state or "").split("+")) & {"idle", "alloc", "allocated", "mix", "mixed", "comp", "completing"}:
+            up.add(host.casefold())
+    # category -> list of hosts; and a representative up host to probe.
+    by_category: dict[str, list[str]] = {}
+    probe_host: dict[str, str] = {}
+    for rec in records:
+        host = rec.get("id") or rec.get("hostname")
+        if not isinstance(host, str) or not host:
+            continue
+        category = str(rec.get("category") or rec.get("rack_category") or "").strip() or "_default"
+        by_category.setdefault(category, []).append(host)
+        if category not in probe_host and (not up or host.casefold() in up):
+            probe_host[category] = host
+    plat = _get_platform()
+    out: dict[str, dict[str, Any]] = {}
+    for category, hosts in by_category.items():
+        host = probe_host.get(category)
+        if not host:
+            continue
+        try:
+            cmd = plat.pdsh_cmd(host, "nvidia-smi -L", fanout=1)
+            proc = host_exec.run_on_host(
+                cmd, timeout=max(15, _env_int("RACK_NODE_SHAPE_SMI_TIMEOUT_SEC", 30)),
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        except Exception:
+            # Shape is enrichment -- a probe error must never surface; keep going to the next category.
+            _logger.debug("sample_node_gpu_shapes_via_smi: ignoring error", exc_info=True)
+            continue
+        # pdsh prefixes each line with "<host>: "; strip that before parsing.
+        cleaned = "\n".join(
+            line.split(":", 1)[1].strip() if line.startswith(f"{host}:") else line
+            for line in (getattr(proc, "stdout", "") or "").splitlines()
+        )
+        shape = parse_nvidia_smi_l(cleaned)
+        if not shape:
+            continue
+        for h in hosts:
+            out[h] = shape
+    return out
+
+
 def build_node_inventory(
     nodes: dict[str, str], racks: Iterable[str], ds_text: str = "",
     records: list[dict[str, Any]] | None = None,
+    shapes: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Real compute nodes with optional rack membership and BCM status enrichment.
 
     The scheduler or cluster-manager provider owns the roster. Neither geometry nor
-    a management interface can invent a node. Rack grouping is optional enrichment.
+    a management interface can invent a node. Rack grouping is optional enrichment, and so is
+    node *shape* (``shapes`` maps host -> ``{"gpu_count": int, "gpu_type": str}``): the tile draws
+    the GPU count when known and falls back to a generic tile when it is not. Shape is orthogonal
+    to placement -- a pool-mode cluster with no racks still carries a per-node GPU count.
     """
     rack_ids = {rack.casefold(): rack for rack in racks}
+    shape_by_host = {h.casefold(): v for h, v in (shapes or {}).items()}
     naming = _nvis_naming()
     details = {record["id"].casefold(): record for record in records or []}
     device_states: dict[str, str] = {}
@@ -912,16 +1129,23 @@ def build_node_inventory(
         for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9._-]*", line[:match.start()] + line[match.end():]):
             if token.casefold() in known:
                 device_states[token.casefold()] = state
+    # Only 'direct' mode parses the rack out of the hostname. In 'translate' the hostname does not
+    # encode the rack (Nscale NC's sys1-gso1-p-phy-gpu1-su19) so parsing invents a wrong rack from a
+    # mis-set CT template; in 'pool' there is no rack at all so parsing fabricates one. In both the
+    # node stays ungrouped rather than mis-grouped. See _hostname_encodes_rack.
+    parse_hostname = _hostname_encodes_rack()
     result: list[dict[str, Any]] = []
     for host, scheduler_state in sorted(nodes.items(), key=lambda item: item[0].casefold()):
         detail = details.get(host.casefold(), {})
-        parsed = naming.sinfo_rack_from_host(host.lower().split(".")[0])
-        rack = rack_ids.get(_normalize_rack_key_for_ds(parsed[0]).casefold()) if parsed else None
+        rack = None
+        if parse_hostname:
+            parsed = naming.sinfo_rack_from_host(host.lower().split(".")[0])
+            rack = rack_ids.get(_normalize_rack_key_for_ds(parsed[0]).casefold()) if parsed else None
         placement = detail.get("rack")
         if placement:
             mapped = naming.map_cmsh_rack_list_token(placement) or _normalize_rack_key_for_ds(placement)
             rack = rack_ids.get(mapped.casefold())
-        if rack is None:
+        if rack is None and parse_hostname:
             # Support real names whose extra components do not fit the tray template.
             matches = [value for key, value in rack_ids.items()
                        if host.casefold().startswith(key) and host[len(key):len(key) + 1] in {"-", "_", ".", ":", "/"}]
@@ -931,8 +1155,19 @@ def build_node_inventory(
         state = "down" if states & {"down", "fail", "inval", "unk", "unknown"} else "unknown"
         if states & {"idle", "alloc", "allocated", "mix", "mixed", "comp", "completing"} and state != "down":
             state = "up"
-        result.append({"id": host, "rack": rack, "status": device_states.get(host.casefold(), state),
-                       "scheduler_state": scheduler_state, "ip": detail.get("ip", "")})
+        node_rec: dict[str, Any] = {
+            "id": host, "rack": rack, "status": device_states.get(host.casefold(), state),
+            "scheduler_state": scheduler_state, "ip": detail.get("ip", ""),
+        }
+        shape = shape_by_host.get(host.casefold())
+        if shape:
+            count = shape.get("gpu_count")
+            if isinstance(count, int) and count > 0:
+                node_rec["gpu_count"] = count
+            gpu_type = shape.get("gpu_type")
+            if isinstance(gpu_type, str) and gpu_type.strip():
+                node_rec["gpu_type"] = gpu_type.strip()
+        result.append(node_rec)
     return result
 
 
@@ -963,6 +1198,29 @@ def format_sinfo_cell(rack: str, counts: dict[tuple[str, str], int]) -> str:
         return "-"
     pairs.sort(key=lambda x: (-x[0], x[1]))
     return ",".join(f"{st}={cnt}" for cnt, st in pairs)
+
+
+def counts_from_node_inventory(
+    inventory: list[dict[str, Any]],
+) -> dict[tuple[str, str], int]:
+    """Per-(rack, status) node counts from a built node inventory.
+
+    The provider path (a BCM/pythoncm cluster) has no ``sinfo``, so ``sinfo_counts`` is empty and
+    the rack tiles read 0/0 even when the cluster manager has fully enumerated the fleet -- every
+    Nscale NC rack showed 0/0 despite holding 18 nodes, all installing. The per-node status
+    ``build_node_inventory`` already derives from ``ds`` (``up``/``down``/``inst``/``unknown``) is
+    exactly what the tile needs, so project it back to the ``(rack, state)`` shape the rack table
+    consumes. The frontend counts everything but ``up`` as not-up, so an all-installing rack reads
+    0/18 rather than a misleading 18/18.
+    """
+    counts: dict[tuple[str, str], int] = {}
+    for node in inventory:
+        rack = node.get("rack")
+        if not rack:
+            continue
+        state = str(node.get("status") or "unknown")
+        counts[(rack, state)] = counts.get((rack, state), 0) + 1
+    return counts
 
 
 def _slurm_base_job_id(jid_raw: str) -> str | None:
@@ -1512,6 +1770,8 @@ class NativeRackTableState:
         "log_thread",
         "node_inventory_error",
         "node_records",
+        "node_shapes",
+        "node_shapes_refreshed_monotonic",
         "node_states",
         "per_path_probe",
         "racks",
@@ -1533,6 +1793,10 @@ class NativeRackTableState:
         self.ds_text = ""
         self.node_states: dict[str, str] | None = None
         self.node_records: list[dict[str, Any]] | None = None
+        # host -> {"gpu_count": int, "gpu_type"?: str}. Refreshed on a slow TTL (shape changes only
+        # on hardware changes) so the nvidia-smi sample is not re-run every poll.
+        self.node_shapes: dict[str, dict[str, Any]] = {}
+        self.node_shapes_refreshed_monotonic = 0.0
         self.node_inventory_error = ""
         self.sinfo_counts: dict[tuple[str, str], int] = {}
         self.per_path_probe: dict[str, dict[str, Any]] = {}
@@ -1586,16 +1850,20 @@ class NativeRackTableState:
 
     def _worker_sinfo(self) -> None:
         try:
+            scheduler = config_env._eget("RACK_SCHEDULER", "slurm")
             records = None
-            if config_env._eget("RACK_SCHEDULER", "slurm") == "slurm":
-                nodes = collect_sinfo_nodes()
+            slurm_shapes: dict[str, dict[str, Any]] = {}
+            if scheduler == "slurm":
+                nodes, slurm_shapes = collect_sinfo_nodes_and_shapes()
             else:
                 records = _get_platform().compute_node_inventory()
                 nodes = {record["id"]: record.get("scheduler_state", "") for record in records}
             c = sinfo_counts_for_nodes(nodes) if records is None else {}
+            shapes = self._refresh_node_shapes(scheduler, records, nodes, slurm_shapes)
             with self.lock:
                 self.node_states = nodes
                 self.node_records = records
+                self.node_shapes = shapes
                 self.node_inventory_error = ""
                 self.sinfo_counts = c
                 self.sinfo_done = True
@@ -1609,14 +1877,46 @@ class NativeRackTableState:
                 self.last_errors.append(f"sinfo: {e}")
                 self.sinfo_done = True
 
+    def _refresh_node_shapes(
+        self, scheduler: str, records: list[dict[str, Any]] | None,
+        nodes: dict[str, str], slurm_shapes: dict[str, dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        """Per-node GPU shape. Slurm GRES rides the inventory call for free; nvidia-smi is TTL-gated.
+
+        On a Slurm cluster the shape comes with the node roster (``slurm_shapes``) at no extra cost,
+        so it refreshes every poll. On a non-Slurm cluster (pythoncm) the only source is an
+        nvidia-smi probe, which is a per-category remote call -- so it is refreshed at most once per
+        TTL (default 15 min; shape changes only on hardware changes) and the last good map is kept
+        between refreshes. Enrichment only: a failure never clears a good map.
+        """
+        if scheduler == "slurm":
+            # GRES already in hand; keep whatever it reported (may be empty for a cpu-only cluster).
+            with self.lock:
+                self.node_shapes_refreshed_monotonic = time.monotonic()
+            return slurm_shapes
+        ttl = _env_int("RACK_NODE_SHAPE_TTL_SEC", 900)
+        now = time.monotonic()
+        with self.lock:
+            fresh = bool(self.node_shapes) and (now - self.node_shapes_refreshed_monotonic) < ttl
+            if fresh:
+                return self.node_shapes
+            previous = self.node_shapes
+        shapes = sample_node_gpu_shapes_via_smi(records, nodes) if records is not None else {}
+        if not shapes:
+            return previous  # keep the last good map rather than blanking the tiles
+        with self.lock:
+            self.node_shapes_refreshed_monotonic = now
+        return shapes
+
     def node_inventory_snapshot(self) -> dict[str, Any]:
         """An explicit null means unavailable; an empty list means confirmed empty."""
         with self.lock:
             return {
                 "nodes": None if self.node_states is None else build_node_inventory(
-                    self.node_states, self.racks, self.ds_text, self.node_records
+                    self.node_states, self.racks, self.ds_text, self.node_records, self.node_shapes
                 ),
                 "node_inventory_error": self.node_inventory_error,
+                "rack_mapping_mode": rack_mapping_mode(),
             }
 
     def _worker_logs(self, probe_fn: Callable[[Path], dict[str, object] | None]) -> None:
@@ -1741,11 +2041,21 @@ class NativeRackTableState:
             racks = list(self.racks)
             ct = dict(self.ct_by_rack)
             sct = dict(self.sinfo_counts)
+            node_states = None if self.node_states is None else dict(self.node_states)
+            node_records = None if self.node_records is None else list(self.node_records)
+            ds_text = self.ds_text
             by_rack = {k: dict(v) for k, v in self.by_rack_log.items()}
             by_rack_stage = {k: {kk: dict(vv) for kk, vv in v.items()} for k, v in self.by_rack_stage_log.items()}
             errs = list(self.last_errors)
             ds_done = self.ds_done
             sinfo_done = self.sinfo_done
+        # A provider cluster (BCM/pythoncm) has no sinfo, so the per-rack node totals come from the
+        # roster the cluster manager returned instead. Without this every provider rack reads 0/0
+        # even when the fleet is fully enumerated. Slurm clusters keep their real sinfo_counts.
+        if not sct and node_states is not None:
+            sct = counts_from_node_inventory(
+                build_node_inventory(node_states, racks, ds_text, node_records)
+            )
         rows: list[dict[str, str]] = []
         n_done = n_fail = n_on = n_pending = 0
         stage1_summary = empty_stage_summary()

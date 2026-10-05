@@ -1,0 +1,9 @@
+seedPeerClusterConfig:
+  loadLimit: 256
+
+schedulerClusterConfig:
+  candidateParentLimit: 5
+  filterParentLimit: 20
+
+schedulerClusterClientConfig:
+  loadLimit: 24

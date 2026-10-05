@@ -39,6 +39,30 @@ SYSTEM_VENDORS = ("NVIDIA", "DGX", "Dell", "SMC", "Supermicro")
 FORM_FACTORS = ("NVL72", "NVL36", "HGX-8", "HGX-4", "MGX")
 CLUSTER_MANAGERS = ("bcm", "maas")
 
+#: How a compute node is placed on the floor (row/rack/slot).
+#:
+#: ``direct`` -- the rack id is embedded in the hostname, so the naming templates
+#: (``NVIS_RACK_ID`` prefixing ``NVIS_CT_ID``) parse it out. This is every cluster whose
+#: hostnames look like ``bos01-a05-11-s1-dgx-01-c01``.
+#:
+#: ``translate`` -- the hostname does NOT encode the rack (Nscale NC's
+#: ``sys1-gso1-p-phy-gpu1-su19``). Per-node rack/slot comes live from the cluster-manager
+#: provider (BCM's ``rack`` attribute, ``U19:11``), rows come from the rack-id template applied
+#: to that provider rack id, and the SU grouping -- which neither the hostname nor the provider
+#: rack attribute gives -- is supplied by the cluster's ``scalable_units`` list. In this mode
+#: the rack-prefixes-CT constraint does not apply, because ``NVIS_CT_ID`` is not a placement
+#: source.
+#:
+#: ``pool`` -- there is NO placement data anywhere: no rack objects in the cluster manager,
+#: no rack attribute on the devices, no rack token in the hostname, no SU list. The Akamai/Reno
+#: RTX 6000 cluster is the archetype -- ``cmsh rack; list`` returns nothing and every device's
+#: ``rack`` attribute is empty. The node is the atom: the fleet renders as a flat pool of node
+#: tiles ordered by hostname, with no rack rows and no fabricated rack. Node *shape* (GPUs per
+#: node) still comes from the scheduler/provider (see node-shape enrichment); only *placement*
+#: is absent. A cluster flips from ``pool`` to ``translate`` with no rework the day someone
+#: populates rack/rackindex in the cluster manager.
+RACK_MAPPING_MODES = ("direct", "translate", "pool")
+
 #: Where work runs, as distinct from who manages the machines. Must stay in step with
 #: ``schedulers.factory._BUILDERS`` -- a cluster naming a kind the factory cannot build is a
 #: deployment that comes up and then fails on first launch, so `validate()` refuses it here.
@@ -1027,6 +1051,9 @@ class Cluster:
     platform_id: str = ""
     cluster_manager: str = "bcm"  # who manages the machines (BCM/MAAS)
     scheduler: str = "slurm"  # where work runs; see SCHEDULERS
+    # How nodes map to the floor: hostname-embedded rack (direct), provider rack + SU list
+    # (translate), or no placement at all -- a flat pool of nodes (pool). See RACK_MAPPING_MODES.
+    rack_mapping_mode: str = "direct"
     site_prefix: str = ""  # pod/site prefix for multirack bracket expansion
     naming: ClusterNaming = field(default_factory=ClusterNaming)
     geometry: ClusterGeometry = field(default_factory=ClusterGeometry)
@@ -1038,6 +1065,11 @@ class Cluster:
     campaigns: list[ClusterCampaign] = field(default_factory=list)
     # Where an external collector writes this cluster's evidence, if it has one.
     evidence: ClusterEvidence = field(default_factory=ClusterEvidence)
+    # NVIS-P2P (artifact distribution) is single-tenant: one Dragonfly instance per cluster. This
+    # flag says whether this cluster has that capability. Off means the P2P nav group and gateway
+    # are inert for it. The enabled instance's endpoints/credentials live on the connection overlay
+    # and the token vault, not here -- this is only the on/off an operator sets per cluster.
+    p2p_enabled: bool = False
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Cluster:
@@ -1050,6 +1082,7 @@ class Cluster:
             platform_id=_as_str(d.get("platform_id")),
             cluster_manager=_as_str(d.get("cluster_manager")) or "bcm",
             scheduler=_as_str(d.get("scheduler")).lower() or "slurm",
+            rack_mapping_mode=_as_str(d.get("rack_mapping_mode")).lower() or "direct",
             site_prefix=_as_str(d.get("site_prefix")),
             naming=ClusterNaming.from_dict(d.get("naming")),
             geometry=ClusterGeometry.from_dict(d.get("geometry")),
@@ -1065,6 +1098,7 @@ class Cluster:
                 else []
             ),
             evidence=ClusterEvidence.from_dict(d.get("evidence")),
+            p2p_enabled=_as_bool(d.get("p2p_enabled")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1082,6 +1116,24 @@ class Cluster:
             )
         if self.scheduler and self.scheduler not in SCHEDULERS:
             problems.append(f"unknown scheduler {self.scheduler!r} (expected {SCHEDULERS})")
+        if self.rack_mapping_mode and self.rack_mapping_mode not in RACK_MAPPING_MODES:
+            problems.append(
+                f"unknown rack_mapping_mode {self.rack_mapping_mode!r} (expected {RACK_MAPPING_MODES})"
+            )
+        if self.rack_mapping_mode == "translate" and not self.scalable_units:
+            # translate mode places rows/racks from the provider, but the SU grouping has no
+            # other source -- the hostname's suffix isn't read as an SU and the provider rack
+            # attribute doesn't carry one. Without the list the floor has no SUs at all.
+            problems.append(
+                "rack_mapping_mode 'translate' requires a scalable_units (SU) translation list"
+            )
+        if self.rack_mapping_mode == "pool" and self.scalable_units:
+            # pool mode asserts there is no placement at all, so an SU grouping is a
+            # contradiction -- it would claim a geometry the mode exists to say does not exist.
+            # Fail closed at the record rather than silently rendering phantom SUs.
+            problems.append(
+                "rack_mapping_mode 'pool' has no placement, so scalable_units must be empty"
+            )
         problems.extend(self.connection.validate())
         problems.extend(self._validate_scalable_units())
         problems.extend(self._validate_campaigns())
@@ -1150,6 +1202,162 @@ class Cluster:
         if self.scalable_units:
             return list(self.scalable_units)
         return derive_scalable_units(racks, racks_per_su, label_prefix=label_prefix)
+
+
+@dataclass
+class P2pSettings:
+    """Per-cluster NVIS-P2P instance configuration.
+
+    Exactly what ``deploy/p2p/scripts/render-site-config.py`` needs to stand up one Dragonfly
+    instance for a cluster. Read and written whole by its ``cluster_id``; nothing joins it, so it is
+    a document behind the ``Repo`` (citizen 15), not a relation. Secrets are **not** stored here --
+    render generates them into files under ``install_root`` and the paths are derived, so the
+    document holds only topology and identity, nothing reversible.
+
+    The defaults are a working baseline for a single-app-server cluster; ``manager_ip`` and
+    ``appserver_ip`` have no safe default (they are the cluster's own addresses) and provisioning
+    refuses until they are set.
+    """
+
+    cluster_id: str
+    install_root: str = "/cluster/nvis-p2p"
+    service_user: str = "nvis-p2p"
+    service_group: str = "nvis-p2p"
+    service_uid: int = 3100
+    service_gid: int = 3100
+    #: The app server's addresses. No default -- they are the cluster's own and must be supplied.
+    manager_ip: str = ""
+    appserver_ip: str = ""
+    #: How the reconcile REACHES the P2P app server. This is not the cluster's control connection --
+    #: on NC that is the BCM head (a different host) -- so P2P carries its own: an SSH host (defaults
+    #: to appserver_ip when blank), a user, and a key path readable inside the container. This is the
+    #: server the reconcile stages assets to and brings the control plane up on.
+    appserver_ssh_host: str = ""
+    appserver_ssh_user: str = "root"
+    appserver_ssh_key: str = ""
+    console_bind: str = "127.0.0.1:4300"
+    #: The compute-peer inventory. INVENTORY_SOURCE is an absolute PATH to a file listing eligible
+    #: nodes -- the renderer validates it as a path, not a scheduler name -- and INVENTORY_PATTERN is
+    #: the hostname bracket pattern (e.g. ``sys1-gso1-p-phy-[001-224]``). Left blank, the source path
+    #: defaults under install_root and the reconcile writes it from the cluster roster.
+    inventory_source: str = ""
+    inventory_pattern: str = ""
+    container_path: str = "/cluster/containers"
+    #: NVIS_CATALOG_PATH must name a ``.json`` file (the renderer enforces the suffix); the images
+    #: directory is ``container_path``, a different thing.
+    catalog_path: str = "/cluster/containers/catalog.json"
+    peer_root: str = "/opt/containers/.nvis-p2p"
+    object_store_data_path: str = "/cluster/nvis-p2p/object-store"
+    seed_cache_path: str = "/cluster/nvis-p2p/seed-cache"
+    systemd_dir: str = "/etc/systemd/system"
+
+    @classmethod
+    def from_dict(cls, d: Any) -> P2pSettings:
+        d = _as_dict(d)
+        base = cls(cluster_id=_as_str(d.get("cluster_id")))
+        return cls(
+            cluster_id=base.cluster_id,
+            install_root=_as_str(d.get("install_root")) or base.install_root,
+            service_user=_as_str(d.get("service_user")) or base.service_user,
+            service_group=_as_str(d.get("service_group")) or base.service_group,
+            service_uid=_as_int(d.get("service_uid"), base.service_uid),
+            service_gid=_as_int(d.get("service_gid"), base.service_gid),
+            manager_ip=_as_str(d.get("manager_ip")),
+            appserver_ip=_as_str(d.get("appserver_ip")),
+            appserver_ssh_host=_as_str(d.get("appserver_ssh_host")),
+            appserver_ssh_user=_as_str(d.get("appserver_ssh_user")) or base.appserver_ssh_user,
+            appserver_ssh_key=_as_str(d.get("appserver_ssh_key")),
+            console_bind=_as_str(d.get("console_bind")) or base.console_bind,
+            inventory_source=_as_str(d.get("inventory_source")),
+            inventory_pattern=_as_str(d.get("inventory_pattern")),
+            container_path=_as_str(d.get("container_path")) or base.container_path,
+            catalog_path=_as_str(d.get("catalog_path")) or base.catalog_path,
+            peer_root=_as_str(d.get("peer_root")) or base.peer_root,
+            object_store_data_path=_as_str(d.get("object_store_data_path")) or base.object_store_data_path,
+            seed_cache_path=_as_str(d.get("seed_cache_path")) or base.seed_cache_path,
+            systemd_dir=_as_str(d.get("systemd_dir")) or base.systemd_dir,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        # The store keys documents by "id"; carry both so a get-by-id and a read of cluster_id agree.
+        out = asdict(self)
+        out["id"] = self.cluster_id
+        return out
+
+    def validate(self) -> list[str]:
+        problems: list[str] = []
+        if not valid_id(self.cluster_id):
+            problems.append(f"invalid cluster id: {self.cluster_id!r}")
+        return problems
+
+    def provisioning_blockers(self) -> list[str]:
+        """What is missing before this instance can be provisioned. Empty means ready to try.
+
+        Separate from :meth:`validate`: a settings document is *valid* to store with the addresses
+        still blank (an operator saves it, then fills them in), but provisioning cannot start
+        without them. Keeping the two apart means the editor accepts a draft while the reconcile
+        still refuses to run against an underspecified instance.
+        """
+        blockers: list[str] = []
+        # These have no safe default: the cluster's own addresses and the hostname pattern its
+        # compute peers follow. The inventory *source path* defaults under install_root (the reconcile
+        # writes it), so it is not a blocker; everything else defaults.
+        required = (
+            ("manager_ip", self.manager_ip),
+            ("appserver_ip", self.appserver_ip),
+            ("inventory_pattern", self.inventory_pattern),
+        )
+        for label, value in required:
+            if not value.strip():
+                blockers.append(f"{label} is not set")
+        return blockers
+
+    def resolved_inventory_source(self) -> str:
+        """The inventory file path: explicit, or a default under install_root the reconcile writes."""
+        return self.inventory_source.strip() or f"{self.install_root.rstrip('/')}/inventory/eligible.nodes"
+
+    def appserver_connection(self) -> dict[str, str]:
+        """SSH parameters the reconcile uses to reach the P2P app server.
+
+        The host falls back to ``appserver_ip`` because on a single-app-server cluster they are the
+        same address; a site whose app server answers on a different management address overrides it.
+        The key is a path readable inside the container (e.g. the mounted deployment key).
+        """
+        return {
+            "host": self.appserver_ssh_host.strip() or self.appserver_ip.strip(),
+            "user": self.appserver_ssh_user.strip() or "root",
+            "key": self.appserver_ssh_key.strip(),
+        }
+
+    def to_render_env(self) -> dict[str, str]:
+        """The ``NVIS_*`` environment ``render-site-config.py`` consumes.
+
+        Secret *file paths* are derived under ``install_root/secrets`` rather than stored: render
+        writes the secrets there, so the document never carries one.
+        """
+        secrets = f"{self.install_root}/secrets"
+        return {
+            "NVIS_INSTALL_ROOT": self.install_root,
+            "NVIS_SERVICE_USER": self.service_user,
+            "NVIS_SERVICE_GROUP": self.service_group,
+            "NVIS_SERVICE_UID": str(self.service_uid),
+            "NVIS_SERVICE_GID": str(self.service_gid),
+            "NVIS_MANAGER_IP": self.manager_ip,
+            "NVIS_APPSERVER_IP": self.appserver_ip,
+            "NVIS_CONSOLE_BIND": self.console_bind,
+            "NVIS_INVENTORY_SOURCE": self.resolved_inventory_source(),
+            "NVIS_INVENTORY_PATTERN": self.inventory_pattern,
+            "NVIS_CONTAINER_PATH": self.container_path,
+            "NVIS_CATALOG_PATH": self.catalog_path,
+            "NVIS_PEER_ROOT": self.peer_root,
+            "NVIS_OBJECT_STORE_DATA_PATH": self.object_store_data_path,
+            "NVIS_SEED_CACHE_PATH": self.seed_cache_path,
+            "NVIS_POSTGRES_PASSWORD_FILE": f"{secrets}/postgres-password",
+            "NVIS_MANAGER_JWT_KEY_FILE": f"{secrets}/manager-jwt-key",
+            "NVIS_MINIO_ROOT_PASSWORD_FILE": f"{secrets}/minio-root-password",
+            "NVIS_DFSTORE_READONLY_ENV_FILE": f"{secrets}/dfstore-readonly.env",
+            "NVIS_SYSTEMD_DIR": self.systemd_dir,
+        }
 
 
 @dataclass

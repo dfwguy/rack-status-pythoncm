@@ -163,6 +163,25 @@ class TestModuleResolution:
         assert nbq.resolve_module_path([str(tmp_path / "pythoncm-*")]).endswith("pythoncm-11")
 
 
+class TestScriptPathFollowsTheTree:
+    """The helper path must come from the same resolver the deploy writes to.
+
+    Preferring role_root("scripts") (the legacy {base}/bin/scripts) while script_deploy writes
+    the layered tree at {base}/scripts made bcm_query look in an empty directory and every query
+    fail with "can't open file" -- even though the scripts had been deployed. Resolution now goes
+    through script_tree.resolve, exactly like schedulers/pythoncm.py._helper_path.
+    """
+
+    def test_it_resolves_through_the_script_tree_not_the_legacy_role_root(self, monkeypatch):
+        # role_root still reports the legacy dir the deploy no longer writes to...
+        monkeypatch.setattr(bcm_query.host_exec, "role_root", lambda role: "/base/bin/scripts")
+        # ...but resolution must follow the tree, where the helper actually is.
+        monkeypatch.setattr(
+            bcm_query.script_tree, "resolve", lambda name: f"/base/scripts/multi-platform/{name}"
+        )
+        assert bcm_query._script_path() == "/base/scripts/multi-platform/nvis_bcm_query.py"
+
+
 class TestScriptAlwaysAnswersJson:
     """The caller parses stdout; a traceback there would be an outage, not a fallback."""
 

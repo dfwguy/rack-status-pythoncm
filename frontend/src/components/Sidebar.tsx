@@ -57,7 +57,10 @@ import {
   ShieldCheck,
   Users,
   UsersRound,
+  Package,
+  HardDriveDownload,
 } from "lucide-react";
+import { useP2pEnabled } from "../features/p2p/hooks/useP2pEnabled";
 
 export type ViewId =
   | "dashboard"
@@ -72,6 +75,8 @@ export type ViewId =
   | "obsEvents"
   | "obsAuditTrail"
   | "multirack"
+  | "p2pArtifacts"
+  | "p2pSettings"
   | "reports"
   | "analytics"
   | "postRunNodeReport"
@@ -139,6 +144,19 @@ const navEntries: NavEntry[] = [
       { id: "tools", label: "Operations & Scripts", icon: <Wrench size={ICON_SIZE} /> },
       { id: "workflows", label: "Workflows", icon: <Workflow size={ICON_SIZE} /> },
       { id: "terminal", label: "Terminal", icon: <Terminal size={ICON_SIZE} /> },
+    ],
+  },
+  {
+    // Artifact distribution (NVIS-P2P). Single-tenant per cluster, so the group only
+    // appears when the active cluster has the capability enabled — see useP2pEnabled and
+    // the filtering in ExpandedNav/CollapsedRail. Operations-adjacent, hence high on the rail.
+    kind: "group",
+    id: "grp-p2p",
+    label: "Artifact Distribution",
+    icon: <Package size={ICON_SIZE} />,
+    leaves: [
+      { id: "p2pArtifacts", label: "Artifact Fleet", icon: <HardDriveDownload size={ICON_SIZE} /> },
+      { id: "p2pSettings", label: "Dragonfly Settings", icon: <Settings size={ICON_SIZE} /> },
     ],
   },
   {
@@ -213,10 +231,24 @@ const navEntries: NavEntry[] = [
   },
 ];
 
-/** All navigable leaves, flattened (used by the collapsed icon rail). */
-const allLeaves: NavLeaf[] = navEntries.flatMap((entry) =>
-  entry.kind === "group" ? entry.leaves : [entry.leaf]
-);
+/**
+ * Nav entries visible for the current context. Some groups are gated on a per-cluster
+ * capability — Artifact Distribution (NVIS-P2P) is single-tenant per cluster — so the rail
+ * shows them only when the active cluster has that capability enabled.
+ */
+function useVisibleNavEntries(): NavEntry[] {
+  const p2pEnabled = useP2pEnabled();
+  return navEntries.filter(
+    (entry) => !(entry.kind === "group" && entry.id === "grp-p2p") || p2pEnabled,
+  );
+}
+
+/** Visible navigable leaves, flattened (used by the collapsed icon rail). */
+function useVisibleLeaves(): NavLeaf[] {
+  return useVisibleNavEntries().flatMap((entry) =>
+    entry.kind === "group" ? entry.leaves : [entry.leaf],
+  );
+}
 
 /** Bottom-pinned platform leaf (a view). */
 const settingsLeaf: NavLeaf = { id: "settings", label: "Settings", icon: <Settings size={ICON_SIZE} /> };
@@ -273,7 +305,7 @@ function ExpandedNav({
   onNavigate: (view: ViewId) => void;
   onOpenHelp: () => void;
 }) {
-  const groupItems: VerticalNavBaseItem[] = navEntries.map((entry) => {
+  const groupItems: VerticalNavBaseItem[] = useVisibleNavEntries().map((entry) => {
     if (entry.kind === "leaf") {
       const { leaf } = entry;
       return {
@@ -400,7 +432,7 @@ function CollapsedRail({
   onNavigate: (view: ViewId) => void;
   onOpenHelp: () => void;
 }) {
-  const leaves = allLeaves;
+  const leaves = useVisibleLeaves();
 
   return (
     <Box sx={{ flexGrow: 1, pt: 1 }}>

@@ -1,0 +1,77 @@
+console: true
+
+log:
+  level: info
+
+host:
+  idc: nscaletx
+  location: appserver-seed
+  hostname: nvis-p2p-seed
+  ip: 10.41.112.3
+
+server:
+  pluginDir: /home/hlakshminara/NVIS-P2P/state/seed/plugins
+  cacheDir: /home/hlakshminara/NVIS-P2P/state/seed/cache
+
+download:
+  protocol: tcp
+  server:
+    socketPath: /home/hlakshminara/NVIS-P2P/state/seed/dfdaemon.sock
+  bandwidthLimit: 50GB
+  backToSourceBandwidthLimit: 50GB
+  pieceTimeout: 90s
+  concurrentPieceCount: 16
+
+upload:
+  server:
+    port: 12110
+  ip: 10.41.112.3
+  disableShared: false
+  bandwidthLimit: 50GB
+
+scheduler:
+  announceInterval: 10s
+  scheduleTimeout: 3h
+  maxScheduleCount: 5
+  enableBackToSource: true
+
+manager:
+  addr: http://10.41.112.3:12003
+
+seedPeer:
+  enable: true
+  type: super
+
+dynconfig:
+  refreshInterval: 1m
+
+storage:
+  server:
+    tcpPort: 12112
+    quicPort: 12113
+  dir: /cluster/OVA/NVIS-P2P/seed-cache
+  keep: true
+  writeBufferSize: 1048576
+  readBufferSize: 1048576
+
+gc:
+  interval: 900s
+  policy:
+    taskTTL: 86400s
+    distHighThresholdPercent: 90
+    distLowThresholdPercent: 80
+
+proxy:
+  server:
+    port: 12111
+  rules: []
+  registryMirror:
+    addr: https://index.docker.io
+  disableBackToSource: false
+  prefetch: false
+  readBufferSize: 131072
+
+metrics:
+  server:
+    port: 12114
+  ip: 10.41.112.3

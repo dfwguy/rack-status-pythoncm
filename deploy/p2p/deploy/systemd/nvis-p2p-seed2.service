@@ -1,0 +1,20 @@
+[Unit]
+Description=NVIS-P2P Dragonfly seed peer 2
+After=network-online.target docker.service nvis-p2p-manager.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hlakshminara
+Group=cmods
+WorkingDirectory=/home/hlakshminara/NVIS-P2P
+ExecStart=/home/hlakshminara/NVIS-P2P/dist/client-amd64-v1.4.9/dfdaemon --config /home/hlakshminara/NVIS-P2P/configs/seed2.yaml --log-dir /home/hlakshminara/NVIS-P2P/state/seed2/logs --console
+Restart=always
+RestartSec=5s
+LimitNOFILE=1048576
+TasksMax=8192
+StandardOutput=append:/home/hlakshminara/NVIS-P2P/state/seed2/dfdaemon-service.log
+StandardError=append:/home/hlakshminara/NVIS-P2P/state/seed2/dfdaemon-service.log
+
+[Install]
+WantedBy=multi-user.target

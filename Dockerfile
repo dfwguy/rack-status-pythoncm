@@ -83,6 +83,21 @@ RUN mkdir -p var/logs var/cache var/secrets var/workflows/runs config
 COPY config/rackstatus.toml.example ./config/
 COPY var/workflows/*.yaml ./var/workflows/
 
+# NVIS-P2P deploy assets: the Dragonfly compose files, config templates, scripts and catalog
+# manifest that the P2P provisioning workflow uses to stand up a per-cluster instance. When a
+# builder has staged the pinned binaries (deploy/p2p/bin/stage-artifacts.sh writes deploy/p2p/dist/,
+# ~300 MB, git-ignored) they ride in here too. The image then RE-verifies any staged binaries
+# against artifacts.lock, so a corrupted or wrong artifact fails the build instead of shipping. With
+# no staged dist/, this is a text-only image (UI + gateway) and the workflow reports the bundle
+# absent -- a deliberate, honest state. See deploy/p2p/README.md.
+COPY deploy/p2p/ ./deploy/p2p/
+RUN if [ -d deploy/p2p/dist ]; then \
+        ( cd deploy/p2p/dist && grep -vE '^[[:space:]]*(#|$)' ../artifacts.lock | sha256sum -c - ) \
+        && echo "p2p: staged Dragonfly artifacts verified against artifacts.lock"; \
+    else \
+        echo "note: deploy/p2p/dist absent - image is text-only (no P2P provisioning binaries)"; \
+    fi
+
 # What build is this? backend/build-info.json answers, and it arrives via the COPY above rather
 # than being generated here -- see bin/write-build-info.sh for why. In short: deployments bind-mount
 # the backend directory over the image's, so anything generated under it at build time is hidden at

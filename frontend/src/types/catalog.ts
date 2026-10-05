@@ -206,6 +206,14 @@ export interface Cluster {
   cluster_manager: string;
   /** Where work runs (slurm/pythoncm/...). Distinct from cluster_manager. */
   scheduler: string;
+  /**
+   * How nodes map to the floor. "direct": the rack id is embedded in the hostname and parsed
+   * via the naming templates. "translate": the hostname does not encode the rack — rack/slot
+   * come from the cluster-manager provider and the SU grouping from `scalable_units`.
+   * "pool": there is no placement data anywhere — the fleet renders as a flat list of nodes
+   * (the Akamai/Reno RTX 6000 case). Node shape (GPUs per node) still comes from the scheduler.
+   */
+  rack_mapping_mode: "direct" | "translate" | "pool";
   site_prefix: string;
   naming: ClusterNaming;
   geometry: ClusterGeometry;
@@ -216,6 +224,12 @@ export interface Cluster {
   campaigns: ClusterCampaign[];
   /** External evidence feed paths; empty when the cluster has no collector. */
   evidence: ClusterEvidence;
+  /**
+   * Whether NVIS-P2P (artifact distribution) is enabled for this cluster. P2P is single-tenant —
+   * one Dragonfly instance per cluster — so this is a per-cluster capability flag. When on, the
+   * P2P nav group and gateway are active for this cluster; when off (default), they are hidden.
+   */
+  p2p_enabled?: boolean;
 }
 
 export interface Project {

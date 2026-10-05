@@ -30,6 +30,8 @@ subtrees:
         title: How to use the terminal
       - file: how-to/stage-observability-agents
         title: How to stage the observability node-agents to a cluster
+      - file: how-to/connect-a-pythoncm-cluster
+        title: How to connect a PythonCM (BCM) cluster
 
   - caption: Reference — the machinery, described
     entries:
@@ -70,3 +72,7 @@ subtrees:
         title: Why there is no PythonCM broker
       - file: explanation/porting-the-pythoncm-fork
         title: Porting the PythonCM fork
+      - file: explanation/p2p-module-integration
+        title: NVIS-P2P as a per-cluster capability
+      - file: explanation/active-passive-and-blue-green
+        title: Active/passive and blue/green (roadmap)

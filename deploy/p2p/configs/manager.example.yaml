@@ -1,0 +1,68 @@
+server:
+  name: nvis-p2p-manager
+  logDir: /opt/nvis-p2p/state/manager/logs
+  logLevel: info
+  logMaxSize: 100
+  logMaxAge: 7
+  logMaxBackups: 5
+  pluginDir: /opt/nvis-p2p/state/manager/plugins
+  grpc:
+    advertiseIP: REPLACE_WITH_CONTROL_PLANE_IP
+    listenIP: 0.0.0.0
+    port:
+      start: 12003
+      end: 12003
+    requestRateLimit: 5000
+  rest:
+    addr: 127.0.0.1:12004
+
+auth:
+  jwt:
+    realm: NVIS-P2P
+    key: REPLACE_WITH_RANDOM_JWT_SIGNING_KEY
+    timeout: 24h
+    maxRefresh: 168h
+
+database:
+  type: postgres
+  postgres:
+    user: nvis_p2p
+    password: REPLACE_WITH_POSTGRES_PASSWORD
+    host: 127.0.0.1
+    port: 15432
+    dbname: nvis_p2p
+    sslMode: disable
+    timezone: UTC
+    migrate: true
+  redis:
+    addrs:
+      - 127.0.0.1:15379
+    poolSize: 20
+    poolTimeout: 2s
+    db: 0
+    brokerDB: 1
+    backendDB: 2
+
+cache:
+  redis:
+    ttl: 5m
+  local:
+    size: 10000
+    ttl: 5m
+
+job:
+  gc:
+    interval: 1h
+    ttl: 24h
+    batchSize: 100
+  syncPeers:
+    interval: 24h
+    timeout: 2m
+    batchSize: 50
+
+metrics:
+  enable: true
+  addr: REPLACE_WITH_CONTROL_PLANE_IP:12005
+
+network:
+  enableIPv6: false

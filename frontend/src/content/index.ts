@@ -27,6 +27,7 @@ import { workflowContent } from "./registry/workflow";
 import { analyticsContent } from "./registry/analytics";
 import { identityContent } from "./registry/identity";
 import { platformContent } from "./registry/platform";
+import { p2pContent } from "./registry/p2p";
 import { shellContent } from "./registry/shell";
 
 export type { HelpContent, HelpRegistry, HelpKind, HelpHowTo, HelpFaq, HelpAria } from "./types";
@@ -43,6 +44,7 @@ export const ALL_CONTENT: HelpContent[] = [
   ...analyticsContent,
   ...identityContent,
   ...platformContent,
+  ...p2pContent,
   ...shellContent,
 ];
 

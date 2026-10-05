@@ -211,6 +211,9 @@ export function toCluster(draft: WizardDraft): Cluster {
     // Where work runs. Defaults to Slurm; a BCM site without it (native CMDaemon
     // scheduling) picks pythoncm here rather than editing the record afterwards.
     scheduler: draft.scheduler || "slurm",
+    // The wizard only builds hostname-embedded-rack clusters; a translate cluster
+    // (provider rack + SU list) is configured afterwards in Projects & Clusters.
+    rack_mapping_mode: "direct",
     site_prefix: draft.sitePrefix.trim(),
     naming: {
       rack_id_template: draft.rackIdTemplate.trim(),

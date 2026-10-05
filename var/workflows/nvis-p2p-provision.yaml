@@ -1,0 +1,152 @@
+id: nvis-p2p-provision
+name: NVIS-P2P provision (reconcile)
+description: >-
+  Stand up, or reconcile, the single-tenant Dragonfly control plane for a cluster's NVIS-P2P
+  instance. Every step runs on the **P2P app server** (the P2P_APPSERVER_* connection the gateway
+  passes), which is a host in its own right -- not the cluster's control connection, which on a
+  cluster like NC is the BCM head. It is a reconcile: a healthy instance is left in place and only
+  what is missing is created. Blast radius is real -- it brings up containers on a live host -- so
+  the first step is a READ-ONLY preflight and every mutating step is gated behind it. The bring-up
+  runs the rendered compose overlay directly rather than the release-manifest installer.
+version: 1
+target:
+  mode: host
+steps:
+- id: start
+  name: Start
+  type: automated
+- id: preflight
+  name: Preflight the app server
+  type: automated
+  native: p2p_run_on_appserver
+  description: >-
+    Read-only readiness checks on the app server: container runtime, compose, non-interactive sudo,
+    the canonical image origin, and disk headroom on the deploy filesystem. No side effects.
+  timeout: 180
+  parameters:
+    DOCKER_BIN: docker
+    CANONICAL_DIR: /cluster/containers
+    MIN_FREE_GB: "200"
+  run: |
+    set -uo pipefail
+    docker_hint="${DOCKER_BIN}"; canonical="${CANONICAL_DIR}"
+    deploy_base="${NVIS_INSTALL_ROOT}"; min_free_gb="${MIN_FREE_GB}"
+    faults=0; warns=0
+    pass() { printf '  [PASS] %s\n' "$1"; }
+    warn() { printf '  [WARN] %s\n' "$1"; warns=$((warns+1)); }
+    fail() { printf '  [FAIL] %s\n' "$1"; faults=$((faults+1)); }
+    echo "== NVIS-P2P control-plane preflight =="
+    echo "host: $(hostname 2>/dev/null || echo '?')  user: $(whoami 2>/dev/null || echo '?')"
+    docker=""
+    if command -v "$docker_hint" >/dev/null 2>&1; then docker="$docker_hint"
+    elif [ -x /cm/local/apps/docker/current/bin/docker ]; then docker=/cm/local/apps/docker/current/bin/docker; fi
+    echo "Container runtime:"
+    if [ -n "$docker" ]; then
+      pass "docker present ($docker)"
+      if sudo -n "$docker" compose version >/dev/null 2>&1 || "$docker" compose version >/dev/null 2>&1; then pass "docker compose plugin available"; else fail "docker compose plugin not available"; fi
+      if sudo -n "$docker" ps >/dev/null 2>&1; then pass "sudo -n docker works"; else warn "sudo -n docker failed; the daemon may be rootless or sudo needs a password"; fi
+    else fail "no docker runtime in PATH or /cm/local/apps/docker/current/bin"; fi
+    echo "Canonical image origin ($canonical):"
+    if [ -d "$canonical" ]; then pass "present"; else warn "not present yet -- images must be staged here before distribution"; fi
+    echo "Deploy filesystem ($deploy_base):"
+    probe="$deploy_base"; while [ ! -d "$probe" ] && [ "$probe" != "/" ]; do probe=$(dirname "$probe"); done
+    free_gb=$(df -BG --output=avail "$probe" 2>/dev/null | tail -1 | tr -dc '0-9')
+    if [ -n "$free_gb" ]; then
+      if [ "$free_gb" -ge "$min_free_gb" ]; then pass "${free_gb}G free on $probe (need ${min_free_gb}G)"; else fail "only ${free_gb}G free on $probe (need ${min_free_gb}G)"; fi
+    else warn "could not read free space on $probe"; fi
+    echo "== preflight summary: $faults fault(s), $warns warning(s) =="
+    exit "$faults"
+- id: stage-assets
+  name: Stage the P2P assets to the app server
+  type: automated
+  native: p2p_stage_assets
+  description: >-
+    Copy the deploy/p2p tree (scripts, compose, config templates, catalog manifest and, when the
+    image was built with them, the pinned binaries) to {install_root}/current on the app server.
+- id: secrets
+  name: Generate instance secrets
+  type: automated
+  native: p2p_run_on_appserver
+  description: >-
+    render-site-config requires the credential files to already exist (0600), so this generates
+    them if absent -- postgres, manager JWT, MinIO root, and the dfstore read-only export env -- plus
+    an inventory file at the settings path. Idempotent: an existing secret is left in place so a
+    reconcile never rotates a live credential.
+  timeout: 120
+  run: |
+    set -euo pipefail
+    S="${NVIS_INSTALL_ROOT}/secrets"
+    sudo mkdir -p "$S"; sudo chmod 0700 "$S"
+    gen() { head -c 32 /dev/urandom | base64 | tr -d '/+=' | cut -c1-32; }
+    for f in postgres-password manager-jwt-key minio-root-password; do
+      sudo test -s "$S/$f" || printf '%s' "$(gen)" | sudo tee "$S/$f" >/dev/null
+    done
+    sudo test -s "$S/dfstore-readonly.env" || printf 'DFSTORE_EXPORT_STORAGE_ENDPOINT=http://%s:9000\nDFSTORE_EXPORT_STORAGE_ACCESS_KEY_ID=nvisdfro\nDFSTORE_EXPORT_STORAGE_ACCESS_KEY_SECRET=%s\n' "${NVIS_MANAGER_IP}" "$(gen)" | sudo tee "$S/dfstore-readonly.env" >/dev/null
+    sudo chmod 0600 "$S"/*
+    INV="${NVIS_INVENTORY_SOURCE}"; sudo mkdir -p "$(dirname "$INV")"
+    sudo test -s "$INV" || echo "# eligible nodes for ${NVIS_INVENTORY_PATTERN} -- populated by the peer rollout" | sudo tee "$INV" >/dev/null
+    echo "secrets and inventory ready under ${NVIS_INSTALL_ROOT}"
+- id: render
+  name: Render and validate the site overlay
+  type: automated
+  native: p2p_run_on_appserver
+  description: >-
+    Write the per-cluster cluster.env, then run render-site-config.py, which validates every setting
+    and renders the control-plane overlay (compose, configs, secrets) with the upstream paths
+    rewritten to this install root. A failure here stops the run before anything is brought up. Read
+    only with respect to running services.
+  timeout: 300
+  run: |
+    set -euo pipefail
+    ROOT="${NVIS_INSTALL_ROOT}"; SRC="$ROOT/current"; ENVF="$ROOT/cluster.env"
+    {
+      echo "NVIS_INSTALL_ROOT=${NVIS_INSTALL_ROOT}"
+      echo "NVIS_SERVICE_USER=${NVIS_SERVICE_USER}"
+      echo "NVIS_SERVICE_GROUP=${NVIS_SERVICE_GROUP}"
+      echo "NVIS_SERVICE_UID=${NVIS_SERVICE_UID}"
+      echo "NVIS_SERVICE_GID=${NVIS_SERVICE_GID}"
+      echo "NVIS_MANAGER_IP=${NVIS_MANAGER_IP}"
+      echo "NVIS_APPSERVER_IP=${NVIS_APPSERVER_IP}"
+      echo "NVIS_CONSOLE_BIND=${NVIS_CONSOLE_BIND}"
+      echo "NVIS_INVENTORY_SOURCE=${NVIS_INVENTORY_SOURCE}"
+      echo "NVIS_INVENTORY_PATTERN=${NVIS_INVENTORY_PATTERN}"
+      echo "NVIS_CONTAINER_PATH=${NVIS_CONTAINER_PATH}"
+      echo "NVIS_CATALOG_PATH=${NVIS_CATALOG_PATH}"
+      echo "NVIS_PEER_ROOT=${NVIS_PEER_ROOT}"
+      echo "NVIS_OBJECT_STORE_DATA_PATH=${NVIS_OBJECT_STORE_DATA_PATH}"
+      echo "NVIS_SEED_CACHE_PATH=${NVIS_SEED_CACHE_PATH}"
+      echo "NVIS_POSTGRES_PASSWORD_FILE=${NVIS_POSTGRES_PASSWORD_FILE}"
+      echo "NVIS_MANAGER_JWT_KEY_FILE=${NVIS_MANAGER_JWT_KEY_FILE}"
+      echo "NVIS_MINIO_ROOT_PASSWORD_FILE=${NVIS_MINIO_ROOT_PASSWORD_FILE}"
+      echo "NVIS_DFSTORE_READONLY_ENV_FILE=${NVIS_DFSTORE_READONLY_ENV_FILE}"
+      echo "NVIS_SYSTEMD_DIR=${NVIS_SYSTEMD_DIR}"
+    } | sudo tee "$ENVF" >/dev/null
+    echo "wrote $ENVF"
+    sudo rm -rf "$SRC/site"
+    sudo python3 "$SRC/scripts/render-site-config.py" --env "$ENVF" --output "$SRC/site"
+    echo "rendered site overlay at $SRC/site"
+- id: bring-up
+  name: Bring up the control plane
+  type: automated
+  native: p2p_run_on_appserver
+  description: >-
+    The first mutating step. Ensures the service account exists, then brings up the rendered compose
+    overlay -- postgres, redis, manager/scheduler, object store, seed origin -- in dependency order.
+    Gated behind a healthy preflight, a successful stage, and a passing render.
+  timeout: 1800
+  run: |
+    set -euo pipefail
+    SITE="${NVIS_INSTALL_ROOT}/current/site"
+    DOCKER=$(command -v docker || echo /cm/local/apps/docker/current/bin/docker)
+    getent group "${NVIS_SERVICE_GROUP}" >/dev/null 2>&1 || sudo groupadd -g "${NVIS_SERVICE_GID}" "${NVIS_SERVICE_GROUP}"
+    id "${NVIS_SERVICE_USER}" >/dev/null 2>&1 || sudo useradd -r -u "${NVIS_SERVICE_UID}" -g "${NVIS_SERVICE_GID}" -s /usr/sbin/nologin "${NVIS_SERVICE_USER}"
+    for component in postgres redis control-plane object-store seed-origin; do
+      dir="$SITE/compose/$component"
+      [ -d "$dir" ] || { echo "skip $component (not in overlay)"; continue; }
+      echo "== up: $component =="
+      ( cd "$dir" && sudo "$DOCKER" compose up -d )
+    done
+    echo "control-plane bring-up requested; verify with: sudo $DOCKER ps"
+- id: done
+  name: Provisioned
+  type: manual

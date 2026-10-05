@@ -1,0 +1,20 @@
+[Unit]
+Description=NVIS-P2P Dragonfly manager
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hlakshminara
+Group=cmods
+WorkingDirectory=/home/hlakshminara/NVIS-P2P
+ExecStart=/home/hlakshminara/NVIS-P2P/dist/core/manager --config /home/hlakshminara/NVIS-P2P/configs/manager.yaml --console
+Restart=always
+RestartSec=5s
+LimitNOFILE=1048576
+TasksMax=8192
+StandardOutput=append:/home/hlakshminara/NVIS-P2P/state/manager-service.log
+StandardError=append:/home/hlakshminara/NVIS-P2P/state/manager-service.log
+
+[Install]
+WantedBy=multi-user.target

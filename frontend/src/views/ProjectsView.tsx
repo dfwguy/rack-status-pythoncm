@@ -23,6 +23,7 @@ import {
   ModalCloseButton,
   Select,
   StatusMessage,
+  Switch,
   Tag,
   Text,
   TextArea,
@@ -55,6 +56,7 @@ function emptyCluster(): Cluster {
     platform_id: "",
     cluster_manager: "bcm",
     scheduler: "slurm",
+    rack_mapping_mode: "direct",
     site_prefix: "",
     naming: { rack_id_template: "", ct_id_template: "", nvsw_id_template: "", ct_joiner: "-ct", slurm_hostlist: "" },
     geometry: { pods: 1, rows_per_pod: 0, racks_per_row: 0, trays_per_rack: 0 },
@@ -64,6 +66,7 @@ function emptyCluster(): Cluster {
     scalable_units: [],
     campaigns: [],
     evidence: { snapshot_path: "", healthcheck_root: "" },
+    p2p_enabled: false,
   };
 }
 
@@ -173,6 +176,13 @@ export function ProjectsView() {
     setClusterDraft((d) => (d ? { ...d, cluster: { ...d.cluster, naming: { ...d.cluster.naming, ...patch } } } : d));
   const setConn = (patch: Partial<Cluster["connection"]>) =>
     setClusterDraft((d) => (d ? { ...d, cluster: { ...d.cluster, connection: { ...d.cluster.connection, ...patch } } } : d));
+  const setSUs = (units: Cluster["scalable_units"]) => setCl({ scalable_units: units });
+  // An SU id must be a slug (backend valid_id: ^[a-z0-9][a-z0-9._-]*$); derive it from the
+  // label so the operator only types a human name and the racks.
+  const suSlug = (label: string) =>
+    label.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  const clMode = clusterDraft?.cluster.rack_mapping_mode || "direct";
+  const clSUs = clusterDraft?.cluster.scalable_units || [];
 
   /**
    * Re-copy the shared defaults into this project's script directory.
@@ -431,21 +441,107 @@ export function ProjectsView() {
             </FormField>
           </Box>
 
+          <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>Artifact Distribution</Text>
+          <FormField
+            name="cl-p2p"
+            slotLabel="NVIS-P2P"
+            slotHelp="Peer-to-peer container-image distribution (Dragonfly). Single-tenant: one P2P instance per cluster. When enabled, the Artifact Fleet appears for this cluster."
+          >
+            <Switch
+              slotLabel="Enable P2P for this cluster"
+              checked={Boolean(clusterDraft?.cluster.p2p_enabled)}
+              onCheckedChange={(on: boolean) => setCl({ p2p_enabled: on })}
+            />
+          </FormField>
+
           <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>Naming convention</Text>
-          <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>
-            <FormField name="cl-rack-tpl" slotLabel="Rack id template" slotHelp="NVIS_RACK_ID">
-              <TextInput value={clusterDraft?.cluster.naming.rack_id_template || ""} onValueChange={(v) => setNaming({ rack_id_template: v })} />
-            </FormField>
-            <FormField name="cl-ct-tpl" slotLabel="Node/CT id template" slotHelp="NVIS_CT_ID">
-              <TextInput value={clusterDraft?.cluster.naming.ct_id_template || ""} onValueChange={(v) => setNaming({ ct_id_template: v })} />
-            </FormField>
-            <FormField name="cl-nvsw-tpl" slotLabel="NVSwitch id template" slotHelp="NVIS_NVSW_ID">
-              <TextInput value={clusterDraft?.cluster.naming.nvsw_id_template || ""} onValueChange={(v) => setNaming({ nvsw_id_template: v })} />
-            </FormField>
-            <FormField name="cl-joiner" slotLabel="Tray joiner">
-              <TextInput value={clusterDraft?.cluster.naming.ct_joiner || "-ct"} onValueChange={(v) => setNaming({ ct_joiner: v })} />
-            </FormField>
-          </Box>
+          <FormField
+            name="cl-rackmapping"
+            slotLabel="Rack mapping"
+            slotHelp="Direct: the rack id is in the hostname (parsed by the templates below). Translate: the hostname has no rack; rack/slot come from the cluster manager and the SU grouping from the list below. Pool: there is no placement at all — nodes render as a flat list (GPU counts still come from the scheduler)."
+          >
+            <Select
+              items={[
+                { value: "direct", children: "Direct (rack id in hostname)" },
+                { value: "translate", children: "Translate (provider rack + SU list)" },
+                { value: "pool", children: "Pool (no placement — flat node list)" },
+              ]}
+              value={clMode}
+              onValueChange={(v) => setCl({ rack_mapping_mode: v as Cluster["rack_mapping_mode"] })}
+              placeholder="Direct"
+            />
+          </FormField>
+          {clMode === "pool" ? (
+            <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block" }}>
+              Pool mode uses no naming templates: with no placement, there is nothing to parse out of
+              the hostname. Nodes render as a flat list ordered by hostname, and GPU counts come from
+              the scheduler (Slurm GRES) or an nvidia-smi sample.
+            </Text>
+          ) : (
+            <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>
+              <FormField name="cl-rack-tpl" slotLabel="Rack id template" slotHelp={clMode === "translate" ? "NVIS_RACK_ID — decomposes the provider's rack id into a row (e.g. [A-Z][\\d+])" : "NVIS_RACK_ID"}>
+                <TextInput value={clusterDraft?.cluster.naming.rack_id_template || ""} onValueChange={(v) => setNaming({ rack_id_template: v })} />
+              </FormField>
+              {clMode === "direct" && (
+                <>
+                  <FormField name="cl-ct-tpl" slotLabel="Node/CT id template" slotHelp="NVIS_CT_ID">
+                    <TextInput value={clusterDraft?.cluster.naming.ct_id_template || ""} onValueChange={(v) => setNaming({ ct_id_template: v })} />
+                  </FormField>
+                  <FormField name="cl-nvsw-tpl" slotLabel="NVSwitch id template" slotHelp="NVIS_NVSW_ID">
+                    <TextInput value={clusterDraft?.cluster.naming.nvsw_id_template || ""} onValueChange={(v) => setNaming({ nvsw_id_template: v })} />
+                  </FormField>
+                  <FormField name="cl-joiner" slotLabel="Tray joiner">
+                    <TextInput value={clusterDraft?.cluster.naming.ct_joiner || "-ct"} onValueChange={(v) => setNaming({ ct_joiner: v })} />
+                  </FormField>
+                </>
+              )}
+            </Box>
+          )}
+
+          {clMode === "translate" && (
+            <>
+              <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>Scalable Unit translation</Text>
+              <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginTop: -4 }}>
+                One row per SU: a label and its comma-separated rack ids (the rack ids the cluster manager reports, e.g. U19, U20). Required in translate mode.
+              </Text>
+              <Flex direction="column" gap="1.5">
+                {clSUs.map((su, i) => (
+                  <Box key={i} sx={{ display: "grid", gridTemplateColumns: "1fr 3fr auto", gap: 1.5, alignItems: "end" }}>
+                    <FormField name={`cl-su-label-${i}`} slotLabel={i === 0 ? "SU label" : undefined}>
+                      <TextInput
+                        value={su.label || ""}
+                        placeholder="SU19"
+                        onValueChange={(v) => {
+                          const next = clSUs.map((s, j) => (j === i ? { ...s, label: v, id: suSlug(v) || s.id } : s));
+                          setSUs(next);
+                        }}
+                      />
+                    </FormField>
+                    <FormField name={`cl-su-racks-${i}`} slotLabel={i === 0 ? "Racks (comma-separated)" : undefined}>
+                      <TextInput
+                        value={su.racks.join(", ")}
+                        placeholder="U19, U20, U21, U22, U23, U24, U25"
+                        onValueChange={(v) => {
+                          const racks = v.split(",").map((r) => r.trim()).filter(Boolean);
+                          setSUs(clSUs.map((s, j) => (j === i ? { ...s, racks } : s)));
+                        }}
+                      />
+                    </FormField>
+                    <KuiButton kind="secondary" size="small" onClick={() => setSUs(clSUs.filter((_, j) => j !== i))}>Remove</KuiButton>
+                  </Box>
+                ))}
+                <Box>
+                  <KuiButton
+                    kind="secondary"
+                    size="small"
+                    onClick={() => setSUs([...clSUs, { id: "", label: "", racks: [] }])}
+                  >
+                    Add SU
+                  </KuiButton>
+                </Box>
+              </Flex>
+            </>
+          )}
 
           <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>Connection</Text>
           <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 2 }}>

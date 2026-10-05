@@ -10,7 +10,7 @@
  * its affiliates is strictly prohibited.
  */
 import { describe, expect, it } from "vitest";
-import { buildFloorLayout, buildScalableUnitLayout, floorLayoutFromHierarchy } from "./rackTopology";
+import { barColumns, buildFloorLayout, buildScalableUnitLayout, floorLayoutFromHierarchy, rackHealth } from "./rackTopology";
 import type { RackRow, RackHierarchy } from "../types/api";
 
 function rackRow(rack: string): RackRow {
@@ -154,5 +154,51 @@ describe("buildScalableUnitLayout (SU as its own grouping axis)", () => {
 
   it("returns nothing when the cluster has no SU map", () => {
     expect(buildScalableUnitLayout([nscale("dh01", 18)], [])).toEqual([]);
+  });
+});
+
+describe("rackHealth — provider (BCM/pythoncm) node states", () => {
+  const row = (sinfo: string): RackRow =>
+    ({ rack: "U19", nemo: "-", last_job: "-", sinfo, ct_down_unk: "-" });
+
+  it("counts installing nodes toward the total but not as up", () => {
+    // An all-installing rack must read 0/18, not 0/0 (no data) and not 18/18 (misleading up).
+    const h = rackHealth(row("inst=18"));
+    expect(h.total).toBe(18);
+    expect(h.upCount).toBe(0);
+    expect(h.health).toBe("down");
+  });
+
+  it("mixes installing, down and up into a partial verdict", () => {
+    const h = rackHealth(row("inst=16,down=1,up=1"));
+    expect(h.total).toBe(18);
+    expect(h.upCount).toBe(1);
+    expect(h.health).toBe("partial");
+  });
+
+  it("still reads an all-up rack as healthy (Slurm path unchanged)", () => {
+    const h = rackHealth(row("idle=18"));
+    expect(h.total).toBe(18);
+    expect(h.upCount).toBe(18);
+    expect(h.health).toBe("healthy");
+  });
+});
+
+describe("barColumns — node-count bar wraps into pleasant rows", () => {
+  it("uses rows of 8 for multiples of 8", () => {
+    expect(barColumns(8)).toBe(8);   // 1x8
+    expect(barColumns(16)).toBe(8);  // 2x8 — the familiar look
+    expect(barColumns(24)).toBe(8);  // 3x8
+    expect(barColumns(72)).toBe(8);  // 9x8
+  });
+
+  it("wraps an off-multiple count into ~2 rows capped at 9 wide", () => {
+    expect(barColumns(18)).toBe(9);  // NC's GB300 rack -> 2x9, not a thin 18-strip
+    expect(barColumns(14)).toBe(7);  // 2x7
+  });
+
+  it("never returns less than 1 column", () => {
+    expect(barColumns(1)).toBe(1);
+    expect(barColumns(0)).toBe(1);
   });
 });

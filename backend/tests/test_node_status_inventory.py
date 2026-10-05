@@ -80,6 +80,56 @@ def test_duplicate_partition_rows_preserve_spelling_and_all_states(monkeypatch):
     assert [node["status"] for node in ns.build_node_inventory(nodes, [])] == ["down", "up"]
 
 
+# A hostname the CT template CAN parse into a rack, so the two modes diverge observably.
+_MAP_NODES = {"p1-r5-ct3": "idle"}
+_MAP_RACKS = ["p1-r5"]
+
+
+class TestRackMappingMode:
+    """Direct parses the rack from the hostname; translate refuses to, taking placement only
+    from the provider record. The divergence is the whole point of the flag: on Nscale NC the
+    hostname carries no rack, so parsing it would invent a wrong one from a mis-set CT template.
+    """
+
+    def test_direct_parses_the_rack_out_of_the_hostname(self, monkeypatch):
+        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "direct")
+        inv = ns.build_node_inventory(_MAP_NODES, _MAP_RACKS, records=[])
+        assert inv[0]["rack"] == "p1-r5"
+
+    def test_translate_ignores_the_hostname_when_provider_is_silent(self, monkeypatch):
+        """No provider placement -> ungrouped, rather than a hostname-guessed rack."""
+        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        inv = ns.build_node_inventory(_MAP_NODES, _MAP_RACKS, records=[])
+        assert inv[0]["rack"] is None
+
+    def test_translate_places_from_the_provider_rack_attribute(self, monkeypatch):
+        """The NC path: rack/slot come from the cluster manager's device record, not the name."""
+        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        records = [{"id": "p1-r5-ct3", "rack": "p1-r5", "ip": ""}]
+        inv = ns.build_node_inventory(_MAP_NODES, _MAP_RACKS, records=records)
+        assert inv[0]["rack"] == "p1-r5"
+
+
+class TestProviderRackCounts:
+    """A BCM/pythoncm cluster has no sinfo, so the rack tiles' node totals must come from the
+    placed roster. Without this every provider rack showed 0/0 even with 18 nodes enumerated.
+    """
+
+    def test_counts_are_grouped_by_rack_and_state(self):
+        inv = (
+            [{"id": f"n{i}", "rack": "U19", "status": "inst"} for i in range(16)]
+            + [{"id": "nd", "rack": "U19", "status": "down"}]
+            + [{"id": "nu", "rack": "U19", "status": "up"}]
+        )
+        counts = ns.counts_from_node_inventory(inv)
+        assert counts == {("U19", "inst"): 16, ("U19", "down"): 1, ("U19", "up"): 1}
+        assert ns.rack_total_sinfo_nodes("U19", counts) == 18  # the total the tile was missing
+
+    def test_unplaced_nodes_do_not_count(self):
+        inv = [{"id": "app", "rack": None, "status": "up"}, {"id": "n", "rack": "R2", "status": "down"}]
+        assert ns.counts_from_node_inventory(inv) == {("R2", "down"): 1}
+
+
 def test_expanded_hostnames_are_actual_roster_and_expanded_only_once(monkeypatch):
     run = Mock(side_effect=[
         slurm_response("GPU[01-02] idle\nGPU01 idle\n"),
@@ -195,7 +245,7 @@ def test_worker_preserves_last_good_on_failure_then_clears_on_confirmed_empty(mo
     assert "exit 1" in failed["node_inventory_error"]
 
     state._worker_sinfo()
-    assert state.node_inventory_snapshot() == {"nodes": [], "node_inventory_error": ""}
+    assert state.node_inventory_snapshot() == {"nodes": [], "node_inventory_error": "", "rack_mapping_mode": "direct"}
     assert state.sinfo_counts == {}
 
 
@@ -266,6 +316,7 @@ def test_nonslurm_worker_uses_provider_inventory_and_keeps_unassigned_node_ip(mo
             {"id": "RTX6000-03", "rack": None, "ip": "", "scheduler_state": "", "status": "unknown"},
         ],
         "node_inventory_error": "",
+        "rack_mapping_mode": "direct",
     }
     provider.compute_node_inventory.assert_called_once_with()
     ns.host_exec.run_slurm_on_host.assert_not_called()
@@ -288,7 +339,7 @@ def test_provider_failure_distinguishes_unavailable_stale_and_confirmed_empty(mo
     assert state.node_inventory_snapshot()["nodes"] == last_good
     assert "last successful" in state.node_inventory_snapshot()["node_inventory_error"]
     state._worker_sinfo()
-    assert state.node_inventory_snapshot() == {"nodes": [], "node_inventory_error": ""}
+    assert state.node_inventory_snapshot() == {"nodes": [], "node_inventory_error": "", "rack_mapping_mode": "direct"}
     ns.host_exec.run_slurm_on_host.assert_not_called()
 
 
@@ -378,3 +429,133 @@ def test_rf0_cache_is_scoped_to_cluster_and_known_roster(monkeypatch):
         "gpu01": "10.1.0.1", "gpu02": "10.1.0.2",
     }
     assert run.call_count == 3
+
+
+# ---------------------------------------------------------------------------
+# Per-node GPU shape (how many GPUs to draw) + pool mode (no placement at all).
+# The Akamai/Reno RTX 6000 cluster: 8 GPUs/node known from Slurm GRES, zero racks.
+# ---------------------------------------------------------------------------
+
+
+class TestParseGresGpu:
+    def test_typed_count_with_socket_suffix(self):
+        assert ns.parse_gres_gpu("gpu:nvidia:8(S:0-1)") == {"gpu_count": 8, "gpu_type": "nvidia"}
+
+    def test_untyped_count(self):
+        assert ns.parse_gres_gpu("gpu:4") == {"gpu_count": 4}
+
+    def test_null_and_cpu_only_and_empty_are_none(self):
+        assert ns.parse_gres_gpu("(null)") is None
+        assert ns.parse_gres_gpu("") is None
+        assert ns.parse_gres_gpu("mps:100") is None
+
+    def test_mixed_tokens_sum_and_keep_first_type(self):
+        assert ns.parse_gres_gpu("gpu:a100:4,gpu:a100:4") == {"gpu_count": 8, "gpu_type": "a100"}
+
+
+def test_collect_sinfo_nodes_and_shapes_reads_gres_in_one_call(monkeypatch):
+    run = Mock(return_value=slurm_response(
+        "gpu-rno-248 idle gpu:nvidia:8(S:0-1)\n"
+        "gpu-rno-249 down gpu:nvidia:8(S:0-1)\n"
+        "login-01 idle (null)\n"
+    ))
+    monkeypatch.setattr(ns.host_exec, "run_slurm_on_host", run)
+
+    nodes, shapes = ns.collect_sinfo_nodes_and_shapes()
+
+    assert nodes == {"gpu-rno-248": "idle", "gpu-rno-249": "down", "login-01": "idle"}
+    assert shapes == {
+        "gpu-rno-248": {"gpu_count": 8, "gpu_type": "nvidia"},
+        "gpu-rno-249": {"gpu_count": 8, "gpu_type": "nvidia"},  # GRES covers DOWN nodes
+    }
+    assert "login-01" not in shapes
+    run.assert_called_once()  # one sinfo call, not two
+
+
+def test_build_node_inventory_attaches_shape_when_known():
+    nodes = {"gpu-rno-248": "idle", "gpu-rno-249": "idle"}
+    shapes = {"gpu-rno-248": {"gpu_count": 8, "gpu_type": "nvidia"}}
+    inv = ns.build_node_inventory(nodes, [], shapes=shapes)
+    by_id = {n["id"]: n for n in inv}
+    assert by_id["gpu-rno-248"]["gpu_count"] == 8
+    assert by_id["gpu-rno-248"]["gpu_type"] == "nvidia"
+    assert "gpu_count" not in by_id["gpu-rno-249"]  # generic tile when unknown
+
+
+def test_shape_flows_through_worker_and_snapshot_carries_mode(monkeypatch):
+    run = Mock(return_value=slurm_response("gpu-rno-248 idle gpu:nvidia:8\n"))
+    monkeypatch.setattr(ns.host_exec, "run_slurm_on_host", run)
+
+    state = ns.NativeRackTableState("shape", Path("/logs"))
+    state._worker_sinfo()
+    payload = state.node_inventory_snapshot()
+
+    assert payload["rack_mapping_mode"] == "direct"
+    assert payload["nodes"][0]["gpu_count"] == 8
+
+
+class TestPoolMode:
+    """No rack objects, no provider rack, no hostname rack: the node is the atom."""
+
+    def test_mode_resolves_and_is_detected(self, monkeypatch):
+        monkeypatch.setattr(ns, "_native_env_ds", lambda _k, _d="": "pool")
+        assert ns._rack_mapping_mode() == "pool"
+        assert ns.is_pool_mode() is True
+        assert ns._hostname_encodes_rack() is False
+
+    def test_unknown_mode_falls_back_to_direct(self, monkeypatch):
+        monkeypatch.setattr(ns, "_native_env_ds", lambda _k, _d="": "bananas")
+        assert ns._rack_mapping_mode() == "direct"
+
+    def test_pool_does_not_invent_a_rack_from_the_hostname(self, monkeypatch):
+        # A hostname the direct template WOULD parse; pool must still leave it ungrouped.
+        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "pool")
+        inv = ns.build_node_inventory(_MAP_NODES, _MAP_RACKS, records=[])
+        assert inv[0]["rack"] is None
+
+    def test_snapshot_reports_pool_and_keeps_shape(self, monkeypatch):
+        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "pool")
+        run = Mock(return_value=slurm_response("gpu-rno-248 idle gpu:nvidia:8\n"))
+        monkeypatch.setattr(ns.host_exec, "run_slurm_on_host", run)
+        state = ns.NativeRackTableState("pool", Path("/logs"))
+        state._worker_sinfo()
+        payload = state.node_inventory_snapshot()
+        assert payload["rack_mapping_mode"] == "pool"
+        assert payload["nodes"][0]["rack"] is None
+        assert payload["nodes"][0]["gpu_count"] == 8
+
+
+class TestNvidiaSmiFallback:
+    def test_parse_nvidia_smi_l(self):
+        text = (
+            "GPU 0: NVIDIA RTX 6000 Ada Generation (UUID: GPU-aaa)\n"
+            "GPU 1: NVIDIA RTX 6000 Ada Generation (UUID: GPU-bbb)\n"
+        )
+        assert ns.parse_nvidia_smi_l(text) == {
+            "gpu_count": 2, "gpu_type": "NVIDIA RTX 6000 Ada Generation",
+        }
+        assert ns.parse_nvidia_smi_l("") is None
+
+    def test_samples_one_up_node_per_category_and_skips_down(self, monkeypatch):
+        # Two nodes in category rtx6000; the first is DOWN so the UP one must be probed.
+        records = [
+            {"id": "gpu-rno-1", "category": "rtx6000"},
+            {"id": "gpu-rno-2", "category": "rtx6000"},
+        ]
+        node_states = {"gpu-rno-1": "down", "gpu-rno-2": "idle"}
+        run = Mock(return_value=slurm_response(
+            "gpu-rno-2: GPU 0: NVIDIA RTX 6000 (UUID: GPU-x)\n"
+            "gpu-rno-2: GPU 1: NVIDIA RTX 6000 (UUID: GPU-y)\n"
+        ))
+        monkeypatch.setattr(ns.host_exec, "run_on_host", run)
+        monkeypatch.setattr(ns, "_get_platform", lambda: SimpleNamespace(
+            pdsh_cmd=lambda host, cmd, fanout=None: ["pdsh", "-w", host, cmd],
+        ))
+
+        shapes = ns.sample_node_gpu_shapes_via_smi(records, node_states)
+
+        assert shapes["gpu-rno-1"] == {"gpu_count": 2, "gpu_type": "NVIDIA RTX 6000"}
+        assert shapes["gpu-rno-2"] == {"gpu_count": 2, "gpu_type": "NVIDIA RTX 6000"}
+        # Probed exactly once (one category, one representative), targeting the UP node.
+        run.assert_called_once()
+        assert run.call_args.args[0] == ["pdsh", "-w", "gpu-rno-2", "nvidia-smi -L"]

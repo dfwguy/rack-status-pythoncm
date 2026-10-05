@@ -1,0 +1,87 @@
+console: true
+
+log:
+  level: info
+
+host:
+  idc: nscaletx-su__SU__
+  location: __RACK__
+  hostname: __HOSTNAME__
+  ip: __NODE_IP__
+
+server:
+  pluginDir: /opt/containers/.nvis-p2p/plugins
+  cacheDir: /opt/containers/.nvis-p2p/cache
+
+download:
+  protocol: tcp
+  server:
+    socketPath: /opt/containers/.nvis-p2p/run/dfdaemon.sock
+  # Dragonfly's shipped high-bandwidth defaults. Physical NIC/storage capacity
+  # is the limiter; NVIS does not impose an artificial per-peer cap.
+  bandwidthLimit: 50GB
+  backToSourceBandwidthLimit: 50GB
+  pieceTimeout: 90s
+  # Drop a parent stream that stops yielding pieces; the upstream default is
+  # 360s, which is too slow for large synchronized fleet waves.
+  collectedPieceTimeout: 15s
+  concurrentPieceCount: 16
+
+upload:
+  server:
+    port: 12200
+  ip: __NODE_IP__
+  disableShared: false
+  bandwidthLimit: 50GB
+
+scheduler:
+  announceInterval: 10s
+  # This bounds the scheduler stream, not parent silence. Keep it long for a
+  # 42 GB task; download.collectedPieceTimeout handles dead parents quickly.
+  scheduleTimeout: 3h
+  # A 42 GB fleet artifact can legitimately need many parent rotations under
+  # heavy fan-out. Ten attempts caused healthy peers to abort after minutes.
+  maxScheduleCount: 50
+  # Critical fleet-safety guard: compute nodes never hit origin directly.
+  enableBackToSource: false
+
+manager:
+  addr: http://10.41.112.3:12003
+
+seedPeer:
+  enable: false
+  type: normal
+
+dynconfig:
+  refreshInterval: 1m
+
+storage:
+  server:
+    tcpPort: 12202
+    quicPort: 12203
+  dir: /opt/containers/.nvis-p2p/storage
+  keep: true
+  writeBufferSize: 1048576
+  readBufferSize: 1048576
+
+gc:
+  interval: 900s
+  policy:
+    taskTTL: 86400s
+    distHighThresholdPercent: 95
+    distLowThresholdPercent: 90
+
+proxy:
+  server:
+    port: 12201
+  rules: []
+  registryMirror:
+    addr: https://index.docker.io
+  disableBackToSource: true
+  prefetch: false
+  readBufferSize: 131072
+
+metrics:
+  server:
+    port: 12204
+  ip: __NODE_IP__
