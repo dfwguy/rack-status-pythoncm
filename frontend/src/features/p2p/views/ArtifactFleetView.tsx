@@ -43,12 +43,16 @@ import {
   HardDriveDownload,
   Play,
   RefreshCw,
+  Rocket,
+  Settings as SettingsIcon,
   ShieldCheck,
   Wrench,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { NodeHeatmap } from "../components/fleet/NodeHeatmap";
 import { useFleetStatus } from "../hooks/useFleetStatus";
 import { startOperation } from "../services/fleetService";
+import { provision } from "../services/settingsService";
 import { ApiError } from "../lib/apiFetch";
 import { integrityExceptions, integrityToneOf } from "../lib/fleetHeatmap";
 import type { OperationAction } from "../types/fleet";
@@ -70,6 +74,13 @@ export default function ArtifactFleetView() {
   const [selectedImages, setSelectedImages] = useState<string[] | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [provisionBusy, setProvisionBusy] = useState(false);
+  const navigate = useNavigate();
+
+  // Enabled-but-bare clusters report `provisioned: false`: the catalog still lists the shipped
+  // images, but there is no Dragonfly instance, so operations would 501 and the fleet is empty.
+  const notProvisioned = status?.provisioned === false;
 
   const images = status?.catalog.images ?? [];
   // Default to the whole catalog, but only once the catalog is known.
@@ -136,6 +147,44 @@ export default function ArtifactFleetView() {
     [chosenImages, refresh, selectedSus],
   );
 
+  // A manual refresh with visible feedback: `loading` only covers the first fetch, so without this
+  // the button fires silently and reads as dead.
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await refresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refresh]);
+
+  // Provisioning is the one fleet action available on a bare cluster: it starts the reconcile
+  // workflow that stands up this cluster's Dragonfly instance. A 400 carries `provisioning_blockers`
+  // -- the settings are incomplete -- which is a instruction to the operator, not a failure.
+  const onProvision = useCallback(async () => {
+    setActionError(null);
+    setNotice(null);
+    setProvisionBusy(true);
+    try {
+      const res = await provision();
+      setNotice(`Provisioning started (run ${res.run_id}). Track it under Tools → Workflows; this page updates when the instance comes up.`);
+      await refresh();
+    } catch (reason) {
+      if (reason instanceof ApiError && reason.status === 400) {
+        const blockers =
+          reason.body && typeof reason.body === "object" && "provisioning_blockers" in reason.body
+            ? ((reason.body as { provisioning_blockers?: unknown }).provisioning_blockers ?? [])
+            : [];
+        const list = Array.isArray(blockers) && blockers.length ? `: ${blockers.join(", ")}` : "";
+        setActionError(`P2P settings are incomplete${list}. Finish them in Dragonfly Settings, then provision.`);
+        return;
+      }
+      setActionError(reason instanceof Error ? reason.message : "Failed to start provisioning");
+    } finally {
+      setProvisionBusy(false);
+    }
+  }, [refresh]);
+
   if (loading) {
     return (
       <Flex direction="column" gap="3" style={{ padding: 24 }}>
@@ -164,10 +213,15 @@ export default function ArtifactFleetView() {
           kind="secondary"
           color="neutral"
           size="small"
-          onClick={() => void refresh()}
+          disabled={refreshing}
+          onClick={() => void onRefresh()}
         >
-          <RefreshCw size={16} aria-hidden />
-          Refresh
+          <RefreshCw
+            size={16}
+            aria-hidden
+            style={refreshing ? { animation: "spin 0.8s linear infinite" } : undefined}
+          />
+          {refreshing ? "Refreshing…" : "Refresh"}
         </Button>
       </Flex>
 
@@ -195,6 +249,44 @@ export default function ArtifactFleetView() {
         <Banner status="info" kind="inline">
           {`A ${running.action} operation is running since ${running.started_at}. Mutating controls stay locked until it finishes.`}
         </Banner>
+      ) : null}
+
+      {notProvisioned ? (
+        <Card>
+          <Flex direction="column" gap="3">
+            <Flex align="center" gap="2">
+              <Rocket size={20} aria-hidden style={{ color: "var(--text-color-brand)" }} />
+              <Text kind="title/md">This cluster&rsquo;s P2P instance is not provisioned yet</Text>
+            </Flex>
+            <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+              The catalog below lists the shipped validation images, but there is no Dragonfly
+              instance to persist or distribute them, so the tiles read greenfield and fleet
+              operations are unavailable. Provisioning runs the reconcile workflow that stands up the
+              control plane on this cluster&rsquo;s app server; this page fills in once it is up.
+            </Text>
+            <Flex gap="2" wrap="wrap" align="center">
+              <Button
+                kind="primary"
+                color="brand"
+                size="small"
+                disabled={provisionBusy}
+                onClick={() => void onProvision()}
+              >
+                <Rocket size={16} aria-hidden />
+                {provisionBusy ? "Starting…" : "Provision P2P instance"}
+              </Button>
+              <Button
+                kind="secondary"
+                color="neutral"
+                size="small"
+                onClick={() => navigate("/p2p/settings")}
+              >
+                <SettingsIcon size={16} aria-hidden />
+                Open Dragonfly Settings
+              </Button>
+            </Flex>
+          </Flex>
+        </Card>
       ) : null}
 
       {status?.sync ? (
@@ -398,12 +490,18 @@ export default function ArtifactFleetView() {
             Every action is allow-list driven and runs only against nodes the current preflight
             marked eligible. Sync waits for an explicit success from every available node.
           </Text>
+          {notProvisioned ? (
+            <Text kind="body/regular/sm" style={{ color: "var(--text-color-subtle)" }}>
+              Operations are disabled until this cluster&rsquo;s P2P instance is provisioned &mdash;
+              use <strong>Provision P2P instance</strong> above.
+            </Text>
+          ) : null}
           <Flex gap="2" wrap="wrap">
             <Button
               kind="secondary"
               color="neutral"
               size="small"
-              disabled={Boolean(running)}
+              disabled={Boolean(running) || notProvisioned}
               onClick={() => void run("preflight")}
             >
               <ShieldCheck size={16} aria-hidden />
@@ -413,7 +511,7 @@ export default function ArtifactFleetView() {
               kind="secondary"
               color="neutral"
               size="small"
-              disabled={Boolean(running)}
+              disabled={Boolean(running) || notProvisioned}
               onClick={() => void run("deploy")}
             >
               <Play size={16} aria-hidden />
@@ -423,7 +521,7 @@ export default function ArtifactFleetView() {
               kind="secondary"
               color="neutral"
               size="small"
-              disabled={Boolean(running)}
+              disabled={Boolean(running) || notProvisioned}
               onClick={() => void run("persist")}
             >
               <HardDriveDownload size={16} aria-hidden />
@@ -433,7 +531,7 @@ export default function ArtifactFleetView() {
               kind="primary"
               color="brand"
               size="small"
-              disabled={Boolean(running)}
+              disabled={Boolean(running) || notProvisioned}
               onClick={() => void run("sync")}
             >
               <CloudDownload size={16} aria-hidden />
@@ -443,7 +541,7 @@ export default function ArtifactFleetView() {
               kind="secondary"
               color="neutral"
               size="small"
-              disabled={Boolean(running)}
+              disabled={Boolean(running) || notProvisioned}
               onClick={() => void run("verify")}
             >
               <CheckCircle2 size={16} aria-hidden />
@@ -454,7 +552,7 @@ export default function ArtifactFleetView() {
               kind="primary"
               color="danger"
               size="small"
-              disabled={Boolean(running)}
+              disabled={Boolean(running) || notProvisioned}
               onClick={() => void run("repair")}
             >
               <Wrench size={16} aria-hidden />

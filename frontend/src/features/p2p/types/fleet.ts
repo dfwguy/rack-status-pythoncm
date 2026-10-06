@@ -128,6 +128,12 @@ export type Operation = {
 };
 
 export type FleetStatus = {
+  /**
+   * Whether this cluster's Dragonfly instance has been provisioned. False on an enabled-but-bare
+   * cluster: the catalog still lists the shipped images, but fleet operations are unavailable and
+   * the tiles/table read as greenfield until provisioning writes a live snapshot.
+   */
+  provisioned: boolean;
   catalog: Catalog;
   object_store_healthy: boolean;
   fleet: FleetSu[];
