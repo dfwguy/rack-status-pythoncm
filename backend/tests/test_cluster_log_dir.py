@@ -73,6 +73,8 @@ class TestResolutionPrecedence:
     def _clean(self, monkeypatch):
         monkeypatch.delenv(paths.CLUSTER_LOG_DIR_ENV, raising=False)
         monkeypatch.delenv(paths.LEGACY_LOG_DIR_ENV, raising=False)
+        monkeypatch.setattr(paths.host_exec, "role_root", lambda _role: "")
+        monkeypatch.setattr(paths, "_eget", lambda _key, default="": default)
         # The warning is once-per-process; reset so each case sees a fresh latch.
         monkeypatch.setattr(paths, "_warned_legacy_log_dir", False)
 
@@ -103,4 +105,32 @@ class TestResolutionPrecedence:
         assert caplog.text.count("will be removed in a future release") == 1
 
     def test_neither_set_falls_back_to_the_derived_default(self, monkeypatch):
-        assert paths._default_log_dir() == paths._rpath(str(paths.DEFAULT_LOG_DIR))
+        assert paths._default_log_dir() == paths._rpath(str(paths.REPO_ROOT)) / "var" / "logs"
+
+    def test_default_follows_base_changes_after_startup(self, monkeypatch):
+        base = {"value": "/head/project-a"}
+        monkeypatch.setattr(paths, "_eget", lambda _key, default="": base["value"])
+        assert str(paths._default_log_dir()) == "/head/project-a/var/logs"
+        base["value"] = "/head/project-b"
+        assert str(paths._default_log_dir()) == "/head/project-b/var/logs"
+        base["value"] = ""
+        assert paths._default_log_dir() == paths._rpath(str(paths.REPO_ROOT)) / "var" / "logs"
+
+    def test_logs_role_root_wins_over_remote_base(self, monkeypatch):
+        monkeypatch.setattr(paths.host_exec, "role_root", lambda _role: "/shared/logs")
+        monkeypatch.setattr(paths, "_eget", lambda _key, default="": "/head/tooling")
+        assert str(paths._default_log_dir()) == "/shared/logs"
+
+    def test_validation_checks_the_new_projects_log_directory(self, monkeypatch):
+        monkeypatch.delenv("RACK_STATUS_ALLOWED_PREFIXES", raising=False)
+        monkeypatch.setattr(paths, "_eget", lambda _key, default="": "/head/new-project")
+        monkeypatch.setattr(paths.host_exec, "execution_host_configured", lambda: True)
+        monkeypatch.setattr(
+            paths.host_exec, "is_dir", lambda path: str(path) == "/head/new-project/var/logs"
+        )
+        assert str(paths._resolve_log_dir(None)) == "/head/new-project/var/logs"
+
+    def test_explicit_cluster_log_dir_wins_over_role_root(self, monkeypatch):
+        monkeypatch.setenv(paths.CLUSTER_LOG_DIR_ENV, "/cluster/logs")
+        monkeypatch.setattr(paths.host_exec, "role_root", lambda _role: "/shared/logs")
+        assert str(paths._default_log_dir()) == "/cluster/logs"
