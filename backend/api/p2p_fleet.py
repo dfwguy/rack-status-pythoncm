@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import pathlib
 
 import p2p_config
 import p2p_provision  # noqa: F401 -- imported for its side effect: registers the p2p_stage_assets native step
@@ -55,19 +56,30 @@ _PROVISION_WORKFLOW = "nvis-p2p-provision"
 _CATALOG_MANIFEST = paths.REPO_ROOT / "deploy" / "p2p" / "catalog" / "images.json"
 
 
-def _load_catalog() -> dict:
+def _load_catalog(catalog_path: str = "") -> dict:
     """The catalog manifest as the frontend `Catalog` shape.
+
+    Resolves per cluster: ``catalog_path`` is the active cluster's configured manifest
+    (``P2pSettings.catalog_path``), used when it names a file this process can read; otherwise the
+    shipped default that ships in the image. A configured-but-unreadable path (common when the
+    manifest lives on the cluster's app server and is not mounted here) falls back to the shipped
+    list rather than an empty catalog — the shipped list is the floor of what P2P distributes.
 
     `canonical_present` and `persistent_import` are runtime observations, not manifest facts — on a
     cluster with no provisioned instance nothing has been observed, so they read false/null. When an
     instance exists these come from the live snapshot instead of this loader.
     """
+    source = pathlib.Path(catalog_path) if catalog_path.strip() else _CATALOG_MANIFEST
     try:
-        raw = json.loads(_CATALOG_MANIFEST.read_text(encoding="utf-8"))
+        raw = json.loads(source.read_text(encoding="utf-8"))
     except FileNotFoundError:
+        if source != _CATALOG_MANIFEST:
+            return _load_catalog()  # configured path absent here -> shipped default
         return {"canonical_directory": "", "images": []}
     except (OSError, ValueError):
-        _logger.exception("p2p: could not read catalog manifest %s", _CATALOG_MANIFEST)
+        _logger.exception("p2p: could not read catalog manifest %s", source)
+        if source != _CATALOG_MANIFEST:
+            return _load_catalog()
         return {"canonical_directory": "", "images": []}
 
     images = []
@@ -93,15 +105,15 @@ def _load_catalog() -> dict:
     }
 
 
-def _not_provisioned_status() -> dict:
+def _not_provisioned_status(catalog_path: str = "") -> dict:
     """A valid `FleetStatus` for an enabled-but-unprovisioned cluster.
 
-    The catalog is real (it is what P2P will distribute); everything observed from a running
-    instance is empty because there is no instance yet. The view renders the catalog and a zeroed
-    coverage rather than an error.
+    The catalog is real (it is what P2P will distribute) and resolved from the cluster's own
+    ``catalog_path`` when readable; everything observed from a running instance is empty because
+    there is no instance yet. The view renders the catalog and a zeroed coverage rather than an error.
     """
     return {
-        "catalog": _load_catalog(),
+        "catalog": _load_catalog(catalog_path),
         "object_store_healthy": False,
         "fleet": [],
         "coverage": {
@@ -142,8 +154,10 @@ def p2p_status():
 
     # Greenfield today: no instance endpoints live on the cluster record yet, so there is nothing to
     # proxy. When provisioning lands, resolve the instance's operations endpoint here and proxy its
-    # live snapshot instead of the not-provisioned state.
-    return jsonify(_not_provisioned_status())
+    # live snapshot instead of the not-provisioned state. Until then the catalog is resolved from the
+    # cluster's own settings so the view already reflects the per-cluster manifest where readable.
+    settings = p2p_config.get_settings(cluster.id)
+    return jsonify(_not_provisioned_status(settings.catalog_path))
 
 
 @bp.route("/operations", methods=["POST"])

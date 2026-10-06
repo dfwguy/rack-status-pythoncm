@@ -79,6 +79,26 @@ class TestP2pStatus:
         assert first["persistent_import"] is None
         assert {"order", "name", "filename", "bytes", "sha256"} <= set(first)
 
+    def test_status_catalog_resolves_per_cluster(self, client, tmp_path):
+        _set_active_p2p(True)
+        manifest = tmp_path / "cluster-catalog.json"
+        manifest.write_text(
+            '{"schema_version": 1, "catalog_name": "cluster X", "images": '
+            '[{"order": 1, "name": "ClusterOnly", "filename": "x.sqsh", "bytes": 5, "sha256": "ab"}]}',
+            encoding="utf-8",
+        )
+        _configure_active_p2p(catalog_path=str(manifest))
+        body = client.get("/api/p2p/status").get_json()
+        # The active cluster's own manifest is surfaced, not the shipped default.
+        assert [i["name"] for i in body["catalog"]["images"]] == ["ClusterOnly"]
+
+    def test_status_catalog_falls_back_when_path_unreadable(self, client):
+        _set_active_p2p(True)
+        _configure_active_p2p(catalog_path="/no/such/cluster-catalog.json")
+        body = client.get("/api/p2p/status").get_json()
+        # A configured-but-unreadable path falls back to the shipped catalog, not an empty list.
+        assert body["catalog"]["images"], "expected fallback to the shipped manifest"
+
     def test_operations_points_at_provision(self, client):
         _set_active_p2p(True)
         resp = client.post("/api/p2p/operations", json={"action": "sync", "sus": [1]})
@@ -183,6 +203,30 @@ class TestP2pSettingsModel:
         ready = models.P2pSettings(cluster_id="c1", manager_ip="1.1.1.1", appserver_ip="1.1.1.2",
                                    inventory_source="slurm", inventory_pattern="n[01-09]")
         assert ready.provisioning_blockers() == []
+
+    def test_rollout_campaign_defaults_round_trip(self):
+        s = models.P2pSettings(cluster_id="c1")
+        assert s.rollout_wave_size == 50 and s.rollout_parallelism == 48
+        assert s.rollout_poll_seconds == 60 and s.rollout_max_launches == 3
+        assert s.rollout_max_unreachable == 3 and s.rollout_timeout_seconds == 1800
+        custom = models.P2pSettings.from_dict(
+            {"cluster_id": "c1", "rollout_wave_size": 25, "rollout_parallelism": 100,
+             "rollout_poll_seconds": 20, "rollout_timeout_seconds": 3600}
+        )
+        back = models.P2pSettings.from_dict(custom.to_dict())
+        assert back.rollout_wave_size == 25 and back.rollout_parallelism == 100
+        assert back.rollout_poll_seconds == 20 and back.rollout_timeout_seconds == 3600
+        # Runtime pacing is not a render input -- it must not leak into the NVIS_* env.
+        assert not any("ROLLOUT" in k for k in custom.to_render_env())
+
+    def test_rollout_validation_bounds(self):
+        assert models.P2pSettings(cluster_id="c1").validate() == []
+        over = models.P2pSettings(cluster_id="c1", rollout_parallelism=200)
+        assert any("rollout_parallelism" in p for p in over.validate())
+        zero = models.P2pSettings(cluster_id="c1", rollout_wave_size=0, rollout_poll_seconds=0)
+        probs = zero.validate()
+        assert any("rollout_wave_size" in p for p in probs)
+        assert any("rollout_poll_seconds" in p for p in probs)
 
 
 class TestP2pProvisionWorkflow:

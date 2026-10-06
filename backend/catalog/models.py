@@ -1208,11 +1208,12 @@ class Cluster:
 class P2pSettings:
     """Per-cluster NVIS-P2P instance configuration.
 
-    Exactly what ``deploy/p2p/scripts/render-site-config.py`` needs to stand up one Dragonfly
-    instance for a cluster. Read and written whole by its ``cluster_id``; nothing joins it, so it is
-    a document behind the ``Repo`` (citizen 15), not a relation. Secrets are **not** stored here --
-    render generates them into files under ``install_root`` and the paths are derived, so the
-    document holds only topology and identity, nothing reversible.
+    What ``deploy/p2p/scripts/render-site-config.py`` needs to stand up one Dragonfly instance for a
+    cluster, plus the campaign-pacing defaults the rollout engine reads when distributing a catalog
+    image over that cluster's roster. Read and written whole by its ``cluster_id``; nothing joins it,
+    so it is a document behind the ``Repo`` (citizen 15), not a relation. Secrets are **not** stored
+    here -- render generates them into files under ``install_root`` and the paths are derived, so the
+    document holds only topology, identity and pacing, nothing reversible.
 
     The defaults are a working baseline for a single-app-server cluster; ``manager_ip`` and
     ``appserver_ip`` have no safe default (they are the cluster's own addresses) and provisioning
@@ -1250,6 +1251,20 @@ class P2pSettings:
     object_store_data_path: str = "/cluster/nvis-p2p/object-store"
     seed_cache_path: str = "/cluster/nvis-p2p/seed-cache"
     systemd_dir: str = "/etc/systemd/system"
+    #: Campaign defaults -- how a staged catalog rollout over this cluster's roster paces itself.
+    #: Unlike the fields above these are *not* render inputs: they are the runtime knobs the rollout
+    #: engine reads (the ``NVIS_P2P_ROLLOUT_*`` variables), carried per-cluster so a larger fabric can
+    #: pace differently from a small one. A campaign splits the roster into waves of
+    #: ``rollout_wave_size`` nodes; each wave launches with ``rollout_parallelism`` concurrent starts
+    #: and is polled every ``rollout_poll_seconds`` until every node is ready or deferred; a node is
+    #: re-launched up to ``rollout_max_launches`` times and dropped after ``rollout_max_unreachable``
+    #: unreachable checks, and the whole campaign gives up after ``rollout_timeout_seconds``.
+    rollout_wave_size: int = 50
+    rollout_parallelism: int = 48
+    rollout_poll_seconds: int = 60
+    rollout_max_launches: int = 3
+    rollout_max_unreachable: int = 3
+    rollout_timeout_seconds: int = 1800
 
     @classmethod
     def from_dict(cls, d: Any) -> P2pSettings:
@@ -1276,6 +1291,12 @@ class P2pSettings:
             object_store_data_path=_as_str(d.get("object_store_data_path")) or base.object_store_data_path,
             seed_cache_path=_as_str(d.get("seed_cache_path")) or base.seed_cache_path,
             systemd_dir=_as_str(d.get("systemd_dir")) or base.systemd_dir,
+            rollout_wave_size=_as_int(d.get("rollout_wave_size"), base.rollout_wave_size),
+            rollout_parallelism=_as_int(d.get("rollout_parallelism"), base.rollout_parallelism),
+            rollout_poll_seconds=_as_int(d.get("rollout_poll_seconds"), base.rollout_poll_seconds),
+            rollout_max_launches=_as_int(d.get("rollout_max_launches"), base.rollout_max_launches),
+            rollout_max_unreachable=_as_int(d.get("rollout_max_unreachable"), base.rollout_max_unreachable),
+            rollout_timeout_seconds=_as_int(d.get("rollout_timeout_seconds"), base.rollout_timeout_seconds),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1288,6 +1309,19 @@ class P2pSettings:
         problems: list[str] = []
         if not valid_id(self.cluster_id):
             problems.append(f"invalid cluster id: {self.cluster_id!r}")
+        # Campaign pacing bounds. Parallelism matches the rollout engine's own 1..128 cap; the rest
+        # must be positive -- a zero wave size or poll interval would spin without making progress.
+        if not 1 <= self.rollout_parallelism <= 128:
+            problems.append(f"rollout_parallelism must be between 1 and 128, got {self.rollout_parallelism}")
+        for label, value in (
+            ("rollout_wave_size", self.rollout_wave_size),
+            ("rollout_poll_seconds", self.rollout_poll_seconds),
+            ("rollout_max_launches", self.rollout_max_launches),
+            ("rollout_max_unreachable", self.rollout_max_unreachable),
+            ("rollout_timeout_seconds", self.rollout_timeout_seconds),
+        ):
+            if value < 1:
+                problems.append(f"{label} must be at least 1, got {value}")
         return problems
 
     def provisioning_blockers(self) -> list[str]:

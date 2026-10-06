@@ -185,6 +185,17 @@ export default function P2pSettingsView() {
             </>
           ))}
 
+          {section("Campaign defaults (staged rollout)", (
+            <>
+              {num("Wave size", "rollout_wave_size", "Nodes per wave; the roster is distributed this many at a time so each wave seeds the next.")}
+              {num("Parallelism", "rollout_parallelism", "Concurrent launches within a wave (1–128).")}
+              {num("Poll interval (s)", "rollout_poll_seconds", "Seconds between progress checks within a wave.")}
+              {num("Max launches", "rollout_max_launches", "Re-launch attempts before a node is deferred.")}
+              {num("Max unreachable", "rollout_max_unreachable", "Failed reachability checks before a node is deferred.")}
+              {num("Timeout (s)", "rollout_timeout_seconds", "Overall campaign timeout before it gives up.")}
+            </>
+          ))}
+
           {section("Paths & storage", (
             <>
               {text("Install root", "install_root", "Where the P2P instance is installed on the app server.")}

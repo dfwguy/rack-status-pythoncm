@@ -37,6 +37,13 @@ export interface P2pSettingsDoc {
   object_store_data_path: string;
   seed_cache_path: string;
   systemd_dir: string;
+  /** Campaign defaults — how a staged catalog rollout over this cluster's roster paces itself. */
+  rollout_wave_size: number;
+  rollout_parallelism: number;
+  rollout_poll_seconds: number;
+  rollout_max_launches: number;
+  rollout_max_unreachable: number;
+  rollout_timeout_seconds: number;
 }
 
 /** GET /api/p2p/settings and PUT response. */
