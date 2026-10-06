@@ -11,7 +11,7 @@ mod session;
 mod srp;
 mod store;
 
-pub use session::{login, logout, refresh, LoginOutcome};
+pub use session::{change_password, login, logout, refresh, LoginOutcome};
 pub use srp::{canonical_login, SrpError};
 pub use store::{token_from_cookies, TokenStore, Tokens};
 

@@ -161,6 +161,13 @@ enum Command {
     /// Log out of the active profile: revoke the session and forget it locally.
     Logout,
 
+    /// Change the signed-in user's password (re-proves the current one; revokes all sessions).
+    Passwd {
+        /// Read the current and new password from stdin as two lines (current, then new).
+        #[arg(long)]
+        password_stdin: bool,
+    },
+
     /// Report whether the active profile has a valid session (probes `/api/auth-check`).
     Whoami {
         /// Also list every action allowed for the current principal.
@@ -532,6 +539,11 @@ fn run(cli: Cli) -> Result<()> {
             let cfg = Config::load()?;
             let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
             block_on(auth::logout(&cfg, &name, profile))
+        }
+        Command::Passwd { password_stdin } => {
+            let cfg = Config::load()?;
+            let (name, profile) = cfg.resolve(cli.profile.as_deref())?;
+            block_on(auth::passwd(&cfg, &name, profile, password_stdin))
         }
         Command::Whoami { grants } => {
             let cfg = Config::load()?;

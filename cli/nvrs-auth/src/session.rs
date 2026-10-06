@@ -104,6 +104,72 @@ pub async fn login(
     })
 }
 
+/// Change the signed-in user's password. `client` must carry the session's bearer token — the
+/// routes take the login from the token, not the request, so a caller can only change *their own*
+/// password (and being logged in is not enough: leg 1 re-proves the current password, defeating a
+/// stolen session).
+///
+/// Mirrors the login exchange deliberately — same two legs, same SRP — with one addition: leg 2
+/// also carries the **new** salt and verifier, derived locally, so the new password never reaches
+/// the server any more than the old one did. On success the server revokes **every** session,
+/// including this one; the caller must log in again, which is why this returns `()` rather than a
+/// fresh session.
+pub async fn change_password(
+    client: &Client,
+    login: &str,
+    current_password: &str,
+    new_password: &str,
+) -> Result<(), AuthError> {
+    let canonical = srp::canonical_login(login);
+    let handshake = srp::start(&canonical, current_password);
+
+    // Leg 1: prove the current password. A wrong one is answered uniformly (a 401) at leg 2, just
+    // like a login, so nothing here distinguishes it from a healthy begin.
+    let begin = client
+        .send_json(
+            Method::POST,
+            "/api/auth/password/begin",
+            &[],
+            Some(&json!({ "A": handshake.a_hex() })),
+        )
+        .await
+        .map_err(map_login_error)?;
+
+    let salt = str_field(&begin, "salt")?;
+    let b = str_field(&begin, "B")?;
+    let token = str_field(&begin, "token")?;
+
+    let proof = handshake.proof(&salt, &b)?;
+
+    // Derive the new credential locally; only salt and verifier are sent.
+    let (new_salt, new_verifier) = srp::enroll(&canonical, new_password);
+
+    // Leg 2: the current-password proof and the new verifier together.
+    let finish = client
+        .send_json(
+            Method::POST,
+            "/api/auth/password/finish",
+            &[],
+            Some(&json!({
+                "token": token,
+                "M": proof.m_hex,
+                "new_salt": new_salt,
+                "new_verifier": new_verifier,
+            })),
+        )
+        .await
+        .map_err(map_login_error)?;
+
+    if finish.get("ok").and_then(Value::as_bool) != Some(true) {
+        let msg = finish
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("the server rejected the password change");
+        return Err(AuthError::Protocol(msg.to_string()));
+    }
+    Ok(())
+}
+
 /// Renew the access token using the refresh token (sent as a cookie, which is what the endpoint
 /// reads). Returns the fresh access token. A rejected refresh means the session is genuinely gone.
 pub async fn refresh(client: &Client, refresh_token: &str) -> Result<String, AuthError> {

@@ -80,14 +80,109 @@ pub async fn login(
         outcome.principal
     );
     if outcome.must_change_password {
-        // FR-10a: the bootstrap admin must change its password. The change exchange is a later
-        // phase, so we surface it loudly rather than pretending the session is fully usable.
+        // FR-10a: the bootstrap admin (and any user issued a one-time password) must change it
+        // before the session is fully usable. Surface it loudly and point at the command that does it.
         eprintln!(
             "note: this account must change its password before it can do much. \
-             `nvrs passwd` is not implemented yet — use the web UI for now."
+             Run `nvrs passwd` to set a new one."
         );
     }
     Ok(())
+}
+
+/// `nvrs passwd`: change the signed-in user's password. The current password is re-proved (being
+/// logged in is not enough), and the new one is derived to a salt+verifier locally — neither
+/// password is ever sent. On success every session is revoked, so this ends by forgetting the local
+/// one and asking the user to log in again.
+pub async fn passwd(
+    cfg: &Config,
+    profile_name: &str,
+    profile: &Profile,
+    password_stdin: bool,
+) -> Result<()> {
+    // Resolve the signed-in login from the session itself (and let a stale access token refresh),
+    // rather than asking for it — a password change is about *your own* account by construction.
+    let who = crate::api::call_json(
+        cfg,
+        profile_name,
+        profile,
+        nvrs_client::Method::GET,
+        "/api/auth-check",
+        &[],
+        None,
+        None,
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("not logged in to {profile_name:?} — run `nvrs login` first"))?;
+
+    let principal = who.get("user").and_then(|v| v.as_str()).unwrap_or("");
+    let login = principal
+        .strip_prefix("user:")
+        .unwrap_or(principal)
+        .to_string();
+    if login.is_empty() {
+        anyhow::bail!("could not determine the signed-in login from the session");
+    }
+
+    let (current, new) = read_change_passwords(password_stdin)?;
+    if new.is_empty() {
+        anyhow::bail!("the new password must not be empty");
+    }
+    if new == current {
+        anyhow::bail!("the new password must differ from the current one");
+    }
+
+    // An authenticated client: the change routes read the login from this bearer token, so a caller
+    // can only re-prove and replace their own credential.
+    let store = TokenStore::open_default()?;
+    let (token, _) = resolve_access(&store, profile_name, None)?;
+    if token.is_none() {
+        anyhow::bail!("not logged in to {profile_name:?} — run `nvrs login` first");
+    }
+    let client = client_for(cfg, profile, token)?;
+
+    nvrs_auth::change_password(&client, &login, &current, &new)
+        .await
+        .context("changing password")?;
+
+    // The server revoked every session, this one included; forget the dead token locally.
+    store.remove(account(profile_name))?;
+    println!(
+        "password changed for {login:?}. All sessions were revoked — \
+         run `nvrs login` to sign in with the new password."
+    );
+    Ok(())
+}
+
+/// Read the current password and a confirmed new one. Interactive by default (no echo); with
+/// `--password-stdin` (or a piped stdin) it reads exactly two lines: the current password, then the
+/// new one — a shape a script can produce without a TTY.
+fn read_change_passwords(password_stdin: bool) -> Result<(String, String)> {
+    if password_stdin || !std::io::stdin().is_terminal() {
+        let mut buf = String::new();
+        std::io::stdin()
+            .read_to_string(&mut buf)
+            .context("reading passwords from stdin")?;
+        let mut lines = buf.lines();
+        let current = lines.next().unwrap_or("").to_string();
+        let new = lines.next().unwrap_or("").to_string();
+        if current.is_empty() || new.is_empty() {
+            anyhow::bail!(
+                "--password-stdin expects two lines: the current password, then the new one"
+            );
+        }
+        Ok((current, new))
+    } else {
+        let current =
+            rpassword::prompt_password("Current password: ").context("reading password")?;
+        let new = rpassword::prompt_password("New password: ").context("reading password")?;
+        let confirm =
+            rpassword::prompt_password("Confirm new password: ").context("reading password")?;
+        if new != confirm {
+            anyhow::bail!("the new passwords do not match");
+        }
+        Ok((current, new))
+    }
 }
 
 /// `nvrs logout`: revoke the session server-side and forget it locally.
