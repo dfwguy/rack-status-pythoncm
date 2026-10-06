@@ -8,12 +8,17 @@
 # the wrong one answers a question the reader was not asking. See https://diataxis.fr/ and
 # .cursor/rules/docs-diataxis.mdc.
 #
-# There is deliberately no Tutorials group yet. Diataxis is explicit that empty categories are
-# worse than absent ones, so the caption appears when the first tutorial does.
+# The Tutorials caption appears now that the first tutorial exists. Diataxis is explicit that empty
+# categories are worse than absent ones, so a caption is added only together with its first page.
 
 root: index
 
 subtrees:
+  - caption: Tutorials — learning by doing
+    entries:
+      - file: tutorials/distribute-your-first-image
+        title: Distribute your first image with NVIS-P2P
+
   - caption: How-to guides — getting something done
     entries:
       - file: how-to/configure-a-deployment
@@ -32,6 +37,8 @@ subtrees:
         title: How to stage the observability node-agents to a cluster
       - file: how-to/connect-a-pythoncm-cluster
         title: How to connect a PythonCM (BCM) cluster
+      - file: how-to/distribute-a-catalog-image
+        title: How to distribute a catalog image to the fleet
 
   - caption: Reference — the machinery, described
     entries:
@@ -57,6 +64,8 @@ subtrees:
           # above and never the list itself.
           - file: reference/identity/action-vocabulary
             title: Action vocabulary — every service and action
+      - file: reference/p2p-catalog-distribution
+        title: P2P catalog distribution — components, parameters, scripts
 
   - caption: Explanation — why it is like this
     entries:
@@ -76,3 +85,5 @@ subtrees:
         title: NVIS-P2P as a per-cluster capability
       - file: explanation/active-passive-and-blue-green
         title: Active/passive and blue/green (roadmap)
+      - file: explanation/p2p-catalog-distribution
+        title: How catalog images reach every node
