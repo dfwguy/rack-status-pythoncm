@@ -304,6 +304,36 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
         "source": "seed",
     },
     {
+        "id": "dgx-b300",
+        "name": "DGX B300",
+        "generation": "Blackwell-Ultra",
+        "gpu_model": "B300",
+        "superchip": "",
+        "cpu_vendor": "Intel",
+        "cpu_arch": "x86_64",
+        "system_vendor": "DGX",
+        "form_factor": "HGX-8",
+        "geometry": {
+            "gpus_per_node": 8,
+            "nodes_per_tray": 1,
+            # Four 10U appliances per rack by default; a cluster may override placement.
+            "trays_per_rack": 4,
+            "gpus_per_rack": 32,
+            "nvlink_domain": 8,
+        },
+        "interconnect": {"scaleup": "NVLink5", "scaleout": "InfiniBand-XDR"},
+        "capabilities": ["nvlink", "nvswitch"],
+        "tool_param_defaults": {
+            "GPU_MODEL_FLAG": "b300",
+            "RACK_CLUSTER_PRODUCT_LINE": "dgx-b300",
+            "CUDA_MAJ": "12",
+        },
+        "fabric": {"scaleout": "ib", "rails_per_gpu": 1, "rail_rate_gbps": 800, "ns_ifname": "bond0"},
+        "status": "ga",
+        "description": "NVIDIA DGX B300 8-GPU Blackwell Ultra appliance, Intel x86 host, 800 Gb/s fabric.",
+        "source": "seed",
+    },
+    {
         "id": "vr200-nvl",
         "name": "VR200 NVL (Vera Rubin)",
         "generation": "Rubin",
@@ -799,12 +829,14 @@ SEED_TOOLS: list[dict[str, Any]] = [
 def _guess_platform_id(env: dict[str, str]) -> str:
     """Best-effort map of RACK_CLUSTER_PRODUCT_LINE to a seeded platform id."""
     pl = (env.get("RACK_CLUSTER_PRODUCT_LINE") or "").strip().lower()
+    pl = "-".join(pl.replace("_", "-").split())
     by_product = {p["tool_param_defaults"].get("RACK_CLUSTER_PRODUCT_LINE", ""): p["id"]
                   for p in SEED_PLATFORMS}
     if pl and pl in by_product:
         return by_product[pl]
     # Loose contains match (e.g. "GB200 NVL72" -> gb200-nvl72).
     for token, pid in (("gb300", "gb300-nvl72"), ("gb200", "gb200-nvl72"),
+                       ("dgx-b300", "dgx-b300"), ("dgx-b200", "dgx-b200"),
                        ("b300", "b300-hgx"), ("b200", "b200-hgx-intel"),
                        ("vr200", "vr200-nvl"), ("r200", "r200-hgx")):
         if token in pl:
