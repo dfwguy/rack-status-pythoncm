@@ -131,6 +131,34 @@ def test_validation_target_without_rack_uses_exact_hostname():
         assert validation_target_for_rack("", "compute-001") == "compute-001"
 
 
+def test_translated_rack_validation_uses_actual_scheduler_hostnames(monkeypatch):
+    import native_status as ns
+    import node_targets
+    import slurm_query
+
+    monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+    monkeypatch.setattr(ns, "_nvis_naming", lambda: nid.get_nvis_naming("F[41-42]", "dgx-b300-[01-04]", ""))
+    monkeypatch.setattr(slurm_query, "_all_slurm_nodenames", lambda: ["DGX-B300-01", "dgx-b300-02"])
+    monkeypatch.setattr(ns, "collect_slurm_placement_records", lambda: [
+        {"id": "dgx-b300-01", "rack": "F41"},
+        {"id": "dgx-b300-02", "rack": "F42"},
+        {"id": "dgx-b300-03", "rack": "F41"},  # absent from Slurm
+    ])
+    monkeypatch.setenv("RACK_TARGET_FROM_INVENTORY", "1")
+    assert node_targets.validation_target_for_rack("F41", None) == "DGX-B300-01"
+
+
+@pytest.mark.parametrize("mode", ["translate", "pool"])
+def test_nondirect_rack_validation_never_falls_back_to_invented_hostnames(monkeypatch, mode):
+    import native_status as ns
+    import node_targets
+
+    monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: mode)
+    monkeypatch.setattr(node_targets, "_rack_node_hostnames_from_inventory", lambda _rack: [])
+    with pytest.raises(ValueError, match="select explicit node hostnames"):
+        node_targets.validation_target_for_rack("F41", None)
+
+
 def test_grafana_embed_host_regex_prefers_rack_prefix():
     from grafana_embed import _grafana_embed_host_regex_and_mode
 

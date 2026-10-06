@@ -1120,13 +1120,8 @@ class Cluster:
             problems.append(
                 f"unknown rack_mapping_mode {self.rack_mapping_mode!r} (expected {RACK_MAPPING_MODES})"
             )
-        if self.rack_mapping_mode == "translate" and not self.scalable_units:
-            # translate mode places rows/racks from the provider, but the SU grouping has no
-            # other source -- the hostname's suffix isn't read as an SU and the provider rack
-            # attribute doesn't carry one. Without the list the floor has no SUs at all.
-            problems.append(
-                "rack_mapping_mode 'translate' requires a scalable_units (SU) translation list"
-            )
+        # Translate mode can have physical racks without fabric SU grouping. An explicit
+        # scalable_units list remains the sole source of SU membership when configured.
         if self.rack_mapping_mode == "pool" and self.scalable_units:
             # pool mode asserts there is no placement at all, so an SU grouping is a
             # contradiction -- it would claim a geometry the mode exists to say does not exist.

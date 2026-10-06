@@ -65,6 +65,8 @@ def test_reno_slurm_pool_payload(monkeypatch):
     monkeypatch.setattr(ns.config_env, "_eget", lambda _key, default="": "slurm")
     run = Mock(return_value=subprocess.CompletedProcess(["sinfo"], 0, _RENO_SINFO, ""))
     monkeypatch.setattr(ns.host_exec, "run_slurm_on_host", run)
+    placement = Mock(side_effect=AssertionError("Pool must not query BCM placement"))
+    monkeypatch.setattr(bcm_query, "nodes", placement)
 
     state = ns.NativeRackTableState("reno-slurm", Path("/logs"))
     state.refresh_racks_blocking()
@@ -74,6 +76,7 @@ def test_reno_slurm_pool_payload(monkeypatch):
     assert state.racks == []  # no placement: nothing for the rack table/floor to draw
     assert payload["rack_mapping_mode"] == "pool"
     run.assert_called_once()  # state + shape from ONE sinfo call
+    placement.assert_not_called()
 
     nodes = {n["id"]: n for n in payload["nodes"]}
     # Every GPU node is ungrouped (rack None) and carries its 8-GPU shape, even the DOWN one.

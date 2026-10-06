@@ -413,6 +413,7 @@ def run_rack_status(log_dir: Path, include_raw: bool = False) -> dict:
             records = None
             if _eget("RACK_SCHEDULER", "slurm") == "slurm":
                 node_states = native_status.collect_sinfo_nodes()
+                records = native_status.collect_slurm_placement_records()
             else:
                 records = _get_platform().compute_node_inventory()
                 node_states = {record["id"]: record.get("scheduler_state", "") for record in records}

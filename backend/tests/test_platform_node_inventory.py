@@ -65,6 +65,14 @@ def test_bcm_successful_empty_inventory_is_allowed(monkeypatch):
     assert BCMProvider().compute_node_inventory() == []
 
 
+def test_bcm_preserves_physical_rack_unit(monkeypatch):
+    monkeypatch.setattr("bcm_query.nodes", lambda: {"ok": True, "data": [
+        {"hostname": "dgx-b300-01", "rack_id": "F41", "rack_unit": " 2 "},
+    ]})
+    node = BCMProvider().compute_node_inventory()[0]
+    assert (node["rack"], node["rack_unit"]) == ("F41", "2")
+
+
 def test_maas_uses_machine_hostnames_without_fabricating_racks_or_health(monkeypatch):
     machine = {"hostname": "maas-gpu-1", "status": 6, "status_name": "Deployed",
                "ip_addresses": ["10.0.0.9"], "tag_names": ["rack-a"]}

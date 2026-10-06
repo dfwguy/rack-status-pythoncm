@@ -130,6 +130,48 @@ class TestProviderRackCounts:
         assert ns.counts_from_node_inventory(inv) == {("R2", "down"): 1}
 
 
+def test_translated_slurm_uses_bcm_placement_without_changing_roster(monkeypatch):
+    from platforms.bcm import BCMProvider
+
+    monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+    naming = ids.get_nvis_naming("F[41-42]", "dgx-b300-[01-04]", "")
+    monkeypatch.setattr(ns, "_nvis_naming", lambda: naming)
+    monkeypatch.setattr(ns, "_get_platform", BCMProvider)
+    monkeypatch.setattr("bcm_query.nodes", lambda: {"ok": True, "data": [
+        {"hostname": f"dgx-b300-{i:02}", "rack_id": rack, "rack_unit": unit}
+        for i, rack, unit in [(1, "F41", "2"), (2, "F41", "36"),
+                              (3, "F42", "2"), (4, "F42", "36"), (5, "F42", "20")]
+    ]})
+    monkeypatch.setattr(ns.host_exec, "run_slurm_on_host", Mock(return_value=slurm_response(
+        "".join(f"dgx-b300-{i:02} idle gpu:nvidia:8\n" for i in range(1, 5))
+    )))
+    state = ns.NativeRackTableState("beacon", Path("/logs"))
+    state.racks = ["F41", "F42"]
+    state._worker_sinfo()
+    nodes = state.node_inventory_snapshot()["nodes"]
+    assert [(n["id"], n["rack"], n["rack_unit"]) for n in nodes] == [
+        ("dgx-b300-01", "F41", "2"), ("dgx-b300-02", "F41", "36"),
+        ("dgx-b300-03", "F42", "2"), ("dgx-b300-04", "F42", "36"),
+    ]
+    assert all(n["gpu_count"] == 8 and n["scheduler_state"] == "idle" for n in nodes)
+    rows, *_ = state.build_table_rows()
+    assert {r["rack"]: r["sinfo"] for r in rows} == {"F41": "up=2", "F42": "up=2"}
+
+
+def test_translated_placement_failure_keeps_slurm_nodes_and_gpu_shape(monkeypatch):
+    monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+    provider = SimpleNamespace(compute_node_inventory=Mock(side_effect=RuntimeError("BCM offline")))
+    monkeypatch.setattr(ns, "_get_platform", lambda: provider)
+    monkeypatch.setattr(ns, "collect_sinfo_nodes_and_shapes", lambda: (
+        {"dgx-b300-01": "idle"}, {"dgx-b300-01": {"gpu_count": 8}},
+    ))
+    state = ns.NativeRackTableState("unavailable-placement", Path("/logs"))
+    state._worker_sinfo()
+    node = state.node_inventory_snapshot()["nodes"][0]
+    assert (node["id"], node["rack"], node["gpu_count"]) == ("dgx-b300-01", None, 8)
+    assert state.node_inventory_error == ""
+
+
 def test_expanded_hostnames_are_actual_roster_and_expanded_only_once(monkeypatch):
     run = Mock(side_effect=[
         slurm_response("GPU[01-02] idle\nGPU01 idle\n"),
@@ -512,6 +554,14 @@ class TestPoolMode:
         monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "pool")
         inv = ns.build_node_inventory(_MAP_NODES, _MAP_RACKS, records=[])
         assert inv[0]["rack"] is None
+
+    def test_pool_ignores_provider_placement(self, monkeypatch):
+        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "pool")
+        inv = ns.build_node_inventory(_MAP_NODES, _MAP_RACKS, records=[
+            {"id": "p1-r5-ct3", "rack": "p1-r5", "rack_unit": "3"},
+        ])
+        assert inv[0]["rack"] is None
+        assert "rack_unit" not in inv[0]
 
     def test_snapshot_reports_pool_and_keeps_shape(self, monkeypatch):
         monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "pool")

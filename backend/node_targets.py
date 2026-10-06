@@ -31,6 +31,7 @@ from config_env import _eget, _env_int
 from core import is_valid_node_hostname
 from core import slurm_job_base_id as _slurm_job_base_id
 from naming import _nvis_naming
+from native_status import rack_mapping_mode
 from platforms import get_platform as _get_platform
 from slurm_query import (
     _all_slurm_nodenames,
@@ -129,7 +130,8 @@ def validation_target_for_rack(rack: str, override: str | None) -> str:
        the naming schema.
     3. With no override, the target is the **full rack** from live Slurm inventory (real
        ``NodeName`` values), falling back to the ``NVIS_*`` template when inventory is
-       unavailable. Set ``RACK_TARGET_FROM_INVENTORY=0`` to force the template path.
+       unavailable in Direct mode. Translate mode requires placement or explicit node names.
+       Set ``RACK_TARGET_FROM_INVENTORY=0`` to force the template path in Direct mode.
     """
     ov = (override or "").strip()
     inventory_on = (
@@ -171,6 +173,8 @@ def validation_target_for_rack(rack: str, override: str | None) -> str:
             return ",".join(hosts)
     if not rack:
         raise ValueError("an explicit node target is required when rack is empty")
+    if rack_mapping_mode() != "direct":
+        raise ValueError("rack placement is unavailable; select explicit node hostnames")
     return _nvis_naming().build_validation_target(
         rack, _validation_ct_inner(), override
     )

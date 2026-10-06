@@ -36,6 +36,7 @@ import time
 from pathlib import Path
 
 import host_exec
+import native_status
 from config_env import _eget, _env_int
 from core import SLURM_JOB_ID_RE, SLURM_STDOUT_RE
 from core import rpath as _rpath
@@ -115,8 +116,8 @@ def _all_slurm_nodenames() -> list[str]:
 def _rack_node_hostnames_from_inventory(rack: str) -> list[str]:
     """Real node hostnames belonging to *rack*, derived from live Slurm inventory.
 
-    Nodes are matched to the rack id by prefix (rack id followed by a separator), so
-    this is **template-free** and works where the hostname is not ``<rack>-<ctNN>``.
+    Direct mode matches the rack id by prefix (rack id followed by a separator). Translate
+    mode joins provider placement to the scheduler's actual roster. Pool has no rack members.
     Returns ``[]`` when inventory is unavailable or nothing matches.
     """
     rid = (rack or "").strip()
@@ -125,6 +126,12 @@ def _rack_node_hostnames_from_inventory(rack: str) -> list[str]:
     hosts = _all_slurm_nodenames()
     if not hosts:
         return []
+    if native_status.rack_mapping_mode() != "direct":
+        inventory = native_status.build_node_inventory(
+            dict.fromkeys(hosts, ""), [rid],
+            records=native_status.collect_slurm_placement_records(),
+        )
+        return [node["id"] for node in inventory if node["rack"] is not None]
     rid_cf = rid.casefold()
     seps = ("-", "_", ".", ":", "/")
     matched: list[str] = []

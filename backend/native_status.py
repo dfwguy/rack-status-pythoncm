@@ -1100,6 +1100,21 @@ def sample_node_gpu_shapes_via_smi(
     return out
 
 
+def collect_slurm_placement_records() -> list[dict[str, Any]] | None:
+    """Enrich a Slurm roster with provider placement only in Translate mode.
+
+    Placement failure must not hide the scheduler's real nodes or prevent node validation.
+    An empty enrichment leaves them ungrouped; never substitute hostname guesses.
+    """
+    if rack_mapping_mode() != "translate":
+        return None
+    try:
+        return _get_platform().compute_node_inventory()
+    except Exception:
+        _logger.warning("Provider placement unavailable; retaining ungrouped Slurm nodes", exc_info=True)
+        return []
+
+
 def build_node_inventory(
     nodes: dict[str, str], racks: Iterable[str], ds_text: str = "",
     records: list[dict[str, Any]] | None = None,
@@ -1142,7 +1157,7 @@ def build_node_inventory(
             parsed = naming.sinfo_rack_from_host(host.lower().split(".")[0])
             rack = rack_ids.get(_normalize_rack_key_for_ds(parsed[0]).casefold()) if parsed else None
         placement = detail.get("rack")
-        if placement:
+        if placement and not is_pool_mode():
             mapped = naming.map_cmsh_rack_list_token(placement) or _normalize_rack_key_for_ds(placement)
             rack = rack_ids.get(mapped.casefold())
         if rack is None and parse_hostname:
@@ -1159,6 +1174,8 @@ def build_node_inventory(
             "id": host, "rack": rack, "status": device_states.get(host.casefold(), state),
             "scheduler_state": scheduler_state, "ip": detail.get("ip", ""),
         }
+        if rack is not None and detail.get("rack_unit"):
+            node_rec["rack_unit"] = detail["rack_unit"]
         shape = shape_by_host.get(host.casefold())
         if shape:
             count = shape.get("gpu_count")
@@ -1855,6 +1872,7 @@ class NativeRackTableState:
             slurm_shapes: dict[str, dict[str, Any]] = {}
             if scheduler == "slurm":
                 nodes, slurm_shapes = collect_sinfo_nodes_and_shapes()
+                records = collect_slurm_placement_records()
             else:
                 records = _get_platform().compute_node_inventory()
                 nodes = {record["id"]: record.get("scheduler_state", "") for record in records}
@@ -2049,9 +2067,9 @@ class NativeRackTableState:
             errs = list(self.last_errors)
             ds_done = self.ds_done
             sinfo_done = self.sinfo_done
-        # A provider cluster (BCM/pythoncm) has no sinfo, so the per-rack node totals come from the
-        # roster the cluster manager returned instead. Without this every provider rack reads 0/0
-        # even when the fleet is fully enumerated. Slurm clusters keep their real sinfo_counts.
+        # Provider-only clusters and translated Slurm clusters derive rack totals from the
+        # placed node inventory. Slurm still owns the roster; provider-only devices cannot
+        # inflate it. Direct-mode Slurm clusters keep their hostname-derived sinfo counts.
         if not sct and node_states is not None:
             sct = counts_from_node_inventory(
                 build_node_inventory(node_states, racks, ds_text, node_records)

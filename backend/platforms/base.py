@@ -25,6 +25,7 @@ from core import is_valid_node_hostname
 
 def _compute_node_records(
     records: object, *, provider: str, rack_field: str = "", ip_field: str = "",
+    rack_unit_field: str = "",
 ) -> list[dict[str, str | None]]:
     """Validate manager inventory without deriving hostnames or requiring rack membership."""
     if not isinstance(records, list):
@@ -46,6 +47,9 @@ def _compute_node_records(
             "ip": ip.strip() if isinstance(ip, str) else "",
             "scheduler_state": "",
         }
+        unit = record.get(rack_unit_field) if rack_unit_field else None
+        if isinstance(unit, str) and unit.strip():
+            nodes[hostname]["rack_unit"] = unit.strip()
     return list(nodes.values())
 
 

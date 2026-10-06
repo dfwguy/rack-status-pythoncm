@@ -344,6 +344,8 @@ export interface MultirackJobsResponse {
 export interface NodeInventoryEntry {
   id: string;
   rack: string | null;
+  /** Physical U position reported by the cluster manager, when the node has a known rack. */
+  rack_unit?: string;
   status: "up" | "down" | "inst" | "unknown";
   ip: string;
   scheduler_state?: string;
