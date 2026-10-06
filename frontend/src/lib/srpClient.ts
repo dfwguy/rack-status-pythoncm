@@ -324,6 +324,12 @@ export interface LoginResult {
   error?: string;
   user?: { login: string; display_name: string; principal: string };
   mustChangePassword?: boolean;
+  /**
+   * When the freshly minted access token expires, in epoch **seconds** (server clock). Control-plane
+   * metadata, not a credential — the token itself stays in an `HttpOnly` cookie. The SPA holds this
+   * so it can renew ahead of a 401 from its very first request.
+   */
+  accessExpiresAt?: number;
 }
 
 /**
@@ -386,5 +392,7 @@ export async function srpLogin(login: string, password: string): Promise<LoginRe
     ok: true,
     user: body.user,
     mustChangePassword: Boolean(body.must_change_password),
+    accessExpiresAt:
+      typeof body.access_expires_at === "number" ? body.access_expires_at : undefined,
   };
 }

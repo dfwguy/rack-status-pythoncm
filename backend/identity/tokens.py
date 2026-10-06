@@ -108,13 +108,20 @@ MAX_ACCESS_TTL_SECONDS = 7 * 24 * 60 * 60
 #: access lifetime rather than having a knob of its own.
 ID_TTL_SECONDS = ACCESS_TTL_SECONDS
 
-#: Refresh token. Default one day; extensible to a month. Revocable by ``jti``, which is the
+#: Refresh token. Default one week; extensible to a month. Revocable by ``jti``, which is the
 #: combination FR-5b asks for — a renewal path that can itself be withdrawn.
 #:
-#: This is the one that decides how long an idle operator stays signed in, because `apiFetch` renews
-#: the access token silently. A month means a browser left open for a month is still a live session,
-#: so the ceiling is deliberately not "unbounded".
-REFRESH_TTL_SECONDS = 24 * 60 * 60
+#: **This value *is* the session length, by design.** The refresh token is the session's source of
+#: truth: `apiFetch` renews the short-lived access token from it silently (proactively before expiry
+#: and reactively on a 401), and a refresh never rotates the refresh token itself — so a session
+#: lives exactly from login until this lifetime elapses, no sliding window. To make operators stay
+#: signed in longer or shorter, change *this* (or `RACK_WEB_REFRESH_TTL_SECONDS`); nothing else gates
+#: it. Raised from one day to one week 2026-10-06: a day forced a re-login mid-work-week for no
+#: security gain the access TTL and the revocation fast path were not already providing.
+#:
+#: A month means a browser left open for a month is still a live session, so the ceiling is
+#: deliberately not "unbounded".
+REFRESH_TTL_SECONDS = 7 * 24 * 60 * 60
 MAX_REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60
 
 

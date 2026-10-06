@@ -76,7 +76,12 @@ def api_auth_check():
     """
     import web_auth
 
-    principal = web_auth.authenticated_principal(request.headers, request.cookies)
+    # `verified_claims`, not `authenticated_principal`, because the SPA needs the access token's
+    # `exp` to decide client-side whether a request can go straight out or must renew first — a
+    # pre-check that turns an expired-token request from three round trips (401, refresh, retry)
+    # into one. The claims are already verified here; reading `exp` off them costs nothing.
+    claims = web_auth.verified_claims(request.headers, request.cookies)
+    principal = str(claims.get("sub") or "").strip()
     if not principal:
         return jsonify({"authenticated": False}), 401
 
@@ -114,12 +119,40 @@ def api_auth_check():
         # whose token is perfectly valid. The worst case is a wizard not offered.
         _logger.exception("auth-check: could not read the setup state")
 
+    # The access-token lifetime, so the SPA can renew *before* it lapses rather than only after a
+    # request has already failed with a 401. Reported from the live configuration rather than a
+    # frontend constant so a deployment that lengthens or shortens `RACK_WEB_ACCESS_TTL_SECONDS`
+    # moves the renewal cadence with it, instead of the two drifting silently apart.
+    access_ttl = 3600
+    try:
+        from identity import tokens
+
+        access_ttl = int(tokens.access_ttl())
+    except Exception:
+        # A misconfigured or unreadable TTL must not fail a check whose token is valid; the SPA
+        # falls back to a conservative default cadence when the field is absent or implausible.
+        _logger.exception("auth-check: could not read the access-token TTL")
+
+    # The access token's absolute expiry, so the SPA can check it before sending rather than after a
+    # rejection. Taken from the verified `exp` claim — the real deadline, not an estimate. Absent or
+    # malformed, the SPA simply falls back to the reactive 401 path, so this is an optimisation that
+    # cannot break correctness.
+    access_expires_at = None
+    try:
+        exp = claims.get("exp")
+        if exp is not None:
+            access_expires_at = float(exp)
+    except (TypeError, ValueError):
+        access_expires_at = None
+
     return jsonify({
         "authenticated": True,
         "user": principal,
         "must_change_password": must_change,
         "setup_required": bool(setup.get("required")),
         "setup_reason": setup.get("reason", ""),
+        "access_ttl_seconds": access_ttl,
+        "access_expires_at": access_expires_at,
     })
 
 

@@ -160,6 +160,20 @@ class TestAuthentication:
         revocation.revoke_subject(f"user:{bootstrap.ADMIN_LOGIN}")
         assert gated.get(PROTECTED).status_code == 401
 
+    def test_auth_check_reports_the_access_ttl_for_proactive_renewal(self, gated, monkeypatch):
+        """The SPA times its pre-expiry renewal off this, so it must be the *configured* TTL.
+
+        A frontend constant would drift the moment a deployment changes
+        ``RACK_WEB_ACCESS_TTL_SECONDS``; reporting the live value keeps the renewal cadence and the
+        token lifetime moving together. Asserted against a non-default override so a hard-coded 3600
+        here could not pass by coincidence.
+        """
+        monkeypatch.setenv("RACK_WEB_ACCESS_TTL_SECONDS", "1800")
+        _log_in(gated)
+        body = gated.get("/api/auth-check").get_json()
+        assert body["authenticated"] is True
+        assert body["access_ttl_seconds"] == 1800
+
 
 class TestAuthorizationIsSeparateFromAuthentication:
     def test_a_denied_action_is_403_not_401(self, gated):

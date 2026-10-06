@@ -349,6 +349,24 @@ class TestFR5bRenewal:
     def test_renewal_without_a_refresh_cookie_is_refused(self, client):
         assert client.post("/api/auth/refresh").status_code == 401
 
+    def test_both_login_and_renewal_report_the_access_expiry(self, client, admin):
+        """Control-plane metadata (not a credential): the SPA holds this to renew *before* a 401.
+
+        Asserted on both the login and the refresh response, because the SPA arms its pre-check from
+        whichever it saw last — and a deadline reported on only one of the two leaves a window where
+        the client is flying blind and falls back to the costlier reactive path.
+        """
+        import time
+
+        _u, login_resp = _login(client, *admin)
+        now = time.time()
+        login_expiry = login_resp.get_json()["access_expires_at"]
+        # A plausible future deadline, roughly one access TTL out (default 1h), not an estimate.
+        assert now + 60 < login_expiry <= now + 7 * 24 * 3600 + 5
+
+        refresh_expiry = client.post("/api/auth/refresh").get_json()["access_expires_at"]
+        assert refresh_expiry >= login_expiry
+
     def test_an_access_token_cannot_be_used_to_renew(self, client, admin):
         """FR-5c: the type is part of the contract. Accepting an access token here would make the
         short TTL meaningless, since any access token could mint its own successor forever."""

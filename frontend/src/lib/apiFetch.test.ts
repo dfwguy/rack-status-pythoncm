@@ -36,6 +36,7 @@ import {
   filenameFromDisposition,
   onSessionLost,
   openApiUrl,
+  setAccessExpiry,
 } from "./apiFetch";
 
 const originalFetch = globalThis.fetch;
@@ -46,6 +47,8 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = originalFetch;
+  // Module-level expiry outlives a test; clear it so a tracked deadline cannot leak into the next.
+  setAccessExpiry(null);
 });
 
 const json = (body: unknown, status = 200) =>
@@ -193,6 +196,83 @@ describe("concurrent 401s share one refresh", () => {
 
     expect(results.map((r) => r.status)).toEqual([200, 200, 200, 200]);
     expect(refreshes).toBe(1);
+  });
+});
+
+describe("a known-expired token is renewed before the request is sent", () => {
+  it("refreshes first, so the dead request is never sent (two round trips, not three)", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.includes("/api/auth/refresh")) {
+        return json({ ok: true, access_expires_at: Date.now() / 1000 + 3600 });
+      }
+      return json({ ok: true });
+    }) as typeof fetch;
+
+    // A deadline already in the past (well past the skew window).
+    setAccessExpiry(Date.now() / 1000 - 10);
+
+    const resp = await apiFetch("/api/identity/users");
+
+    expect(resp.status).toBe(200);
+    // Refresh precedes the request, and the request is sent exactly once — no wasted 401 round trip.
+    expect(calls).toEqual(["/api/auth/refresh", "/api/identity/users"]);
+  });
+
+  it("sends straight away when the tracked token is still valid", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return json({ ok: true });
+    }) as typeof fetch;
+
+    // Comfortably in the future.
+    setAccessExpiry(Date.now() / 1000 + 3600);
+
+    const resp = await apiFetch("/api/status");
+
+    expect(resp.status).toBe(200);
+    expect(calls).toEqual(["/api/status"]);
+  });
+
+  it("does not pre-refresh the auth routes themselves", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return json({ ok: true });
+    }) as typeof fetch;
+
+    setAccessExpiry(Date.now() / 1000 - 10);
+
+    await apiFetch("/api/auth/refresh", { method: "POST" });
+
+    // The refresh route must not pre-refresh itself: that is the infinite regress NO_REFRESH guards.
+    expect(calls).toEqual(["/api/auth/refresh"]);
+  });
+
+  it("updates the tracked deadline from the refresh response", async () => {
+    const future = Math.floor(Date.now() / 1000) + 3600;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/auth/refresh")) return json({ ok: true, access_expires_at: future });
+      return json({ ok: true });
+    }) as typeof fetch;
+
+    // Start expired so the first call refreshes; that refresh reports a fresh, future deadline.
+    setAccessExpiry(Date.now() / 1000 - 10);
+    await apiFetch("/api/one");
+
+    // The second call sees the updated (future) deadline and sends without pre-refreshing.
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return json({ ok: true });
+    }) as typeof fetch;
+    await apiFetch("/api/two");
+
+    expect(calls).toEqual(["/api/two"]);
   });
 });
 

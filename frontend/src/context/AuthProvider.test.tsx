@@ -22,7 +22,7 @@
  * Testing only one would have left the other broken, which is precisely what happened.
  */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as srpClient from "../lib/srpClient";
@@ -164,6 +164,65 @@ describe("a fresh sign-in", () => {
   });
 });
 
+describe("proactive renewal before the access token expires", () => {
+  it("hits /api/auth/refresh on a cadence derived from the reported TTL", async () => {
+    // A short TTL so the 80% renewal point is reachable with a bounded fake-timer advance.
+    const ACCESS_TTL = 1000; // seconds
+    const refreshCalls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/auth/refresh")) {
+        refreshCalls.push(url);
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }
+      if (url.includes("/api/auth-check")) {
+        return new Response(
+          JSON.stringify({ authenticated: true, user: "user:admin", access_ttl_seconds: ACCESS_TTL }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as typeof fetch;
+
+    // Fake timers from the start: the renewal interval has to be created *under* them, since fake
+    // timers only govern timers created after they are installed.
+    vi.useFakeTimers();
+    try {
+      render(
+        <AuthProvider>
+          <Probe />
+        </AuthProvider>,
+      );
+      // Flush the async mount check so the provider is authenticated and the interval is armed.
+      // (The check resolves on the microtask queue, which fake timers do not freeze.)
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(screen.getByTestId("authenticated")).toHaveTextContent("true");
+
+      expect(refreshCalls).toHaveLength(0);
+      // Just short of the 80% mark (800s): no renewal yet.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ACCESS_TTL * 0.8 * 1000 - 1000);
+      });
+      expect(refreshCalls).toHaveLength(0);
+      // Past it: the token is renewed well before the full TTL could lapse.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(refreshCalls).toHaveLength(1);
+      // And it keeps renewing, so the session survives the whole refresh-token window.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ACCESS_TTL * 0.8 * 1000);
+      });
+      expect(refreshCalls).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("a session that dies while the window is open", () => {
   it("stops claiming to be signed in, so the gate shows the login screen", async () => {
     /**
@@ -172,7 +231,7 @@ describe("a session that dies while the window is open", () => {
      * invoked the callback itself would pass even if the provider never registered it.
      *
      * Before this, the mount-time check was the only thing that ever set `authenticated`, so a
-     * window whose refresh token had expired (24 hours by default) never found out: it kept
+     * window whose refresh token had expired (one week by default) never found out: it kept
      * polling 401s behind a dashboard that looked fine.
      */
     let sessionAlive = true;

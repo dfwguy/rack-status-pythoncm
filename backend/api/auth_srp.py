@@ -276,6 +276,10 @@ def srp_finish():
         "HAMK": hamk_hex,
         "user": {"login": login, "display_name": display, "principal": principal},
         "must_change_password": must_change,
+        # Control-plane metadata the SPA holds alongside the (cookie-sealed) token: when this access
+        # token expires, so the client can renew ahead of a 401 from its very first request. Derived
+        # from the same `authenticated_at` the token was minted with.
+        "access_expires_at": authenticated_at + tokens.access_ttl(),
     }
 
     id_token = _mint_id_token(principal, access, authenticated_at)
@@ -366,7 +370,13 @@ def refresh_session():
         if store is not None:
             store.close()
 
-    resp = make_response(jsonify({"ok": True, "principal": principal}))
+    # The new access token's absolute expiry, returned so the SPA can pre-check validity before its
+    # *next* request and renew ahead of a 401 rather than after one. Computed from the same clock and
+    # TTL the mint uses; the SPA applies a skew margin, so sub-millisecond drift is immaterial.
+    access_expires_at = time.time() + tokens.access_ttl()
+    resp = make_response(
+        jsonify({"ok": True, "principal": principal, "access_expires_at": access_expires_at})
+    )
     # `auth_time` carries forward from the refresh token rather than being re-stamped (FR-8).
     #
     # This is the whole reason the parameter exists. A renewed access token whose `auth_time` is

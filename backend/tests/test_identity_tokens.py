@@ -167,11 +167,13 @@ class TestConfigurableLifetimes:
     ignores it.
     """
 
-    def test_the_defaults_are_an_hour_and_a_day(self, monkeypatch):
+    def test_the_defaults_are_an_hour_and_a_week(self, monkeypatch):
         monkeypatch.delenv("RACK_WEB_ACCESS_TTL_SECONDS", raising=False)
         monkeypatch.delenv("RACK_WEB_REFRESH_TTL_SECONDS", raising=False)
         assert T.access_ttl() == 60 * 60
-        assert T.refresh_ttl() == 24 * 60 * 60
+        # The refresh token is the session's source of truth, so its default is the shipped session
+        # length — one week since 2026-10-06, up from one day.
+        assert T.refresh_ttl() == 7 * 24 * 60 * 60
 
     @pytest.mark.parametrize(
         ("env", "reader", "requested", "expected"),

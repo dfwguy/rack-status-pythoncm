@@ -66,6 +66,34 @@ const NO_REFRESH = ["/api/auth/refresh", "/api/auth/srp/", "/api/auth/logout"];
 let refreshInFlight: Promise<boolean> | null = null;
 
 /**
+ * When the current access token expires, in epoch milliseconds — or `null` when unknown.
+ *
+ * The SPA cannot read the token: it is an `HttpOnly` cookie, invisible to JavaScript by design. So
+ * the deadline is *tracked* from values the backend hands back — the `exp` claim on `auth-check`
+ * and the expiry on a refresh — rather than parsed from the token itself. `null` until the first of
+ * those arrives, during which `apiFetch` simply behaves as it did before: send, and renew on a 401.
+ */
+let accessExpiresAt: number | null = null;
+
+/** Refresh this many ms *before* the tracked expiry, to cover client/server clock skew. */
+const EXPIRY_SKEW_MS = 30_000;
+
+/**
+ * Record when the access token expires. `AuthProvider` calls this with the `access_expires_at` an
+ * `auth-check` reported (seconds); `refreshSession` calls it from the refresh response. Passing a
+ * non-finite value clears the estimate, falling back to the reactive path.
+ */
+export function setAccessExpiry(epochSeconds: number | null | undefined): void {
+  accessExpiresAt =
+    typeof epochSeconds === "number" && Number.isFinite(epochSeconds) ? epochSeconds * 1000 : null;
+}
+
+/** Whether the tracked access token is expired (or within the skew window of it). */
+function accessTokenLikelyExpired(): boolean {
+  return accessExpiresAt !== null && Date.now() >= accessExpiresAt - EXPIRY_SKEW_MS;
+}
+
+/**
  * Told when a 401 survives the refresh — i.e. the session is genuinely gone.
  *
  * The docstring below has always said the caller "and ultimately `AuthProvider`" sees a real
@@ -75,7 +103,7 @@ let refreshInFlight: Promise<boolean> | null = null;
  * while the UI still looked signed in.
  *
  * Observed on a desktop window left open for a day. The trigger is the **refresh token
- * expiring** — 24 hours by default, so any window open longer than that, and every window that
+ * expiring** — one week by default, so any window open longer than that, and every window that
  * never authenticated in its own cookie jar. A server restart is *not* the cause: the signing
  * secret is persisted under `var/secrets/`, so tokens survive one. (An earlier version of this
  * note blamed restarts, which sent the next reader looking in the wrong place.)
@@ -90,13 +118,30 @@ export function onSessionLost(handler: (() => void) | null): void {
   sessionLost = handler;
 }
 
-function refreshSession(): Promise<boolean> {
+/**
+ * Renew the access token from the refresh cookie. Shared by the reactive 401 path below, the
+ * proactive timer `AuthProvider` drives, and the pre-check in `apiFetch` — so all of them collapse
+ * onto the one in-flight promise rather than racing refreshes that each rotate state.
+ */
+export function refreshSession(): Promise<boolean> {
   if (refreshInFlight === null) {
     refreshInFlight = fetch("/api/auth/refresh", {
       method: "POST",
       credentials: "same-origin",
     })
-      .then((res) => res.ok)
+      .then(async (res) => {
+        if (!res.ok) return false;
+        // Track the new token's expiry so the next request's pre-check is accurate. A body that
+        // cannot be read or lacks the field just leaves the estimate untouched — the reactive 401
+        // path still covers correctness.
+        try {
+          const data = await res.clone().json();
+          if (data && data.access_expires_at != null) setAccessExpiry(Number(data.access_expires_at));
+        } catch {
+          // Non-JSON or already-consumed body: ignore, keep the prior estimate.
+        }
+        return true;
+      })
       .catch(() => false)
       .finally(() => {
         refreshInFlight = null;
@@ -122,16 +167,30 @@ function refreshSession(): Promise<boolean> {
  * On a 401 it refreshes once and retries. If the refresh fails the original 401 is returned
  * untouched, so the caller — and ultimately `AuthProvider` — still sees a genuine sign-out rather
  * than a silent retry loop.
+ *
+ * **It also renews *before* sending when it can see the token has expired.** The access token lives
+ * in an `HttpOnly` cookie the SPA cannot read, but the backend hands back its expiry as metadata, so
+ * `apiFetch` knows the deadline without the token. When that deadline has passed it refreshes first
+ * and sends once — turning the expired-token case from three round trips (request → 401, refresh,
+ * retry) into two (refresh, request). The reactive 401 path below stays as the backstop for the
+ * cases the pre-check cannot see: an unknown deadline, clock skew, or a server-side revocation.
  */
 export async function apiFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): Promise<Response> {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.pathname : input.url;
+  const mayRefresh = !NO_REFRESH.some((p) => url.includes(p));
+
+  // Pre-emptive renewal: skip the request we already know would 401.
+  if (mayRefresh && accessTokenLikelyExpired()) {
+    await refreshSession();
+  }
+
   const first = await rawFetch(input, init);
   if (first.status !== 401) return first;
 
-  const url = typeof input === "string" ? input : input instanceof URL ? input.pathname : input.url;
-  if (NO_REFRESH.some((p) => url.includes(p))) return first;
+  if (!mayRefresh) return first;
 
   if (!(await refreshSession())) {
     // The session is gone, not merely stale. Say so once, here, rather than leaving every caller

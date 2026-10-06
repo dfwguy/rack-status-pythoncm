@@ -155,8 +155,8 @@ Used by **`bin/scripts/launch-grafana-bright-prometheus.sh`** (not by Flask). Af
 
 | Variable | Default | Ceiling | Purpose |
 |----------|---------|---------|---------|
-| **`RACK_WEB_ACCESS_TTL_SECONDS`** | `3600` (1 hour) | `604800` (7 days) | Access-token lifetime. The SPA renews it silently, so this is rarely the number an operator feels. |
-| **`RACK_WEB_REFRESH_TTL_SECONDS`** | `86400` (1 day) | `2592000` (30 days) | Refresh-token lifetime — **this** is how long an idle browser stays signed in, because renewal is automatic. |
+| **`RACK_WEB_ACCESS_TTL_SECONDS`** | `3600` (1 hour) | `604800` (7 days) | Access-token lifetime. The SPA renews it silently — proactively before it expires and reactively on a 401 — so this is rarely the number an operator feels. Short by design: it bounds how long a *leaked, unrevoked* token keeps working. |
+| **`RACK_WEB_REFRESH_TTL_SECONDS`** | `604800` (7 days) | `2592000` (30 days) | Refresh-token lifetime — **this is the session length.** The refresh token is the session's source of truth: the SPA stays signed in for exactly this long (a refresh never rotates the refresh token, so there is no sliding window), then requires a fresh login. Change *this* to make operators stay signed in longer or shorter. |
 
 Both are clamped to their ceiling and floored at 60 seconds, with a warning naming the value in
 force. A too-generous setting is not a startup failure; it is also not silently obeyed.

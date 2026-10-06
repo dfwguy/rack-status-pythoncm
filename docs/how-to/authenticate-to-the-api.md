@@ -86,15 +86,23 @@ curl -sS -H "Authorization: Bearer $TOKEN" https://greenlight.example:5050/api/a
 ## Renew before it expires
 
 ```python
-s.post(f"{BASE}/api/auth/refresh")   # -> {"ok": true, "principal": "user:apidemo"}
+s.post(f"{BASE}/api/auth/refresh")
+# -> {"ok": true, "principal": "user:apidemo", "access_expires_at": 1760000000.0}
 ```
+
+`access_expires_at` (epoch seconds, server clock) is **metadata, not a credential** — the token
+itself stays in the `HttpOnly` cookie. It is also returned by `POST /api/auth/srp/finish` and
+`GET /api/auth-check` (which additionally reports `access_ttl_seconds`). A client holds it as a
+small control plane: check it before a call and renew when the deadline has passed, turning an
+expired-token request from three round trips (request → 401, refresh, retry) into two. Apply a few
+seconds of skew margin, since the deadline is on the server's clock.
 
 Defaults and ceilings:
 
 | Token | Default lifetime | Maximum | Setting |
 |---|---|---|---|
 | access | 1 hour | 7 days | `RACK_WEB_ACCESS_TTL_SECONDS` |
-| refresh | 24 hours | 30 days | `RACK_WEB_REFRESH_TTL_SECONDS` |
+| refresh | 7 days | 30 days | `RACK_WEB_REFRESH_TTL_SECONDS` |
 
 The refresh cookie is **path-scoped to `/api/auth`**, so it is only sent to the refresh endpoint
 and never rides along with an ordinary API call. A client that stores cookies by path — any
