@@ -120,13 +120,7 @@ def _script(basename: str, env_key: str = "") -> Path:
 
 def _logs_dir_default() -> str:
     """Default log root on the host that owns the ``logs`` role."""
-    role_root = host_exec.role_root("logs")
-    if role_root:
-        return role_root
-    # Resolve at request time: the wizard and cluster switcher can change the base
-    # after this module was imported, including clearing a previous cluster's base.
-    base = (_eget("RACK_REMOTE_BASE_PATH", "") or "").strip()
-    return str(_rpath(base or str(REPO_ROOT)) / "var" / "logs")
+    return host_exec.role_root("logs") or str(DEFAULT_LOG_DIR)
 
 
 def _script_exists(path: Path) -> bool:
@@ -156,7 +150,7 @@ def _default_log_dir() -> PurePosixPath:
     if legacy:
         _warn_legacy_log_dir()
         return _rpath(legacy)
-    return _rpath(_logs_dir_default())
+    return _rpath(str(DEFAULT_LOG_DIR))
 
 
 def _allowed_roots() -> list[PurePosixPath]:
