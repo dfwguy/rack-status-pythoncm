@@ -99,6 +99,36 @@ class TestP2pStatus:
         # A configured-but-unreadable path falls back to the shipped catalog, not an empty list.
         assert body["catalog"]["images"], "expected fallback to the shipped manifest"
 
+    def test_status_serves_live_snapshot_when_fresh(self, client, tmp_path, monkeypatch):
+        import datetime
+        import json
+
+        import p2p_snapshot
+
+        _set_active_p2p(True)
+        cluster_id = get_active(get_repo())["cluster"]
+        now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        snap = {
+            "provisioned": True,
+            "object_store_healthy": True,
+            "catalog": {"images": [{"name": "Live", "filename": "l.sqsh", "order": 1, "bytes": 1,
+                                    "sha256": "a", "canonical_present": True, "persistent_import": None}]},
+            "coverage": {"generated_at": now, "required_count": 1, "required_images": ["l.sqsh"],
+                         "by_su": [], "nodes": [{"node": "n1", "su": 1}]},
+            "fleet": [], "sync": None, "catalog_exact_duplicates": [],
+            "preflight_generated_at": None, "operations": [], "generated_at": now,
+        }
+        d = tmp_path / "snaps"
+        d.mkdir()
+        (d / f"{cluster_id}.json").write_text(json.dumps(snap), encoding="utf-8")
+        monkeypatch.setattr(p2p_snapshot, "_SNAPSHOT_DIR", d)
+        p2p_snapshot.invalidate_cache()
+        body = client.get("/api/p2p/status").get_json()
+        # The live snapshot is served verbatim: provisioned, real coverage, its own catalog.
+        assert body["provisioned"] is True
+        assert body["coverage"]["nodes"][0]["node"] == "n1"
+        assert [i["name"] for i in body["catalog"]["images"]] == ["Live"]
+
     def test_operations_points_at_provision(self, client):
         _set_active_p2p(True)
         resp = client.post("/api/p2p/operations", json={"action": "sync", "sus": [1]})
@@ -227,6 +257,58 @@ class TestP2pSettingsModel:
         probs = zero.validate()
         assert any("rollout_wave_size" in p for p in probs)
         assert any("rollout_poll_seconds" in p for p in probs)
+
+
+class TestP2pSnapshot:
+    def _fresh(self, **extra):
+        import datetime
+
+        now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        base = {"provisioned": True, "object_store_healthy": True,
+                "catalog": {"images": []}, "coverage": {"nodes": []}, "generated_at": now}
+        base.update(extra)
+        return base
+
+    def _write(self, directory, cluster_id, snap):
+        import json
+
+        directory.mkdir(exist_ok=True)
+        (directory / f"{cluster_id}.json").write_text(json.dumps(snap), encoding="utf-8")
+
+    def test_fresh_snapshot_loads(self, tmp_path, monkeypatch):
+        import p2p_snapshot
+
+        d = tmp_path / "snaps"
+        self._write(d, "c1", self._fresh(marker="live"))
+        monkeypatch.setattr(p2p_snapshot, "_SNAPSHOT_DIR", d)
+        p2p_snapshot.invalidate_cache()
+        assert p2p_snapshot.load_snapshot("c1")["marker"] == "live"
+
+    def test_absent_snapshot_is_none(self, tmp_path, monkeypatch):
+        import p2p_snapshot
+
+        monkeypatch.setattr(p2p_snapshot, "_SNAPSHOT_DIR", tmp_path / "nope")
+        p2p_snapshot.invalidate_cache()
+        assert p2p_snapshot.load_snapshot("c1") is None
+
+    def test_stale_snapshot_is_none(self, tmp_path, monkeypatch):
+        import p2p_snapshot
+
+        d = tmp_path / "snaps"
+        self._write(d, "c1", self._fresh(generated_at="2000-01-01T00:00:00Z"))
+        monkeypatch.setattr(p2p_snapshot, "_SNAPSHOT_DIR", d)
+        p2p_snapshot.invalidate_cache()
+        assert p2p_snapshot.load_snapshot("c1") is None
+
+    def test_malformed_snapshot_is_none(self, tmp_path, monkeypatch):
+        import p2p_snapshot
+
+        d = tmp_path / "snaps"
+        d.mkdir()
+        (d / "c1.json").write_text('{"partial": true}', encoding="utf-8")  # missing required keys
+        monkeypatch.setattr(p2p_snapshot, "_SNAPSHOT_DIR", d)
+        p2p_snapshot.invalidate_cache()
+        assert p2p_snapshot.load_snapshot("c1") is None
 
 
 class TestP2pProvisionWorkflow:

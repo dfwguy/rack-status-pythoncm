@@ -35,6 +35,7 @@ import pathlib
 
 import p2p_config
 import p2p_provision  # noqa: F401 -- imported for its side effect: registers the p2p_stage_assets native step
+import p2p_snapshot
 import paths
 import throttle
 import workflow_engine
@@ -152,11 +153,13 @@ def p2p_status():
     if cluster is None or not getattr(cluster, "p2p_enabled", False):
         return jsonify({"ok": False, "message": "P2P is not enabled for the active cluster."}), 404
 
-    # Greenfield today: no instance endpoints live on the cluster record yet, so there is nothing to
-    # proxy. When provisioning lands, resolve the instance's operations endpoint here and proxy its
-    # live snapshot instead of the not-provisioned state. Until then the catalog is resolved from the
-    # cluster's own settings so the view already reflects the per-cluster manifest where readable.
+    # A provisioned instance publishes a live FleetStatus snapshot the producer keeps current; serve
+    # it when it is fresh. Absent or stale -> the greenfield state, with the catalog still resolved
+    # from the cluster's own settings so the view reflects the per-cluster manifest where readable.
     settings = p2p_config.get_settings(cluster.id)
+    snapshot = p2p_snapshot.load_snapshot(cluster.id)
+    if snapshot is not None:
+        return jsonify(snapshot)
     return jsonify(_not_provisioned_status(settings.catalog_path))
 
 
