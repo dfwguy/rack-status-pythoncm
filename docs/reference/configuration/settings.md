@@ -11,7 +11,7 @@ Every environment variable the backend reads, found by scanning the source rathe
 importing it — a variable read inside a function body is never reached by an import, so only
 the source knows the whole set.
 
-**255 settings.** 17 are *declared* in
+**258 settings.** 21 are *declared* in
 `backend/config_registry.py`, which is the set `rackstatus.toml` can carry, the required-
 setting preflight can demand, and `rackstatus.toml.example` lists. 120 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
@@ -45,12 +45,12 @@ into `docs/settings-hints.toml` and it moves out of this list on the next build.
 
 ## Declared, read indirectly
 
-4 settings are declared but never appear in a call this scan can see:
+6 settings are declared but never appear in a call this scan can see:
 the connection profile reads its four by name from a list, and `NVIS_LOG_LEVEL` goes
 through `logging_config`'s own registry. They are configuration like any other — the
 scan simply cannot point at a call site.
 
-`NVIS_LOG_LEVEL`, `RACK_SSH_KEY`, `RACK_SSH_PORT`, `RACK_SSH_USER`
+`LLMB_INSTALL`, `LLMB_REPO`, `NVIS_LOG_LEVEL`, `RACK_SSH_KEY`, `RACK_SSH_PORT`, `RACK_SSH_USER`
 
 ## Read outside the resolution ladder
 
@@ -71,6 +71,9 @@ them. `UI` marks the ones the dashboard Settings screen may override.
 
 | Setting | Section | Type | Required | UI | Example | Purpose |
 |---|---|---|---|---|---|---|
+| `LLMB_IMAGE_ROOT` | validation | string | no |  | `/cluster/llmb/images` | Shared directory for reviewed LLMB images; falls back to the validation container root at other sites. |
+| `LLMB_INSTALL` | validation | string | no |  | `/home/cmods/workspace/llmb` | Shared LLMB workspace containing workload assets and GPT-OSS tokenizer files. |
+| `LLMB_REPO` | validation | string | no |  | `/home/cmods/workspace/llmb/llmb_repo` | LLMB source checkout containing the upstream CPU-overhead microbenchmark. |
 | `NEMO_SQSH_SRC` | validation | string | no |  | `/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh` | Squashed NeMo container image used by the NeMo validation launchers. |
 | `NVIS_FORCE_SETUP_WIZARD` | general | boolean | no |  | `false` | Re-open the first-run setup wizard even though a project is already configured. What `cli.py serve --setup-wizard` sets; normally left unset, since the wizard offers itself when no operator-created project exists. |
 | `NVIS_LOG_LEVEL` | general | string | no |  | `INFO` | Log level. Settable here because the config file is read before logging is configured, which is the reason the loader's own records appear slightly late. |
@@ -86,6 +89,7 @@ them. `UI` marks the ones the dashboard Settings screen may override.
 | `RACK_SSH_USER` | connection | string | no |  | `root` | Account for the SSH control connection to the head node. |
 | `RACK_STATUS_DEMO` | general | boolean | no |  | `false` | Synthetic data, no cluster contact. True on a developer laptop, and it also exempts the connection settings from the required-setting preflight. |
 | `RACK_STATUS_LOG_DIR` | connection | string | no |  | `/home/cmsupport/aihpc_val-main/validation/nemo` | Deprecated. The directory Rack Status ingests node logs from. This is one global value for every cluster at once, so a multi-tenant deployment would read a project's logs from a cluster it may not operate; set the log directory per cluster instead (the cluster's connection.log_dir). Kept only as a fallback for deployments still migrating, and it warns when used. |
+| `RACK_VALIDATION_CONTAINER_ROOT` | validation | string | no |  | `/cluster/containers` | Shared directory for reviewed validation images; image filenames and checksums remain code-owned. |
 | `RACK_WEB_OIDC_ISSUER` | auth | string | no |  | `https://rackstatus.example.com` | This deployment's own base URL, used as the OIDC `iss` claim. Required when the OIDC provider is enabled. Cannot be derived from the request: OIDC Discovery 1.0 §4.3 requires it to be the URL discovery is served from, and a Host header is attacker-controlled. http is accepted only for localhost, which is how an operator reaches a tunnelled deployment. |
 | `RACK_WEB_TLS_KEY` | tls | string | no |  | `/app/config/tls/server.key` | Private key for the TLS certificate. Required whenever RACK_WEB_TLS_CERT is set: a cert with no key downgrades one path silently and crashes the other. |
 
@@ -110,6 +114,9 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-gunicorn-threads"></a>`GUNICORN_THREADS` | environment |  | Threads per worker. Default 24. | `backend/cli.py` |
 | <a id="s-gunicorn-timeout"></a>`GUNICORN_TIMEOUT` | environment |  | Seconds before a worker is considered hung. Default 600, because a fleet scan legitimately takes minutes. | `backend/cli.py` |
 | <a id="s-gunicorn-workers"></a>`GUNICORN_WORKERS` | environment |  | Worker count. Must be 1 — SRP login state is in-process, so a second worker splits it and login succeeds about half the time. The startup gate refuses more. | `backend/startup_gate.py` |
+| <a id="s-llmb-image-root"></a>`LLMB_IMAGE_ROOT` | ladder |  | Shared directory for reviewed LLMB images; falls back to the validation container root at other sites. | `backend/validation_presets.py` |
+| <a id="s-llmb-install"></a>`LLMB_INSTALL` | indirect |  | Shared LLMB workspace containing workload assets and GPT-OSS tokenizer files. |  |
+| <a id="s-llmb-repo"></a>`LLMB_REPO` | indirect |  | LLMB source checkout containing the upstream CPU-overhead microbenchmark. |  |
 | <a id="s-nemo-sqsh-src"></a>`NEMO_SQSH_SRC` | ladder |  | Squashed NeMo container image used by the NeMo validation launchers. | `backend/api/dashboard.py`, `backend/api/tools.py` |
 | <a id="s-nemo-target-steps"></a>`NEMO_TARGET_STEPS` | environment | `0` | See `docs/ENVIRONMENT.md` | `backend/universal_parser.py` |
 | <a id="s-ngc-api-key"></a>`NGC_API_KEY` | ladder |  | NGC API key used to pull tool containers. The download-containers action refuses without it. | `backend/api/tools.py` |
@@ -321,7 +328,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-validation-activities-file"></a>`RACK_VALIDATION_ACTIVITIES_FILE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/validation_activities.py` |
 | <a id="s-rack-validation-activities-refresh-disabled"></a>`RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED` | ladder |  | Stop the background reconciliation of stored activities against Slurm. | `backend/api/activities.py`, `backend/app.py` |
 | <a id="s-rack-validation-activities-refresh-lock-file"></a>`RACK_VALIDATION_ACTIVITIES_REFRESH_LOCK_FILE` | ladder |  | Lock file that keeps two processes from reconciling activities at once. | `backend/app.py` |
-| <a id="s-rack-validation-container-root"></a>`RACK_VALIDATION_CONTAINER_ROOT` | ladder |  | Where this site mounts shared validation container images. Default `/cluster/containers`. Only the directory is configurable -- the image basename and its SHA256 stay code-owned, so a site can point at its own mirror of a reviewed image but cannot substitute a different one. | `backend/validation_presets.py` |
+| <a id="s-rack-validation-container-root"></a>`RACK_VALIDATION_CONTAINER_ROOT` | ladder |  | Shared directory for reviewed validation images; image filenames and checksums remain code-owned. | `backend/validation_presets.py` |
 | <a id="s-rack-validation-ct-range"></a>`RACK_VALIDATION_CT_RANGE` | ladder | `01-18` | See `docs/ENVIRONMENT.md` | `backend/node_targets.py`, `backend/workflow_engine.py` |
 | <a id="s-rack-validation-disabled"></a>`RACK_VALIDATION_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/validation_runs.py` |
 | <a id="s-rack-validation-excluded-nodes"></a>`RACK_VALIDATION_EXCLUDED_NODES` | ladder |  | Comma-list of nodes never eligible for a validation launch, whatever the selection. | `backend/validation_launch.py` |

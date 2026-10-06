@@ -718,7 +718,11 @@ def _validation_preset_compatibility_error(body: dict) -> tuple[object, int] | N
 def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
     """Resolve an allowlisted preset into an exact-node, shell-free launch plan."""
     try:
-        preset = validation_presets.resolve_preset(body.get("preset_id", body.get("validation")))
+        _project, _cluster, platform = catalog_context.resolve()
+        cpu_arch = (platform.cpu_arch if platform else "") or "arm64"
+        preset = validation_presets.resolve_preset(
+            body.get("preset_id", body.get("validation")), cpu_arch=cpu_arch,
+        )
         options = validation_presets.normalize_options(body, preset)
         log_raw = body.get("log_dir")
         log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
@@ -880,7 +884,10 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
     # the reviewed artifact, and the size and SHA256 gates below still have to pass, so a
     # site can point at its own mirror and cannot substitute a different image.
     shared_image = validation_presets.resolve_shared_image(preset.shared_image)
-    image_path = preset.local_image if options["storage"] == "local" else shared_image
+    image_path = (
+        f"{str(options['local_container_dir']).rstrip('/')}/{preset.local_image.rsplit('/', 1)[-1]}"
+        if options["storage"] == "local" and preset.local_image else shared_image
+    )
     checks = ["exact Slurm node identity", "scheduler eligibility at allocation time"]
     if preset.shared_image:
         checks += ["allowlisted image byte size", "allowlisted image SHA256"]
@@ -927,10 +934,12 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
                         "NVIS_PRESET_SCOPE_MULTIRACK": "1" if scope == "multirack" else "0"},
         "image_override_note": ("DGXC recipe v26.06.01 with audited NeMo 26.04.01 image override" if preset.id == "exemplar-system-info" else None),
     }
+    if preset.id == "gpt-oss-cpu":
+        plan["env_updates"]["NVIS_GPT_CPU_ARCH"] = cpu_arch
     plan["plan_hash"] = plan_digest({key: plan[key] for key in (
         "preset_id", "scope", "nodes", "node_groups", "racks", "campaign", "storage", "rsync_to_local",
         "local_container_dir", "container_profile", "cuda_version", "nccl_version", "max_steps",
-        "max_runtime_minutes", "artifact", "log_dir",
+        "max_runtime_minutes", "artifact", "log_dir", "env_updates",
     )})
     return plan, None
 

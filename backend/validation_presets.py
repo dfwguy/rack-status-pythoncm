@@ -16,7 +16,7 @@ list; this module turns the remaining operator choices into a stable launch plan
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 LOCAL_CONTAINER_DIR = "/tmp/containers"
@@ -57,6 +57,12 @@ def resolve_shared_image(path: str | None) -> str | None:
     """
     if not path:
         return path
+    if path.startswith(f"{DEFAULT_LLMB_IMAGE_ROOT}/"):
+        from config_env import _eget
+
+        root = (_eget("LLMB_IMAGE_ROOT", "") or "").strip()
+        if root:
+            return f"{root.rstrip('/')}/{path.rsplit('/', 1)[-1]}"
     root = shared_container_root().rstrip("/")
     if root == DEFAULT_SHARED_CONTAINER_ROOT:
         return path
@@ -209,16 +215,32 @@ _ALIASES = {
 
 
 def catalogue() -> list[dict[str, Any]]:
-    return [preset.public() for preset in PRESETS]
+    from catalog import context
+
+    _project, _cluster, platform = context.resolve()
+    cpu_arch = (platform.cpu_arch if platform else "") or "arm64"
+    return [resolve_preset(preset.id, cpu_arch=cpu_arch).public() for preset in PRESETS]
 
 
-def resolve_preset(value: object) -> Preset:
+def resolve_preset(value: object, *, cpu_arch: str = "arm64") -> Preset:
     token = str(value or "").strip().lower()
     token = _ALIASES.get(token, token)
     try:
-        return _BY_ID[token]
+        preset = _BY_ID[token]
     except KeyError:
         raise ValueError(f"unknown validation preset: {value!r}") from None
+    if preset.id == "gpt-oss-cpu":
+        if cpu_arch == "x86_64":
+            return replace(
+                preset, container_profile="tensorrt-llm-1.1.0rc5-x86_64",
+                shared_image=f"{DEFAULT_LLMB_IMAGE_ROOT}/nvidia+tensorrt-llm+release+1.1.0rc5.sqsh",
+                local_image=f"{LOCAL_CONTAINER_DIR}/nvidia+tensorrt-llm+release+1.1.0rc5.sqsh",
+                image_size=36640796672,
+                image_sha256="007bd8c2d8e90643fd47fe38e97d244d4b6e951db5abbdc0d457e2120d013fa4",
+            )
+        if cpu_arch not in ("arm64", "aarch64"):
+            raise ValueError(f"unsupported GPT-OSS CPU architecture: {cpu_arch!r}")
+    return preset
 
 
 def _version_tuple(value: str) -> tuple[int, ...]:

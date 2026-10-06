@@ -169,7 +169,7 @@ stage_image() {
 # LLMB's own image store, separate from the container mount above and parameterised for the
 # same reason: its install paths already were, and leaving only the image absolute meant the
 # one hard-coded path left in this preset.
-llmb_image_root="${LLMB_IMAGE_ROOT:-/cluster/llmb/images}"; llmb_image_root="${llmb_image_root%/}"
+llmb_image_root="${LLMB_IMAGE_ROOT:-${RACK_VALIDATION_CONTAINER_ROOT:-/cluster/llmb/images}}"; llmb_image_root="${llmb_image_root%/}"
 llmb_install="${LLMB_INSTALL:-/home/cmods/workspace/llmb}"
 llmb_repo="${LLMB_REPO:-${llmb_install}/llmb_repo}"
 llmb_run="${LLMB_RUN:-${NVIS_LLMB_RUN:-/home/cmods/workspace/llmb_venv/bin/llmb-run}}"
@@ -200,16 +200,28 @@ case "$preset" in
 
   gpt-oss-cpu)
     (( node_count >= 1 && node_count <= 256 )) || { echo "ERROR: GPT-OSS CPU fan-out requires 1-256 exact nodes; got ${node_count}" >&2; exit 2; }
-    source_image="${llmb_image_root}/tensorrt-llm+release+1.1.0rc5.sqsh"
-    local_image="${local_container_dir}/tensorrt-llm+release+1.1.0rc5.sqsh"
+    cpu_arch="${NVIS_GPT_CPU_ARCH:-$(uname -m)}"
+    case "$cpu_arch" in
+      x86_64)
+        image_name="nvidia+tensorrt-llm+release+1.1.0rc5.sqsh"
+        image_size=36640796672
+        image_sha=007bd8c2d8e90643fd47fe38e97d244d4b6e951db5abbdc0d457e2120d013fa4 ;;
+      arm64|aarch64)
+        cpu_arch=aarch64
+        image_name="tensorrt-llm+release+1.1.0rc5.sqsh"
+        image_size=30284881920
+        image_sha=80de1820829418a3789a4ff5ce0c661f669ffb07c013552ac648822b9c1f9e72 ;;
+      *) echo "ERROR: unsupported GPT-OSS CPU architecture: $cpu_arch" >&2; exit 2 ;;
+    esac
+    source_image="${llmb_image_root}/${image_name}"
+    local_image="${local_container_dir}/${image_name}"
     if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi
-    stage_image "$source_image" "$local_image" 30284881920 80de1820829418a3789a4ff5ce0c661f669ffb07c013552ac648822b9c1f9e72 0
-    cpu_launch="${llmb_repo}/microbenchmarks/cpu_overhead/launch.sh"
-    [[ -r "$cpu_launch" || "$dry_run" == 1 ]] || { echo "ERROR: GPT-OSS CPU launch script missing: $cpu_launch" >&2; exit 2; }
-    model="${llmb_install}/workloads/microbenchmark_cpu_overhead/gpt-oss-120b/metal/model.bin"
-    [[ -r "$model" || "$dry_run" == 1 ]] || { echo "ERROR: GPT-OSS model is missing/unreadable: $model" >&2; exit 2; }
+    kernel_script="${llmb_repo}/microbenchmarks/cpu_overhead/pytorch_kernel_launch_latency.py"
+    [[ -r "$kernel_script" || "$dry_run" == 1 ]] || { echo "ERROR: GPT-OSS CPU kernel script missing: $kernel_script" >&2; exit 2; }
+    model="${llmb_install}/workloads/microbenchmark_cpu_overhead/gpt-oss-120b"
+    [[ -r "$model/tokenizer.json" && -r "$model/tokenizer_config.json" || "$dry_run" == 1 ]] || { echo "ERROR: GPT-OSS tokenizer is missing/unreadable: $model" >&2; exit 2; }
     gpt_batch="${script_dir}/gpt-oss-cpu-strict.sbatch"
-    export_set="ALL,LLMB_INSTALL=${llmb_install},LLMB_REPO=${llmb_repo},RUN_CONF_IMAGE=${image},GPU_TYPE=gb300,NUM_PROMPTS=100000,LLMB_EXPERIMENTS_ROOT=${log_dir}"
+    export_set="ALL,LLMB_INSTALL=${llmb_install},LLMB_REPO=${llmb_repo},RUN_CONF_IMAGE=${image},NVIS_GPT_CPU_ARCH=${cpu_arch},NUM_PROMPTS=100000,LLMB_EXPERIMENTS_ROOT=${log_dir}"
     # Keep the validated recipe single-node, but submit one independently
     # attributable job for every exact selected node. Submit the full fan-out
     # before waiting so a rack does not serialize eighteen CPU microbenchmarks.

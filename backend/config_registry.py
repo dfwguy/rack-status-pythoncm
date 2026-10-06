@@ -546,6 +546,15 @@ register(
 )
 
 
+for _name, _example, _description in (
+    ("RACK_VALIDATION_CONTAINER_ROOT", "/cluster/containers", "Shared directory for reviewed validation images; image filenames and checksums remain code-owned."),
+    ("LLMB_IMAGE_ROOT", "/cluster/llmb/images", "Shared directory for reviewed LLMB images; falls back to the validation container root at other sites."),
+    ("LLMB_INSTALL", "/home/cmods/workspace/llmb", "Shared LLMB workspace containing workload assets and GPT-OSS tokenizer files."),
+    ("LLMB_REPO", "/home/cmods/workspace/llmb/llmb_repo", "LLMB source checkout containing the upstream CPU-overhead microbenchmark."),
+):
+    register(Setting(name=_name, secret=False, example=_example, section="validation", description=_description))
+
+
 def _tls_cert_configured() -> bool:
     """A certificate without its key is the asymmetric failure this row exists for.
 

@@ -113,6 +113,44 @@ def test_prepare_resolves_exact_nodes_for_gpt_fanout(monkeypatch, tmp_path):
     assert plan["env_updates"]["NVIS_PREPARED_NODE_COUNT"] == "2"
 
 
+def test_gpt_x86_review_matches_runtime_artifact(monkeypatch, tmp_path):
+    node = "gpu-rno-249"
+    monkeypatch.setattr(validation_launch.catalog_context, "resolve", lambda: (
+        None, None, models.Platform(id="rtx", name="RTX", cpu_arch="x86_64"),
+    ))
+    monkeypatch.setattr(validation_launch, "_resolve_log_dir", lambda _raw=None: tmp_path)
+    monkeypatch.setattr(validation_launch, "_script_exists", lambda _path: True)
+    monkeypatch.setattr(validation_launch, "_all_slurm_nodenames", lambda: [node])
+    monkeypatch.setattr(validation_launch, "_validation_node_eligibility", lambda _raw: ({node: "idle"}, []))
+    import config_env
+
+    monkeypatch.setattr(config_env, "_eget", lambda key, default="": "/cm/shared/images" if key == "LLMB_IMAGE_ROOT" else default)
+    with app_module.app.app_context():
+        plan, err = validation_launch._prepare_validation_preset({
+            "preset_id": "gpt-oss-cpu", "scope": "node", "nodes": [node], "storage": "nfs",
+        })
+    assert err is None
+    artifact = plan["artifact"]
+    assert artifact["source"] == "/cm/shared/images/nvidia+tensorrt-llm+release+1.1.0rc5.sqsh"
+    assert artifact["size"] == 36640796672
+    assert plan["env_updates"]["NVIS_GPT_CPU_ARCH"] == "x86_64"
+    assert plan["container_profile"] == "tensorrt-llm-1.1.0rc5-x86_64"
+    result = subprocess.run(
+        [_bash4(), "-x", str(REPO / "bin/scripts/run-validation-preset.sh"), "--preset", "gpt-oss-cpu",
+         "--nodelist", node, "--storage", "nfs", "--log-dir", str(tmp_path), "--dry-run"],
+        env={**os.environ, **plan["env_updates"], "LLMB_IMAGE_ROOT": "/cm/shared/images"},
+        capture_output=True, text=True, check=True,
+    )
+    assert artifact["source"] in result.stdout
+    assert f"image_size={artifact['size']}" in result.stderr
+    assert f"image_sha={artifact['sha256']}" in result.stderr
+    assert "NVIS_GPT_CPU_ARCH=x86_64" in result.stdout
+    arm = validation_presets.resolve_preset("gpt-oss-cpu", cpu_arch="arm64")
+    assert arm.image_size == 30284881920
+    with pytest.raises(ValueError, match="unsupported GPT-OSS CPU architecture"):
+        validation_presets.resolve_preset("gpt-oss-cpu", cpu_arch="riscv64")
+
+
 def test_llama_prepare_is_exact_1024_gpu_contract(monkeypatch, tmp_path):
     nodes = [f"ink50-dh01-d{i // 16 + 1:02d}-{i % 16 + 1}" for i in range(256)]
     monkeypatch.setattr(validation_launch, "_resolve_log_dir", lambda _raw=None: tmp_path)
@@ -406,8 +444,9 @@ def test_scripts_encode_runtime_and_result_gates():
     assert "NVIS_NCCL_RUNTIME_PREFLIGHT" in nccl_launcher
     assert "NVIS_NCCL_SBATCH_WAIT" in nccl_launcher
     assert "--append-verify" in stage and "flock -x" in stage and "sha256sum" in stage
-    assert "GPU_TYPE must be gb300" in gpt and '[[ "$lines" == "$3" ]]' in gpt
-    assert "/cluster/llmb/workloads:/cluster/llmb/workloads:ro" in gpt
+    assert "CPU architecture mismatch" in gpt and '[[ "$lines" == "$3" ]]' in gpt
+    assert "metal/model.bin" not in gpt
+    assert "${WORKLOAD}:${WORKLOAD}:ro" in gpt
     assert "System Info Collection Summary" in sysinfo
     assert "Failed non-fatal steps: [1-9][0-9]*" in sysinfo
     assert 'cmd+=(--export=' in sysinfo
