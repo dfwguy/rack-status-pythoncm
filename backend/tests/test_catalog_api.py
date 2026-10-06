@@ -56,6 +56,13 @@ class TestCatalogApi:
         one = client.get("/api/catalog/platforms/gb200-nvl72").get_json()
         assert one["item"]["gpu_model"] == "GB200"
 
+    def test_wizard_platform_list_includes_dgx_b300(self, client):
+        response = client.get("/api/catalog/platforms")
+        assert response.status_code == 200
+        platform = next(p for p in response.get_json()["items"] if p["id"] == "dgx-b300")
+        assert platform["name"] == "DGX B300"
+        assert platform["geometry"]["gpus_per_node"] == 8
+
     def test_create_update_delete_platform(self, client):
         # create (id slug derived from name)
         r = client.post("/api/catalog/platforms", json={"name": "Test Plat", "gpu_model": "B200"})

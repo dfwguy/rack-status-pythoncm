@@ -25,6 +25,12 @@ vi.mock("../../services/catalogService", () => ({
       gpu_model: "GB300",
       geometry: { gpus_per_node: 4, nodes_per_tray: 1, trays_per_rack: 18, gpus_per_rack: 72, nvlink_domain: 72 },
     },
+    {
+      id: "dgx-b300",
+      name: "DGX B300",
+      gpu_model: "B300",
+      geometry: { gpus_per_node: 8, nodes_per_tray: 1, trays_per_rack: 4, gpus_per_rack: 32, nvlink_domain: 8 },
+    },
   ]),
   saveProject: vi.fn(async (p: unknown) => p),
   setActiveContext: vi.fn(async () => ({})),
@@ -135,6 +141,19 @@ const throughProject = async () => {
 
 describe("SetupWizard", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("offers DGX B300 and prefills its rack layout", async () => {
+    render(<SetupWizard />);
+    type(/project name/i, "DGX Lab");
+    type(/customer or site/i, "Lab");
+    await waitFor(() => expect(screen.getByRole("button", { name: /next/i })).toBeEnabled());
+    clickNext();
+    await screen.findByLabelText(/site prefix/i);
+    await choose(0, /DGX B300/);
+    await waitFor(() => expect(screen.getByRole("button", { name: /next/i })).toBeEnabled());
+    clickNext();
+    expect(await screen.findByLabelText(/trays per rack/i)).toHaveValue("4");
+  });
 
   it("refuses to advance until the step is answered, and says why", async () => {
     render(<SetupWizard />);
