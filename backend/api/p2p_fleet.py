@@ -34,6 +34,7 @@ import logging
 import pathlib
 
 import p2p_config
+import p2p_operations as p2p_ops
 import p2p_provision  # noqa: F401 -- imported for its side effect: registers the p2p_stage_assets native step
 import p2p_snapshot
 import paths
@@ -170,28 +171,32 @@ def p2p_status():
 )
 @action(post="p2p:operate")
 def p2p_operations():
-    """Start a fleet operation (preflight/persist/sync/distribute/verify/repair).
+    """Start a fleet operation (preflight/persist/distribute/verify/repair) on the active cluster.
 
     A fleet operation acts on an *already provisioned* instance and is a different capability from
     standing the instance up, so it carries its own ``p2p:operate`` action rather than sharing
-    ``p2p:provision``.
-
-    501 until the reconcile workflow lands: the contract (and the `p2p:provision` action that
-    governs it) is declared now so the UI and the vocabulary are stable, but there is nothing behind
-    it yet. A 501 with a message the SPA can render beats a 404 it cannot explain.
+    ``p2p:provision``. The operation is enqueued for the instance's worker, which runs it with the
+    cluster's own campaign pacing; the run shows up in the fleet snapshot the status endpoint serves.
+    202 with the accepted ``Operation``; 400 when settings are incomplete or the request is invalid.
     """
-    return (
-        jsonify(
-            {
-                "ok": False,
-                "message": (
-                    "Fleet operations are not available until this cluster's P2P instance is "
-                    "provisioned. Provision it with POST /api/p2p/provision."
-                ),
-            }
-        ),
-        501,
-    )
+    _project, cluster, _platform = catalog_context.resolve()
+    if cluster is None or not getattr(cluster, "p2p_enabled", False):
+        return jsonify({"ok": False, "message": "P2P is not enabled for the active cluster."}), 404
+    settings = p2p_config.get_settings(cluster.id)
+    blockers = settings.provisioning_blockers()
+    if blockers:
+        return (
+            jsonify({"ok": False, "message": "P2P settings are incomplete: " + "; ".join(blockers),
+                     "provisioning_blockers": blockers}),
+            400,
+        )
+    body = request.get_json(silent=True) or {}
+    try:
+        operation = p2p_ops.enqueue(cluster.id, settings, str(body.get("action", "")),
+                                    body.get("images"), body.get("sus"))
+    except p2p_ops.OperationError as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+    return jsonify(operation), 202
 
 
 @bp.route("/provision", methods=["POST"])

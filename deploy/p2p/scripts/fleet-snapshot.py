@@ -180,6 +180,24 @@ def _fleet(coverage: dict) -> list[dict]:
     return out
 
 
+def _operations(ops_dir: pathlib.Path) -> list[dict]:
+    """The recent operations the gateway queued, as the view's ``Operation`` shape.
+
+    The worker writes terminal state back into the same files; the private ``request`` block it uses
+    to run them is dropped here. Newest first, bounded so the tile does not grow without end.
+    """
+    if not ops_dir.is_dir():
+        return []
+    ops = []
+    for path in sorted(ops_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:25]:
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        ops.append({k: v for k, v in doc.items() if k != "request"})
+    return ops
+
+
 def _object_store_healthy(container: str) -> bool:
     try:
         proc = subprocess.run(
@@ -200,6 +218,7 @@ def main() -> int:
     ap.add_argument("--peer-root", default="/opt/containers/.nvis-p2p")
     ap.add_argument("--rollout-state-dir", type=pathlib.Path, default=pathlib.Path("/opt/nvis-p2p/current/state"))
     ap.add_argument("--object-store-container", default="nvis-p2p-object-store")
+    ap.add_argument("--ops-dir", type=pathlib.Path, help="per-cluster operations directory to surface")
     ap.add_argument("--fanout", type=int, default=40)
     args = ap.parse_args()
 
@@ -215,7 +234,9 @@ def main() -> int:
         "object_store_healthy": _object_store_healthy(args.object_store_container),
         "fleet": _fleet(coverage), "coverage": coverage, "sync": _latest_sync(args.rollout_state_dir),
         "catalog_exact_duplicates": _exact_duplicates(catalog["images"]),
-        "preflight_generated_at": None, "operations": [], "generated_at": _now_iso(),
+        "preflight_generated_at": None,
+        "operations": _operations(args.ops_dir) if args.ops_dir else [],
+        "generated_at": _now_iso(),
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     tmp = args.out.with_suffix(".json.tmp")

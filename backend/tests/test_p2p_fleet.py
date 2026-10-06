@@ -129,11 +129,49 @@ class TestP2pStatus:
         assert body["coverage"]["nodes"][0]["node"] == "n1"
         assert [i["name"] for i in body["catalog"]["images"]] == ["Live"]
 
-    def test_operations_points_at_provision(self, client):
+    def test_operations_400_when_settings_incomplete(self, client):
+        _set_active_p2p(True)  # enabled but nothing saved: provisioning blockers remain
+        resp = client.post("/api/p2p/operations", json={"action": "preflight"})
+        assert resp.status_code == 400
+        assert resp.get_json()["provisioning_blockers"]
+
+    def _complete_settings(self):
+        _configure_active_p2p(manager_ip="10.0.0.1", appserver_ip="10.0.0.2",
+                              inventory_pattern="n[01-09]")
+
+    def test_operations_rejects_unsupported_action(self, client):
         _set_active_p2p(True)
-        resp = client.post("/api/p2p/operations", json={"action": "sync", "sus": [1]})
-        assert resp.status_code == 501
-        assert "/api/p2p/provision" in resp.get_json()["message"]
+        self._complete_settings()
+        resp = client.post("/api/p2p/operations", json={"action": "sync"})
+        assert resp.status_code == 400
+        assert "unsupported" in resp.get_json()["message"]
+
+    def test_operations_requires_image_for_distribute(self, client):
+        _set_active_p2p(True)
+        self._complete_settings()
+        resp = client.post("/api/p2p/operations", json={"action": "distribute"})
+        assert resp.status_code == 400
+        assert "requires at least one image" in resp.get_json()["message"]
+
+    def test_operations_enqueues(self, client, tmp_path, monkeypatch):
+        import p2p_operations
+
+        _set_active_p2p(True)
+        self._complete_settings()
+        monkeypatch.setattr(p2p_operations, "_OPS_DIR", tmp_path / "ops")
+        resp = client.post("/api/p2p/operations",
+                           json={"action": "distribute", "images": ["nemo.sqsh"], "sus": [1]})
+        assert resp.status_code == 202
+        op = resp.get_json()
+        assert op["action"] == "distribute" and op["state"] == "running"
+        assert op["images"] == ["nemo.sqsh"] and op["id"].startswith("distribute-")
+        assert "request" not in op  # the worker's private block is not leaked to the client
+        cluster_id = get_active(get_repo())["cluster"]
+        written = list((tmp_path / "ops" / cluster_id).glob("*.json"))
+        assert len(written) == 1  # the worker has a request to claim
+        import json as _json
+        req = _json.loads(written[0].read_text())
+        assert req["request"]["rollout"]["wave_size"] == 50  # the cluster's campaign pacing travels with it
 
 
 class TestP2pProvision:
