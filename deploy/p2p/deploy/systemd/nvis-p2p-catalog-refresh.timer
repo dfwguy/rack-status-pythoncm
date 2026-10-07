@@ -1,0 +1,16 @@
+[Unit]
+Description=Refresh the NVIS-P2P catalog every 15 minutes
+
+[Timer]
+# Every quarter hour, so a node is never more than 15 minutes behind the origin's pins. Each node
+# holds a fixed offset inside a 2-minute window, so ~800 nodes do not hit the origin at the same
+# instant, and the period stays exactly 15 minutes.
+OnCalendar=*:00/15
+RandomizedDelaySec=2min
+FixedRandomDelay=true
+AccuracySec=10s
+# And shortly after boot, so a rebooted or reimaged node is current before its first quarter hour.
+OnBootSec=3min
+
+[Install]
+WantedBy=timers.target

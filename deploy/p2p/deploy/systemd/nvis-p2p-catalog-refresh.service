@@ -1,0 +1,13 @@
+[Unit]
+Description=NVIS-P2P catalog refresh (keep this node's image pins current with the origin)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=nvis-p2p
+Group=cmods
+EnvironmentFile=/opt/containers/.nvis-p2p/catalog-refresh.env
+ExecStart=/opt/containers/.nvis-p2p/bin/catalog-refresh.sh
+Nice=10
+TimeoutStartSec=120

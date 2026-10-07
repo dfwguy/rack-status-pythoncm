@@ -130,4 +130,13 @@ done
 sudo -n systemctl is-active --quiet nvis-p2p-peer.service
 REMOTE
 
-echo "DEPLOY_READY node=$node su=$su ip=$ip ready_images=$ready_images missing_bytes=$missing_bytes service=systemd dfstore_sync=enabled-not-started"
+# Keep this node's catalog pins current between campaigns: the 15-minute refresh timer. Non-fatal --
+# the peer is up either way -- but reported, so a node without it shows up instead of going stale.
+# With NVIS_P2P_CATALOG_URL unset, the installer reuses the URL a previous install left on the node.
+if refresh=$(NVIS_P2P_ROOT=$root "$root/scripts/deploy-catalog-refresh-timer-node.sh" "$node" 2>/dev/null); then
+  refresh=${refresh##*status=}
+else
+  refresh=not-installed
+fi
+
+echo "DEPLOY_READY node=$node su=$su ip=$ip ready_images=$ready_images missing_bytes=$missing_bytes service=systemd dfstore_sync=enabled-not-started catalog_refresh=$refresh"
