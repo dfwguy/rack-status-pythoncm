@@ -182,6 +182,14 @@ COLLECTION_FALLBACK_ACTIONS: frozenset[str] = frozenset({
     # `/api/node-report/start` is a fleet sweep by construction — its own docstring says "a second
     # fleet-wide sweep" over "~2000 nodes". There is no per-node target to name.
     "report.node:generate",
+    # `POST /api/bringup/fleet` reads `fleet_summary()` — the bring-up state of every node as one
+    # aggregate, which is what a cluster heatmap needs. It is POST only so the node list can travel
+    # in the body (too large for a query string); it mutates nothing despite the `run` verb, and
+    # names no rack, so its target IS the collection. The GET twin resolves through
+    # COLLECTION_FALLBACK_VERBS; the POST needs naming here because POST is a mutating method and so
+    # cannot share `bringup:read` with the GET reads. Without this, the SPA's node-level heatmap got
+    # a 400 "the target of this request could not be identified" and rendered no verdicts.
+    "bringup:run",
     # `/api/workflows/generate-mermaid` is a pure transformation: it turns a step list from the
     # request body into mermaid text and reads or writes no stored workflow, so there is no
     # instance for it to name. Checked against the view, which touches only `body["steps"]`.
