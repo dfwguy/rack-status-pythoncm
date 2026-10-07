@@ -22,10 +22,18 @@
 # WHAT: create a rootfs from the base .sqsh, then INSIDE it: (1) `make src.build` the mounted NCCL
 # source, (2) install the built libnccl.so.* into the container libdir + ldconfig, (3) rebuild the
 # mounted nccl-tests (MPI=1) against that same NCCL_HOME and install *_perf_mpi to /usr/local/bin,
-# (4) export a self-contained, version-named .sqsh (+ .sha256). GPUs NOT required to build.
+# and record what went in at /etc/nvis-image-build; then scrub what enroot's runtime hooks wrote
+# into the rootfs (builder's passwd entries + home, host timezone -- see enroot_scrub_rootfs.sh) and
+# export a self-contained, version-named .sqsh (+ .sha256). GPUs NOT required to build.
 #
 # RUN: on ONE arm64 node with enroot (>=4.x) + ~2x image scratch on the enroot data disk. The head
 # node works (aarch64, has enroot). NCCL/nccl-tests sources must already be checked out on the host.
+#
+# PIN BOTH SOURCES TO TAGS. The image is only as reproducible as its inputs: an nccl-tests tree left
+# at HEAD silently moves to whatever was merged last (on Nscale NC a rebuild picked up nccl-tests
+# 2.21.1, two days old, whose *_perf binaries are ~30x larger, instead of the 2.20.0 the NCCL 2.30.7
+# image was validated with). The build logs each tree's `git describe` and warns when one is not
+# exactly at a tag.
 #
 # Usage: build_nemo_nccl_image.sh [NCCL_SRC] [NCCL_TESTS_SRC] [BASE_SQSH] [OUT_SQSH]
 #   NCCL_SRC        NCCL git tree (checked out to target tag)
@@ -57,16 +65,47 @@ command -v enroot >/dev/null || { echo "ERROR: enroot not found on this node"; e
 NAME="nemonccl-$$"
 NSRC="$(cd "$NCCL_SRC" && pwd)"
 TSRC="$(cd "$NCCL_TESTS_SRC" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRUB="$SCRIPT_DIR/enroot_scrub_rootfs.sh"
+[ -x "$SCRUB" ] || { echo "ERROR: scrub helper missing beside this script: $SCRUB"; exit 2; }
 mkdir -p "$(dirname "$OUT_SQSH")"
+
+# Where `enroot create` puts a container's rootfs: $ENROOT_DATA_PATH (env wins over the config file,
+# as in enroot itself), else enroot.conf's value -- which may hold shell like "$(id -u)", hence the
+# eval -- else enroot's own default.
+enroot_rootfs_dir() {
+  local data="${ENROOT_DATA_PATH:-}"
+  if [ -z "$data" ] && [ -r /etc/enroot/enroot.conf ]; then
+    data="$(awk '$1 == "ENROOT_DATA_PATH" { $1 = ""; sub(/^[ \t]+/, ""); print; exit }' /etc/enroot/enroot.conf)"
+    data="$(eval "printf '%s' \"$data\"")"
+  fi
+  [ -n "$data" ] || data="${XDG_DATA_HOME:-$HOME/.local/share}/enroot"
+  printf '%s/%s\n' "$data" "$1"
+}
+
+# Provenance of each source tree: tag (or commit) plus a warning when it is not exactly at a tag.
+src_rev() {
+  local rev
+  rev="$(git -C "$1" describe --tags --always 2>/dev/null || echo unknown)"
+  git -C "$1" describe --tags --exact-match >/dev/null 2>&1 \
+    || echo "WARNING: $1 is not at a tag ($rev) -- the image will not be reproducible" >&2
+  printf '%s' "$rev"
+}
+NCCL_REV="$(src_rev "$NSRC")"
+TESTS_REV="$(src_rev "$TSRC")"
+echo "-- sources: NCCL $NCCL_REV | nccl-tests $TESTS_REV | base $(basename "$BASE_SQSH") --"
 
 cleanup() { enroot remove -f "$NAME" 2>/dev/null || true; }
 trap cleanup EXIT
 
-echo "== [1/4] create rootfs from $BASE_SQSH =="
+echo "== [1/5] create rootfs from $BASE_SQSH =="
 enroot remove -f "$NAME" 2>/dev/null || true
 enroot create --name "$NAME" "$BASE_SQSH"
+# Resolve the rootfs now, not after the long build: a path we cannot find means an unscrubbed image.
+ROOTFS="$(enroot_rootfs_dir "$NAME")"
+[ -f "$ROOTFS/etc/passwd" ] || { echo "ERROR: cannot locate the rootfs of $NAME (tried $ROOTFS); set ENROOT_DATA_PATH"; exit 2; }
 
-echo "== [2/4] build NCCL + nccl-tests from source inside rootfs (root in container ns) =="
+echo "== [2/5] build NCCL + nccl-tests from source inside rootfs (root in container ns) =="
 # Mounts: host-nccl-src / host-nccl-tests are the checked-out source trees (read-only bind); the
 # build happens on writable COPIES in /tmp so the host trees stay pristine. Outer-shell vars are
 # expanded by the unquoted heredoc; container-local vars are escaped (\$).
@@ -122,13 +161,27 @@ done
 echo "-- installed \$_n *_perf_mpi binaries (built vs \$LIBVER) --"
 ls -l /usr/local/bin/all_reduce_perf_mpi /usr/local/bin/alltoall_perf_mpi /usr/local/bin/all_gather_perf_mpi 2>/dev/null || true
 rm -rf /tmp/nccl-src /tmp/nccl-tests
+
+# (4) record what this image was built from, so "which nccl-tests is in it?" is answerable from the
+# image itself. Sources only -- never the builder, host or time, which would make builds differ.
+cat > /etc/nvis-image-build <<PROV
+base_image=$(basename "$BASE_SQSH")
+nccl_source=${NCCL_REV}
+nccl_library=\$LIBVER
+nccl_tests_source=${TESTS_REV}
+nvcc=\$(\${CUDA_HOME}/bin/nvcc --version | grep -o 'release [0-9.]*')
+PROV
+echo '-- /etc/nvis-image-build --'; cat /etc/nvis-image-build
 INEOF
 
-echo "== [3/4] export -> $OUT_SQSH =="
+echo "== [3/5] scrub enroot runtime artifacts from the rootfs =="
+"$SCRUB" "$ROOTFS" "$BASE_SQSH"
+
+echo "== [4/5] export -> $OUT_SQSH =="
 rm -f "$OUT_SQSH" "${OUT_SQSH}.sha256"
 enroot export --output "$OUT_SQSH" "$NAME"
 
-echo "== [4/4] checksum =="
+echo "== [5/5] checksum =="
 sha256sum "$OUT_SQSH" | tee "${OUT_SQSH}.sha256"
 ls -lh "$OUT_SQSH"
 echo "DONE: NeMo image with source-built NCCL -> $OUT_SQSH"
