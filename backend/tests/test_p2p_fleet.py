@@ -142,7 +142,7 @@ class TestP2pStatus:
     def test_operations_rejects_unsupported_action(self, client):
         _set_active_p2p(True)
         self._complete_settings()
-        resp = client.post("/api/p2p/operations", json={"action": "sync"})
+        resp = client.post("/api/p2p/operations", json={"action": "deploy"})  # no worker handler yet
         assert resp.status_code == 400
         assert "unsupported" in resp.get_json()["message"]
 
@@ -192,6 +192,32 @@ class TestP2pStatus:
         self._complete_settings()
         monkeypatch.setattr(p2p_operations, "_OPS_DIR", tmp_path / "ops")
         assert client.get("/api/p2p/operations/nope-123/log").status_code == 404
+
+    def test_sync_requires_authored_catalog(self, client, tmp_path, monkeypatch):
+        import p2p_operations
+
+        _set_active_p2p(True)
+        self._complete_settings()
+        monkeypatch.setattr(p2p_operations, "_OPS_DIR", tmp_path / "ops")
+        resp = client.post("/api/p2p/operations", json={"action": "sync"})
+        assert resp.status_code == 400 and "authored catalog" in resp.get_json()["message"]
+
+    def test_sync_enqueues_the_authored_catalog(self, client, tmp_path, monkeypatch):
+        import json as _json
+
+        import p2p_operations
+
+        _set_active_p2p(True)
+        self._complete_settings()
+        monkeypatch.setattr(p2p_operations, "_OPS_DIR", tmp_path / "ops")
+        client.put("/api/p2p/catalog",
+                   json={"images": [{"order": 1, "name": "N", "filename": "n.sqsh", "bytes": 5, "sha256": "a" * 64}]})
+        resp = client.post("/api/p2p/operations", json={"action": "sync"})
+        assert resp.status_code == 202 and resp.get_json()["action"] == "sync"
+        cluster_id = get_active(get_repo())["cluster"]
+        req = _json.loads(next((tmp_path / "ops" / cluster_id).glob("sync-*.json")).read_text())
+        assert [i["filename"] for i in req["request"]["catalog"]] == ["n.sqsh"]
+        assert req["request"]["appserver_ip"] == "10.0.0.2"
 
 
 class TestP2pProvision:

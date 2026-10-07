@@ -21,7 +21,7 @@ import { PageHeader } from "../../../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../../../components/layout/contentWidth";
 import { useActiveCluster } from "../../../context/ActiveClusterContext";
 import { ApiError } from "../lib/apiFetch";
-import { getCatalog, saveCatalog } from "../services/fleetService";
+import { getCatalog, saveCatalog, startOperation } from "../services/fleetService";
 import type { CatalogImageEdit } from "../services/fleetService";
 
 const BLANK: CatalogImageEdit = { order: 0, name: "", filename: "", bytes: 0, sha256: "", required_by: [] };
@@ -32,6 +32,7 @@ export default function CatalogEditorView() {
   const [authored, setAuthored] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
 
@@ -82,6 +83,20 @@ export default function CatalogEditorView() {
     }
   };
 
+  const onSync = async () => {
+    setSyncing(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const op = await startOperation({ action: "sync", sus: [] });
+      setStatus(`Sync started (${op.id}). It writes the manifest and refreshes the nodes; watch its log on Artifact Fleet.`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to start the catalog sync");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const text = (label: string, value: string, onChange: (v: string) => void, help?: string, placeholder?: string) => (
     <FormField slotLabel={label} slotHelp={help}>
       <TextInput value={value} placeholder={placeholder} onValueChange={onChange} />
@@ -100,6 +115,9 @@ export default function CatalogEditorView() {
             </Button>
             <Button kind="secondary" color="brand" size="small" disabled={saving || !images} onClick={() => void onSave()}>
               {saving ? "Saving…" : "Save"}
+            </Button>
+            <Button kind="primary" color="brand" size="small" disabled={syncing || !authored} onClick={() => void onSync()}>
+              {syncing ? "Syncing…" : "Sync to fleet"}
             </Button>
           </Flex>
         }

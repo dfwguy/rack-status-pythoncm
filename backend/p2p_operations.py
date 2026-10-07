@@ -29,6 +29,7 @@ import pathlib
 import re
 import uuid
 
+import p2p_catalog
 from catalog.models import P2pSettings
 
 #: An operation id is this shape (the enqueue builder); validated before it reaches the filesystem so
@@ -41,9 +42,10 @@ _LOG_INLINE_CAP = 512 * 1024
 #: the worker reads from the same filesystem.
 _OPS_DIR = pathlib.Path(os.environ.get("RACK_P2P_OPERATIONS_DIR", "/app/var/p2p-operations"))
 
-#: The actions a worker knows how to run. "deploy"/"sync" are deliberately absent until their worker
-#: handlers land, so the gateway rejects them cleanly rather than enqueuing a request nothing claims.
-SUPPORTED_ACTIONS = frozenset({"preflight", "persist", "distribute", "verify", "repair"})
+#: The actions a worker knows how to run. "deploy" is deliberately absent until its worker handler
+#: lands, so the gateway rejects it cleanly rather than enqueuing a request nothing claims. "sync"
+#: projects the authored catalog onto the cluster's file and the nodes.
+SUPPORTED_ACTIONS = frozenset({"preflight", "persist", "distribute", "verify", "repair", "sync"})
 #: Actions that act on a specific image and cannot proceed without one.
 IMAGE_REQUIRED = frozenset({"persist", "distribute", "repair"})
 
@@ -101,6 +103,14 @@ def enqueue(cluster_id: str, settings: P2pSettings, action: str,
             },
         },
     }
+    if action == "sync":
+        # A sync carries the authored catalog so the worker writes exactly what the operator saved,
+        # without reaching back into the store from the app server.
+        catalog_images = p2p_catalog.get_catalog(cluster_id).to_dict()["images"]
+        if not catalog_images:
+            raise OperationError("no authored catalog to sync — edit and save the catalog first")
+        request["request"]["catalog"] = catalog_images
+        request["request"]["appserver_ip"] = settings.appserver_ip or settings.manager_ip
     directory = _ops_dir(cluster_id)
     directory.mkdir(parents=True, exist_ok=True)
     target = directory / f"{op_id}.json"

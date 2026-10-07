@@ -80,6 +80,42 @@ def _staged_campaign(image: str, roster: pathlib.Path, rollout: dict, scripts: s
     return worst
 
 
+def _sync_catalog(inner: dict, roster: pathlib.Path, log: pathlib.Path) -> int:
+    """Project the authored catalog onto the cluster: write the manifest, then refresh the nodes.
+
+    The operator's images are written to the origin's ``images.json``/``images.tsv`` (served from the
+    canonical directory), then every peer re-pulls the ``images.tsv`` so a later distribute verifies
+    against the new pins rather than a stale local copy.
+    """
+    catalog_path = pathlib.Path(inner.get("catalog_path", ""))
+    images = inner.get("catalog", [])
+    appserver = (inner.get("appserver_ip") or "").strip()
+    if not catalog_path.name or not images:
+        _append(log, "[worker] sync: missing catalog_path or authored images")
+        return 2
+    doc = {"schema_version": 1, "catalog_name": "authored",
+           "canonical_directory": inner.get("container_path", ""), "images": images}
+    try:
+        catalog_path.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+        rows = ["order\tname\tfilename\tbytes\tsha256"]
+        rows += [f"{i.get('order', 0)}\t{i.get('name', '')}\t{i.get('filename', '')}\t"
+                 f"{i.get('bytes', 0)}\t{i.get('sha256', '')}" for i in images]
+        catalog_path.with_name("images.tsv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    except OSError as exc:
+        _append(log, f"[worker] sync: could not write the manifest: {exc}")
+        return 1
+    _append(log, f"[worker] wrote {catalog_path} + images.tsv ({len(images)} images)")
+    if not appserver or not roster.exists():
+        _append(log, "[worker] sync: no appserver ip or roster; manifest written, node refresh skipped")
+        return 0
+    origin = f"http://{appserver}:12130/.nvis-p2p/catalog/images.tsv"
+    refresh = (f"xargs -P40 -I{{}} ssh -o ConnectTimeout=10 -o BatchMode=yes {{}} "
+               f"'curl -s -m10 {origin} -o /opt/containers/.nvis-p2p/catalog/images.tsv' < {roster}")
+    rc = _run(["bash", "-c", refresh], log, dict(os.environ), 600)
+    _append(log, f"[worker] node catalog refresh exit={rc}")
+    return rc
+
+
 def _handle(req: dict, args: argparse.Namespace, log: pathlib.Path) -> int:
     action = req.get("action", "")
     inner = req.get("request", {})
@@ -94,6 +130,8 @@ def _handle(req: dict, args: argparse.Namespace, log: pathlib.Path) -> int:
         return _run(["bash", f"{scripts}/preheat-catalog-image.sh", req["images"][0]], log, env, 1200)
     if action == "verify":
         return _run(["bash", f"{scripts}/audit-fleet.sh", str(roster)], log, env, 900)
+    if action == "sync":
+        return _sync_catalog(inner, roster, log)
     if action in ("distribute", "repair"):
         return _staged_campaign(req["images"][0], roster, inner.get("rollout", {}), scripts, env, log, req["id"])
     _append(log, f"[worker] no handler for action {action!r}")
