@@ -39,6 +39,8 @@ subtrees:
         title: How to connect a PythonCM (BCM) cluster
       - file: how-to/distribute-a-catalog-image
         title: How to distribute a catalog image to the fleet
+      - file: how-to/recover-p2p-peers-after-a-reimage
+        title: How to bring P2P peers back after a reimage
 
   - caption: Reference — the machinery, described
     entries:
