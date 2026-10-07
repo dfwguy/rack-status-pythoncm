@@ -30,10 +30,11 @@
 # node works (aarch64, has enroot). NCCL/nccl-tests sources must already be checked out on the host.
 #
 # PIN BOTH SOURCES TO TAGS. The image is only as reproducible as its inputs: an nccl-tests tree left
-# at HEAD silently moves to whatever was merged last (on Nscale NC a rebuild picked up nccl-tests
-# 2.21.1, two days old, whose *_perf binaries are ~30x larger, instead of the 2.20.0 the NCCL 2.30.7
-# image was validated with). The build logs each tree's `git describe` and warns when one is not
-# exactly at a tag.
+# at HEAD silently moves to whatever was merged last. On Nscale NC a rebuild picked up nccl-tests
+# 2.21.1, released two days earlier, and nothing recorded which nccl-tests the previous image had been
+# built from -- an untagged master commit was as likely as a release -- so the two could not be
+# compared. The build logs each tree's `git describe`, warns when one is not exactly at a tag, and
+# writes both into /etc/nvis-image-build so the next image answers that question itself.
 #
 # Usage: build_nemo_nccl_image.sh [NCCL_SRC] [NCCL_TESTS_SRC] [BASE_SQSH] [OUT_SQSH]
 #   NCCL_SRC        NCCL git tree (checked out to target tag)
