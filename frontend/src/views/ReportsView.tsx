@@ -21,6 +21,7 @@ import TableRow from "@mui/material/TableRow";
 import LinearProgress from "@mui/material/LinearProgress";
 import { Text, Button, Banner } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../components/layout/PageHeader";
+import { useConfirm } from "../components/useConfirm";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { usePagedRows } from "../hooks/usePagedRows";
 import { TablePager } from "../components/TablePager";
@@ -86,6 +87,7 @@ function formatCreated(epochSeconds: number): string {
 }
 
 export function ReportsView() {
+  const { confirm, showAlert, confirmDialog } = useConfirm();
   const [generatedLoading, setGeneratedLoading] = useState(false);
   const [generatedError, setGeneratedError] = useState("");
   const [generatedMaxKept, setGeneratedMaxKept] = useState(0);
@@ -173,7 +175,11 @@ export function ReportsView() {
   }, []);
 
   const removeGenerated = useCallback(async (report: GeneratedReport) => {
-    if (!window.confirm(`Delete saved report ${report.filename}? This cannot be undone.`)) return;
+    if (!(await confirm({
+      title: "Delete report",
+      message: `Delete saved report ${report.filename}? This cannot be undone.`,
+      danger: true,
+    }))) return;
     const key = `delete:${report.id}`;
     setGeneratedActionKey(key);
     setGeneratedError("");
@@ -185,7 +191,7 @@ export function ReportsView() {
     } finally {
       setGeneratedActionKey(null);
     }
-  }, [loadGenerated]);
+  }, [loadGenerated, confirm]);
 
   const downloadFile = useCallback(async (host: string, name: string) => {
     const key = `${host}\0${name}`;
@@ -218,11 +224,11 @@ export function ReportsView() {
       a.remove();
       setTimeout(() => URL.revokeObjectURL(href), 2500);
     } catch (e) {
-      window.alert(e instanceof Error ? e.message : "Download failed");
+      void showAlert({ title: "Download failed", message: e instanceof Error ? e.message : "Download failed" });
     } finally {
       setDownloadingKey(null);
     }
-  }, []);
+  }, [showAlert]);
 
   const metaLines = [baseDir ? `Directory: ${baseDir}` : "", notice || ""].filter(Boolean);
 
@@ -432,6 +438,7 @@ export function ReportsView() {
         </Table>
       </TableContainer>
       <TablePager {...reportsPage} noun="files" />
+      {confirmDialog}
     </Box>
   );
 }

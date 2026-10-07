@@ -40,6 +40,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { PageHeader } from "../components/layout/PageHeader";
+import { useConfirm } from "../components/useConfirm";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
 import { TablePager } from "../components/TablePager";
 import { usePagedRows } from "../hooks/usePagedRows";
@@ -113,6 +114,7 @@ function AuditCell({ audit, onOutput }: { audit: PostRunAuditStatus | null; onOu
 }
 
 export function PostRunNodeReportView() {
+  const { confirm, confirmDialog } = useConfirm();
   const [data, setData] = useState<PostRunNodeReportResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -213,7 +215,11 @@ export function PostRunNodeReportView() {
   const launchAudit = async (kind: "hardware" | "network") => {
     if (!selected) return;
     const label = kind === "hardware" ? "hardware" : "NVLink/network";
-    if (!window.confirm(`Run the ${label} deep audit on ${selected.node}? Confirmed failures are automatically drained with the exact finding.`)) return;
+    if (!(await confirm({
+      title: "Run deep audit",
+      message: `Run the ${label} deep audit on ${selected.node}? Confirmed failures are automatically drained with the exact finding.`,
+      confirmLabel: "Run audit",
+    }))) return;
     setSaving(true);
     try {
       const runId = await startDeepAudit({
@@ -250,7 +256,12 @@ export function PostRunNodeReportView() {
 
   const saveMark = async () => {
     if (!selected || !reason.trim()) return;
-    if (drain && !window.confirm(`Drain ${selected.node} in Slurm and attach this exact reason?`)) return;
+    if (drain && !(await confirm({
+      title: "Drain node",
+      message: `Drain ${selected.node} in Slurm and attach this exact reason?`,
+      confirmLabel: "Drain",
+      danger: true,
+    }))) return;
     setSaving(true);
     try {
       await markPostRunNode({ node: selected.node, category, reason: reason.trim(), drain });
@@ -537,6 +548,7 @@ export function PostRunNodeReportView() {
         </DialogContent>
         <DialogActions><Button kind="secondary" onClick={() => setOutputOpen(false)}>Close</Button></DialogActions>
       </Dialog>
+      {confirmDialog}
     </Box>
   );
 }
