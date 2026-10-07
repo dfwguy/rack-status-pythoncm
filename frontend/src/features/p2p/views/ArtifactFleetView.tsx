@@ -50,12 +50,13 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { NodeHeatmap } from "../components/fleet/NodeHeatmap";
+import { OperationLogDialog } from "../components/OperationLogDialog";
 import { useFleetStatus } from "../hooks/useFleetStatus";
 import { startOperation } from "../services/fleetService";
 import { provision } from "../services/settingsService";
 import { ApiError } from "../lib/apiFetch";
 import { integrityExceptions, integrityToneOf } from "../lib/fleetHeatmap";
-import type { OperationAction } from "../types/fleet";
+import type { Operation, OperationAction } from "../types/fleet";
 
 const ALL_SUS = Array.from({ length: 14 }, (_, index) => index + 1);
 
@@ -76,6 +77,7 @@ export default function ArtifactFleetView() {
   const [notice, setNotice] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [provisionBusy, setProvisionBusy] = useState(false);
+  const [logOp, setLogOp] = useState<Operation | null>(null);
   const navigate = useNavigate();
 
   // Enabled-but-bare clusters report `provisioned: false`: the catalog still lists the shipped
@@ -726,7 +728,7 @@ export default function ArtifactFleetView() {
                         kind="secondary"
                         color="neutral"
                         size="tiny"
-                        onClick={() => window.open(operation.log, "_blank", "noopener")}
+                        onClick={() => setLogOp(operation)}
                       >
                         Open log
                       </Button>
@@ -738,6 +740,7 @@ export default function ArtifactFleetView() {
           </TableContainer>
         </Flex>
       </Card>
+      <OperationLogDialog open={logOp !== null} onClose={() => setLogOp(null)} operation={logOp} />
     </Flex>
   );
 }

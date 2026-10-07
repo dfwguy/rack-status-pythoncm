@@ -26,9 +26,16 @@ import datetime
 import json
 import os
 import pathlib
+import re
 import uuid
 
 from catalog.models import P2pSettings
+
+#: An operation id is this shape (the enqueue builder); validated before it reaches the filesystem so
+#: a hand-typed id can never escape the operations directory.
+_OP_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+#: Inline cap for the log viewer, mirroring the scheduler job-output dialog; larger falls to download.
+_LOG_INLINE_CAP = 512 * 1024
 
 #: Shared with the worker. On a co-located deployment this is under the app's state directory, which
 #: the worker reads from the same filesystem.
@@ -102,3 +109,26 @@ def enqueue(cluster_id: str, settings: P2pSettings, action: str,
     os.replace(tmp, target)
     # The UI's Operation shape: the private "request" block is for the worker, not the client.
     return {k: v for k, v in request.items() if k != "request"}
+
+
+def read_log(cluster_id: str, op_id: str) -> dict:
+    """The worker's log for one operation, in the scheduler job-output dialog's response shape.
+
+    ``{ok, content, size_bytes, filename}`` on success, ``{ok, too_large, size_bytes}`` for a log
+    past the inline cap, ``{ok: False, error}`` when the id is malformed or no log exists yet.
+    """
+    if not _OP_ID_RE.match(op_id or ""):
+        return {"ok": False, "error": "invalid operation id"}
+    path = _ops_dir(cluster_id) / f"{op_id}.log"
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return {"ok": False, "error": "no log for this operation yet"}
+    if size > _LOG_INLINE_CAP:
+        return {"ok": True, "too_large": True, "size_bytes": size, "filename": f"{op_id}.log"}
+    return {
+        "ok": True,
+        "content": path.read_text(encoding="utf-8", errors="replace"),
+        "size_bytes": size,
+        "filename": f"{op_id}.log",
+    }

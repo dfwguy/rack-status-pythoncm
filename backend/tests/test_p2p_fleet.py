@@ -173,6 +173,26 @@ class TestP2pStatus:
         req = _json.loads(written[0].read_text())
         assert req["request"]["rollout"]["wave_size"] == 50  # the cluster's campaign pacing travels with it
 
+    def test_operation_log_round_trip(self, client, tmp_path, monkeypatch):
+        import p2p_operations
+
+        _set_active_p2p(True)
+        self._complete_settings()
+        monkeypatch.setattr(p2p_operations, "_OPS_DIR", tmp_path / "ops")
+        op_id = client.post("/api/p2p/operations", json={"action": "preflight"}).get_json()["id"]
+        cluster_id = get_active(get_repo())["cluster"]
+        (tmp_path / "ops" / cluster_id / f"{op_id}.log").write_text("line one\nline two\n", encoding="utf-8")
+        body = client.get(f"/api/p2p/operations/{op_id}/log").get_json()
+        assert body["ok"] and "line two" in body["content"]
+
+    def test_operation_log_404_when_missing(self, client, tmp_path, monkeypatch):
+        import p2p_operations
+
+        _set_active_p2p(True)
+        self._complete_settings()
+        monkeypatch.setattr(p2p_operations, "_OPS_DIR", tmp_path / "ops")
+        assert client.get("/api/p2p/operations/nope-123/log").status_code == 404
+
 
 class TestP2pProvision:
     def test_provision_404_when_disabled(self, client):

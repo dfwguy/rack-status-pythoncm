@@ -13,7 +13,7 @@
 //
 // The operations-API client. Views call these, never `apiFetch` directly, so
 // the URL shapes live in one file and a server-side rename is a single edit.
-import { apiJson } from "../lib/apiFetch";
+import { apiFetch, apiJson } from "../lib/apiFetch";
 import type { FleetStatus, OperationAction, Operation } from "../types/fleet";
 
 // The P2P gateway lives under Rack Status's own `/api/*` surface (a
@@ -52,7 +52,26 @@ export function startOperation(request: OperationRequest): Promise<Operation> {
   });
 }
 
-/** Tail of an operation's log. Plain text, not JSON. */
-export function getOperationLogPath(operation: Operation): string {
-  return operation.log;
+/** One operation's log content, in the scheduler job-output dialog's response shape. */
+export type OperationLog = {
+  ok: boolean;
+  content?: string;
+  too_large?: boolean;
+  size_bytes?: number;
+  filename?: string;
+  error?: string;
+};
+
+/**
+ * Fetch an operation's worker log for the viewer dialog.
+ *
+ * Uses `apiFetch` rather than `apiJson` because a missing log is a normal 404 whose body still
+ * carries `{ok:false,error}` the dialog renders -- not an exception to swallow.
+ */
+export async function fetchOperationLog(opId: string): Promise<OperationLog> {
+  const res = await apiFetch(`${BASE}/operations/${encodeURIComponent(opId)}/log`, {
+    credentials: "same-origin",
+  });
+  if (res.status === 401) return { ok: false, error: "Not signed in." };
+  return (await res.json()) as OperationLog;
 }

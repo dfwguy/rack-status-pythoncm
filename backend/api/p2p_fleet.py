@@ -199,6 +199,23 @@ def p2p_operations():
     return jsonify(operation), 202
 
 
+@bp.route("/operations/<op_id>/log", methods=["GET"])
+@throttle.throttle(60, rationale="reads one operation's log file for the viewer dialog; no subprocess.")
+@action(get="p2p:read")
+def p2p_operation_log(op_id: str):
+    """The worker's log for one operation, for the in-app log dialog.
+
+    Same response shape as the scheduler job-output dialog (`ok`/`content`/`too_large`), so the P2P
+    viewer is the scheduler's log construct pointed at the operations directory rather than a job
+    stdout path.
+    """
+    _project, cluster, _platform = catalog_context.resolve()
+    if cluster is None or not getattr(cluster, "p2p_enabled", False):
+        return jsonify({"ok": False, "error": "P2P is not enabled for the active cluster."}), 404
+    result = p2p_ops.read_log(cluster.id, op_id)
+    return jsonify(result), 200 if result.get("ok") else 404
+
+
 @bp.route("/provision", methods=["POST"])
 @throttle.throttle(
     10,
