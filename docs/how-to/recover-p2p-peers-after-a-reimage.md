@@ -1,9 +1,12 @@
 ---
 diataxis: how-to
-description: Find every node whose NVIS-P2P peer is not working after a reimage, put back what the reimage removed, re-deploy the peers, and confirm the fleet is healthy before launching campaigns again.
+description: Find every node — newly onboarded or reimaged — whose NVIS-P2P peer is not working, put back what the node is missing, deploy the peers, and confirm the fleet is healthy before launching campaigns.
 ---
 
-# How to bring P2P peers back after a reimage
+# How to bring P2P peers up on new or reimaged nodes
+
+The same steps onboard **new** nodes: a freshly provisioned node starts in the state a reimage
+leaves behind, minus any surviving peer state.
 
 A reimage keeps the node's data partition — the peer's binaries, its storage and any images survive
 under the container directory — but wipes what lives on the root filesystem: a local account entry,
@@ -21,8 +24,13 @@ export NVIS_SERVICE_USER=<service user>          # Dragonfly Settings: service u
 export NVIS_SERVICE_GROUP=<service group>        # ...service group
 export NVIS_SERVICE_UID=<uid>                    # ...service uid
 export NVIS_SERVICE_GID=<gid>                    # ...service gid
+export NVIS_P2P_CATALOG_URL=http://<app server>:12130/.nvis-p2p/catalog/images.tsv
 cd "$NVIS_P2P_ROOT/scripts"
 ```
+
+`NVIS_P2P_CATALOG_URL` is what the deploy installs the 15-minute catalog refresh with. A reimaged
+node keeps the URL from its previous install on its data partition, but a **new** node has none:
+without the variable its deploy reports `catalog_refresh=not-installed`.
 
 On a BCM-managed cluster whose healthcheck drains nodes running unknown processes, also point the
 census and the preparation at that healthcheck's config:
@@ -93,7 +101,12 @@ bash deploy-catalog-peer-fleet.sh redeploy.txt reimage-recovery
 ```
 
 The deploy re-installs the peer unit and the 15-minute catalog refresh timer, and reports
-`catalog_refresh=` in each `DEPLOY_READY` line.
+`catalog_refresh=` in each `DEPLOY_READY` line. If it reads `not-installed`, install the timer on
+those nodes with the URL set:
+
+```bash
+xargs -P32 -I{} bash deploy-catalog-refresh-timer-node.sh {} < redeploy.txt
+```
 
 If a node's peer then crash-loops with `storage/metadata/LOCK: Permission denied` in
 `<peer dir>/logs/dfdaemon-service.log`, its surviving state is still owned by an earlier identity:

@@ -112,7 +112,7 @@ later waves should add almost nothing to the seed total.
 
 Deferred nodes fall into two buckets: `launch_limit_N` (pulled but never verified — usually a stale
 catalog, so go back to step 2 for them; `launch_limit_N:not_started` means the peer itself is not
-running, see [How to bring P2P peers back after a reimage](recover-p2p-peers-after-a-reimage.md))
+running, see [How to bring P2P peers up on new or reimaged nodes](recover-p2p-peers-after-a-reimage.md))
 and `unreachable_after_N_checks` (down or unreachable).
 Collect them into a new roster and re-run — the campaign is idempotent, so nodes that already have
 the image short-circuit instantly:
