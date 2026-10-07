@@ -21,7 +21,12 @@ vi.mock("../hooks/useFleetStatus", () => ({ useFleetStatus: () => fleetHook.valu
 
 const settings = vi.hoisted(() => ({ provision: vi.fn() }));
 vi.mock("../services/settingsService", () => settings);
-vi.mock("../services/fleetService", () => ({ startOperation: vi.fn() }));
+vi.mock("../services/fleetService", () => ({
+  startOperation: vi.fn(),
+  // The view loads rosters on mount to offer the targeting picker; the gate tests don't exercise
+  // it, so an empty set keeps the effect from throwing on an unmocked export.
+  getRosters: vi.fn().mockResolvedValue({ ok: true, cluster_id: "c1", rosters: [] }),
+}));
 
 function status(provisioned: boolean): FleetStatus {
   return {

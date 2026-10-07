@@ -508,6 +508,92 @@ class TestP2pRostersApi:
         assert bad.status_code == 400 and "invalid node name" in bad.get_json()["message"]
 
 
+class TestP2pCampaignsModel:
+    def test_round_trip_and_get(self):
+        c = models.P2pCampaigns.from_dict({"cluster_id": "c1", "campaigns": [
+            {"name": "nightly", "description": "the nemo roll", "image": "nemo.sqsh",
+             "roster": "SU19", "wave_size": 25, "parallelism": 200}]})
+        d = c.to_dict()
+        assert d["id"] == "c1"
+        back = models.P2pCampaigns.from_dict(d)
+        camp = back.get("nightly")
+        assert camp.image == "nemo.sqsh" and camp.roster == "SU19"
+        assert back.get("missing") is None
+        # An over-cap parallelism is a validation error, not silently clamped at the model layer.
+        assert any("parallelism" in p for p in back.validate())
+
+    def test_pacing_overrides_only_nonzero(self):
+        c = models.P2pCampaign(name="n", image="n.sqsh", wave_size=10, timeout_seconds=600)
+        # wave_size and timeout overridden; the rest inherit the cluster default (absent here).
+        assert c.pacing_overrides() == {"wave_size": 10, "timeout_seconds": 600}
+        assert models.P2pCampaign(name="n", image="n.sqsh").pacing_overrides() == {}
+
+    def test_validation(self):
+        bad = models.P2pCampaigns.from_dict({"cluster_id": "c1", "campaigns": [
+            {"name": "", "image": "a.sqsh"},
+            {"name": "bad-image", "image": "not-a-squashfs"},
+            {"name": "bad-roster", "image": "a.sqsh", "roster": "has space"},
+            {"name": "neg", "image": "a.sqsh", "max_launches": -1},
+            {"name": "dup", "image": "a.sqsh"}, {"name": "dup", "image": "b.sqsh"}]})
+        probs = bad.validate()
+        assert any("name is required" in p for p in probs)
+        assert any("bare *.sqsh" in p for p in probs)
+        assert any("invalid roster name" in p for p in probs)
+        assert any("must not be negative" in p for p in probs)
+        assert any("duplicate name" in p for p in probs)
+
+
+class TestP2pCampaignsApi:
+    def _complete_settings(self):
+        _configure_active_p2p(manager_ip="10.0.0.1", appserver_ip="10.0.0.2",
+                              inventory_pattern="n[01-09]")
+
+    def test_get_empty_when_none(self, client):
+        _set_active_p2p(True)
+        body = client.get("/api/p2p/campaigns").get_json()
+        assert body["ok"] and body["campaigns"] == []
+
+    def test_put_then_get(self, client):
+        _set_active_p2p(True)
+        put = client.put("/api/p2p/campaigns", json={"campaigns": [
+            {"name": "nemo-roll", "description": "", "image": "nemo.sqsh", "roster": "", "wave_size": 30}]})
+        assert put.status_code == 200
+        got = client.get("/api/p2p/campaigns").get_json()
+        assert [c["name"] for c in got["campaigns"]] == ["nemo-roll"]
+        assert got["campaigns"][0]["image"] == "nemo.sqsh" and got["campaigns"][0]["wave_size"] == 30
+
+    def test_put_rejects_invalid(self, client):
+        _set_active_p2p(True)
+        bad = client.put("/api/p2p/campaigns", json={"campaigns": [{"name": "x", "image": "nope"}]})
+        assert bad.status_code == 400 and "bare *.sqsh" in bad.get_json()["message"]
+
+    def test_launch_carries_the_campaign_image_roster_and_pacing(self, client, tmp_path, monkeypatch):
+        """A campaign launches through the operations enqueue: a distribute tagged with the campaign,
+        targeting its roster, paced by its overrides layered on the cluster default."""
+        import json as _json
+
+        import p2p_operations
+
+        _set_active_p2p(True)
+        self._complete_settings()
+        monkeypatch.setattr(p2p_operations, "_OPS_DIR", tmp_path / "ops")
+        client.put("/api/p2p/rosters", json={"rosters": [{"name": "SU19", "nodes": ["n1", "n2"]}]})
+        # The launch is a distribute the client composes from the saved campaign.
+        resp = client.post("/api/p2p/operations", json={
+            "action": "distribute", "images": ["nemo.sqsh"], "roster": "SU19",
+            "campaign": "nemo-roll", "pacing": {"wave_size": 25, "parallelism": 999}})
+        assert resp.status_code == 202
+        op = resp.get_json()
+        assert op["campaign"] == "nemo-roll" and op["roster"] == "SU19"
+        cluster_id = get_active(get_repo())["cluster"]
+        req = _json.loads(next((tmp_path / "ops" / cluster_id).glob("distribute-*.json")).read_text())
+        assert req["request"]["roster_nodes"] == ["n1", "n2"]
+        # The override wins for wave_size; parallelism is clamped to the engine cap; poll stays default.
+        assert req["request"]["rollout"]["wave_size"] == 25
+        assert req["request"]["rollout"]["parallelism"] == 128
+        assert req["request"]["rollout"]["poll_seconds"] == 60
+
+
 class TestP2pProvisionWorkflow:
     def test_native_stage_step_targets_the_app_server_current_dir(self, monkeypatch):
         import host_exec

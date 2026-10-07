@@ -63,17 +63,28 @@ def _ops_dir(cluster_id: str) -> pathlib.Path:
     return _OPS_DIR / cluster_id
 
 
+#: The pacing keys an operation's ``rollout`` block carries, and the names a campaign override uses.
+_ROLLOUT_KEYS = ("wave_size", "parallelism", "poll_seconds", "max_launches", "max_unreachable",
+                 "timeout_seconds")
+
+
 def enqueue(cluster_id: str, settings: P2pSettings, action: str,
-            images: list[str] | None, sus: list[int] | None, roster_name: str = "") -> dict:
+            images: list[str] | None, sus: list[int] | None, roster_name: str = "",
+            pacing: dict | None = None, campaign_name: str = "") -> dict:
     """Validate and queue one operation. Returns the ``Operation`` the UI renders.
 
     Raises :class:`OperationError` for a request the worker could not run: an unknown action, an
     image-scoped action with no image, or a named roster that does not exist. The caller maps that
     to a 400. A blank ``roster_name`` leaves the worker on the cluster's default inventory.
+
+    ``pacing`` overrides individual rollout knobs for this run only (a campaign launch supplies its
+    own wave/parallelism); unspecified keys inherit the cluster's settings. ``campaign_name`` tags
+    the operation so its history can be filtered back to the campaign that launched it.
     """
     images = [i for i in (images or []) if i]
     sus = [int(s) for s in (sus or [])]
     roster_name = (roster_name or "").strip()
+    campaign_name = (campaign_name or "").strip()
     if action not in SUPPORTED_ACTIONS:
         raise OperationError(f"unsupported operation: {action!r}")
     if action in IMAGE_REQUIRED and not images:
@@ -85,6 +96,15 @@ def enqueue(cluster_id: str, settings: P2pSettings, action: str,
             raise OperationError(f"unknown roster: {roster_name!r}")
         roster_nodes = roster.nodes
 
+    # The cluster's pacing, with any per-run override layered on top. Only the keys a campaign names
+    # change; the rest stay on the cluster default the worker would otherwise read.
+    rollout = {key: getattr(settings, f"rollout_{key}") for key in _ROLLOUT_KEYS}
+    for key, value in (pacing or {}).items():
+        if key in rollout and isinstance(value, int) and value > 0:
+            # Honour the rollout engine's 1..128 parallelism cap on every path, so a pacing override
+            # (from a campaign or a direct call) can never pace past what the engine accepts.
+            rollout[key] = min(value, 128) if key == "parallelism" else value
+
     op_id = f"{action}-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
     request = {
         "id": op_id,
@@ -92,6 +112,7 @@ def enqueue(cluster_id: str, settings: P2pSettings, action: str,
         "sus": sus,
         "images": images,
         "roster": roster_name or None,
+        "campaign": campaign_name or None,
         "state": "running",  # queued-for-the-worker reads as running to the UI until it resolves
         "started_at": _now(),
         "finished_at": None,
@@ -103,14 +124,7 @@ def enqueue(cluster_id: str, settings: P2pSettings, action: str,
             "container_path": settings.container_path,
             "install_root": settings.install_root,
             "inventory_source": settings.resolved_inventory_source(),
-            "rollout": {
-                "wave_size": settings.rollout_wave_size,
-                "parallelism": settings.rollout_parallelism,
-                "poll_seconds": settings.rollout_poll_seconds,
-                "max_launches": settings.rollout_max_launches,
-                "max_unreachable": settings.rollout_max_unreachable,
-                "timeout_seconds": settings.rollout_timeout_seconds,
-            },
+            "rollout": rollout,
         },
     }
     if roster_nodes:

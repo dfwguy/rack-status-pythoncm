@@ -119,6 +119,10 @@ export type Operation = {
   action: OperationAction;
   sus: number[];
   images: string[];
+  /** A named roster the operation targeted, or null for the default inventory. */
+  roster?: string | null;
+  /** The campaign that launched this operation, or null for an ad-hoc run. */
+  campaign?: string | null;
   state: "running" | "succeeded" | "failed";
   started_at: string;
   finished_at?: string;

@@ -59,6 +59,7 @@ import {
   UsersRound,
   Package,
   HardDriveDownload,
+  Rocket,
 } from "lucide-react";
 import { useP2pEnabled } from "../features/p2p/hooks/useP2pEnabled";
 
@@ -78,6 +79,7 @@ export type ViewId =
   | "p2pArtifacts"
   | "p2pCatalog"
   | "p2pRosters"
+  | "p2pCampaigns"
   | "p2pSettings"
   | "reports"
   | "analytics"
@@ -160,6 +162,7 @@ const navEntries: NavEntry[] = [
       { id: "p2pArtifacts", label: "Artifact Fleet", icon: <HardDriveDownload size={ICON_SIZE} /> },
       { id: "p2pCatalog", label: "Catalog", icon: <Boxes size={ICON_SIZE} /> },
       { id: "p2pRosters", label: "Rosters", icon: <Layers size={ICON_SIZE} /> },
+      { id: "p2pCampaigns", label: "Campaigns", icon: <Rocket size={ICON_SIZE} /> },
       { id: "p2pSettings", label: "Dragonfly Settings", icon: <Settings size={ICON_SIZE} /> },
     ],
   },

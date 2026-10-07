@@ -1543,6 +1543,117 @@ class P2pRosters:
         return problems
 
 
+#: A pacing override of 0 means "inherit the cluster's rollout default"; a positive value overrides
+#: it for this campaign only. These are the keys the operations enqueue reads off a request's
+#: ``rollout`` block, so the names match ``_rollout_env`` in the worker, minus the ``rollout_`` prefix.
+_CAMPAIGN_PACING_FIELDS = (
+    "wave_size",
+    "parallelism",
+    "poll_seconds",
+    "max_launches",
+    "max_unreachable",
+    "timeout_seconds",
+)
+
+
+@dataclass
+class P2pCampaign:
+    """A saved distribution: a task (catalog image) paired with a roster and optional pacing.
+
+    A campaign is the composable unit an operator names once and launches many times -- "roll
+    *this image* to *this roster* at *this pace*". Launching it enqueues a ``distribute`` operation
+    resolving the image, the roster, and any pacing overrides; the definition itself holds no run
+    state, so the same campaign re-runs idempotently and its history lives in the operations log.
+    """
+
+    name: str = ""
+    description: str = ""
+    image: str = ""
+    roster: str = ""
+    #: Pacing overrides; 0 on any field means "use the cluster's rollout default for it".
+    wave_size: int = 0
+    parallelism: int = 0
+    poll_seconds: int = 0
+    max_launches: int = 0
+    max_unreachable: int = 0
+    timeout_seconds: int = 0
+
+    @classmethod
+    def from_dict(cls, d: Any) -> P2pCampaign:
+        d = _as_dict(d)
+        return cls(
+            name=_as_str(d.get("name")),
+            description=_as_str(d.get("description")),
+            image=_as_str(d.get("image")),
+            roster=_as_str(d.get("roster")),
+            wave_size=_as_int(d.get("wave_size"), 0),
+            parallelism=_as_int(d.get("parallelism"), 0),
+            poll_seconds=_as_int(d.get("poll_seconds"), 0),
+            max_launches=_as_int(d.get("max_launches"), 0),
+            max_unreachable=_as_int(d.get("max_unreachable"), 0),
+            timeout_seconds=_as_int(d.get("timeout_seconds"), 0),
+        )
+
+    def pacing_overrides(self) -> dict[str, int]:
+        """The non-zero pacing fields, keyed as the enqueue's ``rollout`` block expects.
+
+        Only overridden fields appear, so the enqueue can layer them onto the cluster defaults and a
+        campaign that overrides nothing inherits the cluster's pacing entirely.
+        """
+        return {f: v for f in _CAMPAIGN_PACING_FIELDS if (v := getattr(self, f)) > 0}
+
+
+@dataclass
+class P2pCampaigns:
+    """A cluster's saved campaigns. Stored whole by ``cluster_id`` behind the ``Repo``, like the
+    other P2P documents -- the catalog it draws images from and the rosters it targets."""
+
+    cluster_id: str
+    campaigns: list[P2pCampaign] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: Any) -> P2pCampaigns:
+        d = _as_dict(d)
+        raw = d.get("campaigns")
+        campaigns = [P2pCampaign.from_dict(c) for c in raw] if isinstance(raw, list) else []
+        return cls(cluster_id=_as_str(d.get("cluster_id")), campaigns=campaigns)
+
+    def to_dict(self) -> dict[str, Any]:
+        out = asdict(self)
+        out["id"] = self.cluster_id
+        return out
+
+    def get(self, name: str) -> P2pCampaign | None:
+        """The campaign with this name, or None."""
+        return next((c for c in self.campaigns if c.name == name), None)
+
+    def validate(self) -> list[str]:
+        problems: list[str] = []
+        if not valid_id(self.cluster_id):
+            problems.append(f"invalid cluster id: {self.cluster_id!r}")
+        seen: set[str] = set()
+        for i, c in enumerate(self.campaigns):
+            where = c.name or f"campaign #{i + 1}"
+            if not c.name.strip():
+                problems.append(f"{where}: name is required")
+            elif c.name in seen:
+                problems.append(f"{where}: duplicate name")
+            else:
+                seen.add(c.name)
+            if not _CATALOG_FILENAME_RE.match(c.image):
+                problems.append(f"{where}: image must be a bare *.sqsh name")
+            if c.roster and not _ROSTER_NODE_RE.match(c.roster):
+                problems.append(f"{where}: invalid roster name {c.roster!r}")
+            # Pacing overrides are optional (0 inherits the cluster default); when set they obey the
+            # same bounds the settings document enforces, so a launch can't pace past the engine's cap.
+            if c.parallelism and not 1 <= c.parallelism <= 128:
+                problems.append(f"{where}: parallelism override must be between 1 and 128, got {c.parallelism}")
+            for label in ("wave_size", "poll_seconds", "max_launches", "max_unreachable", "timeout_seconds"):
+                if getattr(c, label) < 0:
+                    problems.append(f"{where}: {label} override must not be negative")
+        return problems
+
+
 @dataclass
 class Project:
     id: str

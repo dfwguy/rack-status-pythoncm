@@ -33,6 +33,7 @@ import json
 import logging
 import pathlib
 
+import p2p_campaigns
 import p2p_catalog
 import p2p_config
 import p2p_operations as p2p_ops
@@ -211,9 +212,11 @@ def p2p_operations():
             400,
         )
     body = request.get_json(silent=True) or {}
+    pacing = body.get("pacing") if isinstance(body.get("pacing"), dict) else None
     try:
         operation = p2p_ops.enqueue(cluster.id, settings, str(body.get("action", "")),
-                                    body.get("images"), body.get("sus"), str(body.get("roster", "")))
+                                    body.get("images"), body.get("sus"), str(body.get("roster", "")),
+                                    pacing=pacing, campaign_name=str(body.get("campaign", "")))
     except p2p_ops.OperationError as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400
     return jsonify(operation), 202
@@ -301,6 +304,40 @@ def p2p_rosters_put():
     except ValueError as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400
     return jsonify({"ok": True, "cluster_id": cluster.id, "rosters": saved.to_dict()["rosters"]})
+
+
+@bp.route("/campaigns", methods=["GET"])
+@action(get="p2p:read")
+def p2p_campaigns_get():
+    """The active cluster's saved campaigns (task × roster × pacing definitions)."""
+    _project, cluster, _platform = catalog_context.resolve()
+    if cluster is None or not getattr(cluster, "p2p_enabled", False):
+        return jsonify({"ok": False, "message": "P2P is not enabled for the active cluster."}), 404
+    campaigns = p2p_campaigns.get_campaigns(cluster.id).to_dict()["campaigns"]
+    return jsonify({"ok": True, "cluster_id": cluster.id, "campaigns": campaigns})
+
+
+@bp.route("/campaigns", methods=["PUT"])
+@action(put="p2p:campaign")
+def p2p_campaigns_put():
+    """Replace the active cluster's saved campaigns. 400 on an invalid document.
+
+    A campaign is a definition, not a run: saving one never touches the fleet. Launching it is a
+    separate ``POST /operations`` (a ``distribute`` carrying the campaign's image, roster, pacing,
+    and name), so the same campaign re-runs idempotently and its runs are the operations it tagged.
+    """
+    _project, cluster, _platform = catalog_context.resolve()
+    if cluster is None or not getattr(cluster, "p2p_enabled", False):
+        return jsonify({"ok": False, "message": "P2P is not enabled for the active cluster."}), 404
+    body = request.get_json(silent=True) or {}
+    campaigns = models.P2pCampaigns.from_dict(
+        {"cluster_id": cluster.id, "campaigns": body.get("campaigns", [])}
+    )
+    try:
+        saved = p2p_campaigns.save_campaigns(campaigns)
+    except ValueError as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+    return jsonify({"ok": True, "cluster_id": cluster.id, "campaigns": saved.to_dict()["campaigns"]})
 
 
 @bp.route("/provision", methods=["POST"])

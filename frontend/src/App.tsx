@@ -64,6 +64,7 @@ const MultirackView = lazy(() => import("./views/MultirackView").then((m) => ({ 
 const ArtifactFleetView = lazy(() => import("./features/p2p/views/ArtifactFleetView"));
 const CatalogEditorView = lazy(() => import("./features/p2p/views/CatalogEditorView"));
 const RostersEditorView = lazy(() => import("./features/p2p/views/RostersEditorView"));
+const CampaignsView = lazy(() => import("./features/p2p/views/CampaignsView"));
 const P2pSettingsView = lazy(() => import("./features/p2p/views/P2pSettingsView"));
 const SlurmView = lazy(() => import("./views/SlurmView").then((m) => ({ default: m.SlurmView })));
 const ReportsView = lazy(() => import("./views/ReportsView").then((m) => ({ default: m.ReportsView })));
@@ -122,6 +123,7 @@ const VIEW_TITLES: Record<ViewId, string> = {
   p2pArtifacts: "Artifact Fleet",
   p2pCatalog: "Catalog",
   p2pRosters: "Rosters",
+  p2pCampaigns: "Campaigns",
   p2pSettings: "Dragonfly Settings",
   reports: "Reports",
   analytics: "Analytics",
@@ -422,6 +424,7 @@ function AppContent() {
           <Route path="/p2p/artifacts" element={<ArtifactFleetView />} />
           <Route path="/p2p/catalog" element={<CatalogEditorView />} />
           <Route path="/p2p/rosters" element={<RostersEditorView />} />
+          <Route path="/p2p/campaigns" element={<CampaignsView />} />
           <Route path="/p2p/settings" element={<P2pSettingsView />} />
           <Route path="/infrastructure/ethernet" element={<InfrastructureView segment="ethernet" />} />
           <Route path="/infrastructure/ib-nvlink" element={<InfrastructureView segment="ib-nvlink" />} />

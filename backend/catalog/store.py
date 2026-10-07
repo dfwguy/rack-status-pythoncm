@@ -55,6 +55,7 @@ TABLE_NPI_TOOLS = "npi_tools"
 TABLE_P2P_SETTINGS = "p2p_settings"
 TABLE_P2P_CATALOG = "p2p_catalog"
 TABLE_P2P_ROSTERS = "p2p_rosters"
+TABLE_P2P_CAMPAIGNS = "p2p_campaigns"
 TABLE_META = "meta"
 
 SCHEMA_VERSION = 2

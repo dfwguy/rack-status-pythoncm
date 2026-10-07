@@ -960,6 +960,18 @@
   "variant": "sync"
  },
  {
+  "endpoint": "p2p_fleet.p2p_campaigns_get",
+  "method": "GET",
+  "action": "p2p:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "p2p_fleet.p2p_campaigns_put",
+  "method": "PUT",
+  "action": "p2p:campaign",
+  "variant": "sync"
+ },
+ {
   "endpoint": "p2p_fleet.p2p_catalog_get",
   "method": "GET",
   "action": "p2p:read",

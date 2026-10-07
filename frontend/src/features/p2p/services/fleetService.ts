@@ -83,6 +83,67 @@ export function saveRosters(rosters: RosterEdit[]): Promise<RostersDoc> {
   });
 }
 
+/** One saved campaign: a task (catalog image) paired with a roster and optional pacing overrides. */
+export type CampaignEdit = {
+  name: string;
+  description: string;
+  /** Catalog image filename (a *.sqsh). */
+  image: string;
+  /** A named roster, or blank for the cluster's default inventory. */
+  roster: string;
+  /** Pacing overrides; 0 on a field inherits the cluster's rollout default. */
+  wave_size: number;
+  parallelism: number;
+  poll_seconds: number;
+  max_launches: number;
+  max_unreachable: number;
+  timeout_seconds: number;
+};
+
+export type CampaignsDoc = {
+  ok: boolean;
+  cluster_id: string;
+  campaigns: CampaignEdit[];
+};
+
+/** The active cluster's saved campaigns. */
+export function getCampaigns(): Promise<CampaignsDoc> {
+  return apiJson<CampaignsDoc>(`${BASE}/campaigns`);
+}
+
+/** Replace the active cluster's campaigns. Rejects with an `ApiError` (400) on an invalid document. */
+export function saveCampaigns(campaigns: CampaignEdit[]): Promise<CampaignsDoc> {
+  return apiJson<CampaignsDoc>(`${BASE}/campaigns`, {
+    method: "PUT",
+    body: JSON.stringify({ campaigns }),
+  });
+}
+
+/** The campaign fields that override the cluster's rollout pacing. */
+const CAMPAIGN_PACING_KEYS = [
+  "wave_size", "parallelism", "poll_seconds", "max_launches", "max_unreachable", "timeout_seconds",
+] as const;
+
+/**
+ * Launch a saved campaign: a `distribute` operation carrying the campaign's image, roster, and the
+ * non-zero pacing overrides, tagged with the campaign name so its runs trace back to it. Reuses the
+ * operations enqueue (and its single-flight 409), so a campaign holds no run state of its own.
+ */
+export function launchCampaign(campaign: CampaignEdit): Promise<Operation> {
+  const pacing: Record<string, number> = {};
+  for (const key of CAMPAIGN_PACING_KEYS) {
+    if (campaign[key] > 0) pacing[key] = campaign[key];
+  }
+  return startOperation({
+    action: "distribute",
+    sus: [],
+    images: [campaign.image],
+    roster: campaign.roster,
+    pacing,
+    campaign: campaign.name,
+  });
+}
+
 export type OperationRequest = {
   action: OperationAction;
   sus: number[];
@@ -90,6 +151,10 @@ export type OperationRequest = {
   images?: string[];
   /** A named roster to target; blank/absent targets the cluster's default inventory. */
   roster?: string;
+  /** Per-run rollout pacing overrides; keys the cluster default inherits are omitted. */
+  pacing?: Record<string, number>;
+  /** The campaign that launched this run, if any; tags the operation for history. */
+  campaign?: string;
 };
 
 /**
@@ -108,6 +173,8 @@ export function startOperation(request: OperationRequest): Promise<Operation> {
       sus: request.sus,
       images: request.images ?? [],
       roster: request.roster ?? "",
+      pacing: request.pacing ?? {},
+      campaign: request.campaign ?? "",
     }),
   });
 }
