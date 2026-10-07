@@ -52,6 +52,22 @@ GITLESS_IMAGES = ("python:3.12-slim", "node:24-slim")
 # they are the reflexes a shell script reaches for and are equally absent from a slim image.
 ABSENT_TOOLS = ("git", "curl", "make")
 
+#: The Debian packages that put each tool on PATH. Installing one is the remedy the guard's own
+#: failure message recommends, so from that line on the tool is present for the rest of the job.
+PROVIDED_BY = {"git": {"git"}, "curl": {"curl"}, "make": {"make", "build-essential"}}
+
+#: An `apt-get install` and its arguments, up to the next `&&`, `||`, `;` or pipe.
+_APT_INSTALL = re.compile(r"\bapt-get\s+install\b[^&|;]*")
+
+
+def _apt_packages(line: str) -> set[str]:
+    """The packages one command line installs with `apt-get install` (flags excluded)."""
+    packages: set[str] = set()
+    for match in _APT_INSTALL.finditer(line):
+        packages |= {arg for arg in match.group(0).split()[2:] if not arg.startswith("-")}
+    return packages
+
+
 # Keys that are pipeline configuration rather than jobs.
 NOT_A_JOB = {"include", "default", "stages", "variables", "workflow"}
 
@@ -122,8 +138,13 @@ class TestNoJobCallsAToolItsImageLacks:
         # like `/usr/bin/gitfoo` do not count as an invocation of the bare command.
         pattern = re.compile(rf"(?<![\w./-])\b{tool}\b")
         for name, job in _jobs_on_gitless_images().items():
+            installed: set[str] = set()
             for line in _command_lines(job):
-                if pattern.search(line):
+                installed |= _apt_packages(line)
+                # An install's own arguments name the tool without running it; only a use counts,
+                # and only before the line that installs it.
+                used = pattern.search(_APT_INSTALL.sub("", line))
+                if used and not PROVIDED_BY[tool] & installed:
                     offenders.append(f"{name}: {line}")
 
         assert not offenders, (
@@ -133,6 +154,42 @@ class TestNoJobCallsAToolItsImageLacks:
             f"wrong cause. Use a Python/stdlib equivalent, or install the tool explicitly.\n  "
             + "\n  ".join(offenders)
         )
+
+    @pytest.mark.parametrize(
+        "line, tool, flagged",
+        [
+            ("apt-get update && apt-get install -y curl", "curl", False),
+            ("curl -fsS https://example", "curl", True),
+            ("apt-get install -y -qq build-essential && make -C x", "make", False),
+            ("make -C x && apt-get install -y make", "make", True),
+            ("git --version", "git", True),
+        ],
+    )
+    def test_an_install_covers_the_lines_after_it_and_no_others(self, line, tool, flagged):
+        """Guards the guard: installing a tool is an accepted remedy, but only from that line on."""
+        pattern = re.compile(rf"(?<![\w./-])\b{tool}\b")
+        installed: set[str] = set()
+        hits = []
+        for part in line.split(" && "):
+            installed |= _apt_packages(part)
+            if pattern.search(_APT_INSTALL.sub("", part)) and not PROVIDED_BY[tool] & installed:
+                hits.append(part)
+        assert bool(hits) is flagged
+
+    @pytest.mark.parametrize(
+        "package, why",
+        [
+            ("squashfs-tools", "test_enroot_scrub_rootfs.py builds and reads images with mksquashfs/unsquashfs"),
+            ("curl", "test_p2p_catalog_refresh.py runs the node refresh script, which fetches with curl"),
+        ],
+    )
+    def test_the_test_job_provides_the_tools_the_suite_runs(self, package, why):
+        """Those tests skip where the tool is absent, and on this image the skip was silent: green,
+        while testing nothing. Asserting the install keeps them running where the whole suite runs."""
+        installed: set[str] = set()
+        for line in _command_lines(_pipeline()["python-test"]):
+            installed |= _apt_packages(line)
+        assert package in installed, f"python-test no longer installs {package}, but {why}"
 
     def test_the_test_job_provides_rsync_because_the_suite_shells_out_to_it(self):
         """`bin/bootstrap-project-scripts.sh` needs `rsync`, and four tests drive it.
