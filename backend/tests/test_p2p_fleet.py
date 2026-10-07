@@ -532,15 +532,20 @@ class TestP2pCampaignsModel:
         bad = models.P2pCampaigns.from_dict({"cluster_id": "c1", "campaigns": [
             {"name": "", "image": "a.sqsh"},
             {"name": "bad-image", "image": "not-a-squashfs"},
-            {"name": "bad-roster", "image": "a.sqsh", "roster": "has space"},
             {"name": "neg", "image": "a.sqsh", "max_launches": -1},
             {"name": "dup", "image": "a.sqsh"}, {"name": "dup", "image": "b.sqsh"}]})
         probs = bad.validate()
         assert any("name is required" in p for p in probs)
         assert any("bare *.sqsh" in p for p in probs)
-        assert any("invalid roster name" in p for p in probs)
         assert any("must not be negative" in p for p in probs)
         assert any("duplicate name" in p for p in probs)
+
+    def test_roster_reference_is_free_form(self):
+        # A roster name is a lookup key, not a node list -- a name with spaces ("All fleet") is valid;
+        # whether it resolves to a real roster is checked at launch, not here.
+        ok = models.P2pCampaigns.from_dict({"cluster_id": "c1", "campaigns": [
+            {"name": "fleetwide", "image": "a.sqsh", "roster": "All fleet"}]})
+        assert ok.validate() == []
 
 
 class TestP2pCampaignsApi:

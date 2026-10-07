@@ -1642,8 +1642,10 @@ class P2pCampaigns:
                 seen.add(c.name)
             if not _CATALOG_FILENAME_RE.match(c.image):
                 problems.append(f"{where}: image must be a bare *.sqsh name")
-            if c.roster and not _ROSTER_NODE_RE.match(c.roster):
-                problems.append(f"{where}: invalid roster name {c.roster!r}")
+            # The roster is a reference, not a node list: blank means the whole fleet, and a name is
+            # free-form (roster names allow spaces, e.g. "All fleet"). It is only ever a lookup key,
+            # never interpolated into a fan-out, so it carries no charset constraint here; the enqueue
+            # rejects a name that resolves to no roster at launch time.
             # Pacing overrides are optional (0 inherits the cluster default); when set they obey the
             # same bounds the settings document enforces, so a launch can't pace past the engine's cap.
             if c.parallelism and not 1 <= c.parallelism <= 128:
