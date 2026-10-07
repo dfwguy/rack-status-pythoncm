@@ -26,12 +26,12 @@ from __future__ import annotations
 import os
 import re
 
+import config_env
 import host_exec
 from config_env import _eget, _env_int
 from core import is_valid_node_hostname
 from core import slurm_job_base_id as _slurm_job_base_id
 from naming import _nvis_naming
-from native_status import rack_mapping_mode
 from platforms import get_platform as _get_platform
 from slurm_query import (
     _all_slurm_nodenames,
@@ -173,7 +173,7 @@ def validation_target_for_rack(rack: str, override: str | None) -> str:
             return ",".join(hosts)
     if not rack:
         raise ValueError("an explicit node target is required when rack is empty")
-    if rack_mapping_mode() != "direct":
+    if config_env.rack_mapping_mode() != "direct":
         raise ValueError("rack placement is unavailable; select explicit node hostnames")
     return _nvis_naming().build_validation_target(
         rack, _validation_ct_inner(), override

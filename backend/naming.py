@@ -23,7 +23,9 @@ cluster changes, so always go through ``_nvis_naming()`` rather than holding ont
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Iterable
 from pathlib import Path
+from typing import Any
 
 import nvis_id_templates
 from config_env import _eget
@@ -35,6 +37,34 @@ def _nvis_naming() -> nvis_id_templates.NvisNaming:
 
 def _normalize_rack_id(rack: str) -> str:
     return _nvis_naming().normalize_rack_id(rack)
+
+
+def provider_node_racks(
+    hosts: Iterable[str], racks: Iterable[str], records: list[dict[str, Any]] | None,
+    *, naming: nvis_id_templates.NvisNaming | None = None,
+    normalize: Callable[[str], str] | None = None,
+) -> dict[str, str]:
+    """Join provider placement to real host names and known racks, preserving their spelling.
+
+    Status can supply its legacy rack alias normalizer; naming templates handle the normal
+    provider rack-object to dashboard-id mapping for both status and validation targets.
+    """
+    schema = naming or _nvis_naming()
+    known_hosts = {host.casefold(): host for host in hosts}
+    known_racks = {rack.casefold(): rack for rack in racks}
+    result: dict[str, str] = {}
+    for record in records or []:
+        host = known_hosts.get(record["id"].casefold())
+        placement = record.get("rack")
+        if host is None or not placement:
+            continue
+        mapped = schema.map_cmsh_rack_list_token(placement)
+        if not mapped:
+            mapped = normalize(placement) if normalize else placement.strip()
+        rack = known_racks.get(mapped.casefold())
+        if rack is not None:
+            result[host] = rack
+    return result
 
 
 # --- Log-basename classification -------------------------------------------------------------

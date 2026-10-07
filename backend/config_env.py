@@ -920,6 +920,12 @@ def _eget(name: str, default: str | None = None) -> str | None:
     return default
 
 
+def rack_mapping_mode() -> str:
+    """Active cluster placement mode; blank or unknown values retain Direct behavior."""
+    mode = (_eget("NVIS_RACK_MAPPING_MODE", "direct") or "direct").strip().lower()
+    return mode if mode in ("translate", "pool") else "direct"
+
+
 def _eget_int(name: str, default: int) -> int:
     """Like ``_env_int`` but honors catalog overlays + Settings overrides via ``_eget``.
 

@@ -42,7 +42,7 @@ def isolated(monkeypatch):
     monkeypatch.setattr(ns, "_env_int", lambda _key, default: default)
     monkeypatch.delenv("SINFO_OPTS", raising=False)
     # A Reno cluster is configured pool; the hostname carries no rack.
-    monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "pool")
+    monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "pool")
     for name in ("run_slurm_on_host", "run_on_host", "which", "resolve"):
         monkeypatch.setattr(ns.host_exec, name, Mock(side_effect=AssertionError(f"unexpected {name}")))
 

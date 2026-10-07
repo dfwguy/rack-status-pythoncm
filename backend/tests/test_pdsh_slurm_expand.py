@@ -11,7 +11,9 @@
 
 import contextlib
 import os
+import subprocess
 import sys
+from pathlib import Path
 from unittest import mock
 
 import nvis_id_templates as nid
@@ -132,14 +134,15 @@ def test_validation_target_without_rack_uses_exact_hostname():
 
 
 def test_translated_rack_validation_uses_actual_scheduler_hostnames(monkeypatch):
-    import native_status as ns
+    import config_env
+    import naming
     import node_targets
     import slurm_query
 
-    monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
-    monkeypatch.setattr(ns, "_nvis_naming", lambda: nid.get_nvis_naming("F[41-42]", "dgx-b300-[01-04]", ""))
+    monkeypatch.setattr(config_env, "rack_mapping_mode", lambda: "translate")
+    monkeypatch.setattr(naming, "_nvis_naming", lambda: nid.get_nvis_naming("F[41-42]", "dgx-b300-[01-04]", ""))
     monkeypatch.setattr(slurm_query, "_all_slurm_nodenames", lambda: ["DGX-B300-01", "dgx-b300-02"])
-    monkeypatch.setattr(ns, "collect_slurm_placement_records", lambda: [
+    monkeypatch.setattr(slurm_query, "collect_slurm_placement_records", lambda: [
         {"id": "dgx-b300-01", "rack": "F41"},
         {"id": "dgx-b300-02", "rack": "F42"},
         {"id": "dgx-b300-03", "rack": "F41"},  # absent from Slurm
@@ -150,13 +153,23 @@ def test_translated_rack_validation_uses_actual_scheduler_hostnames(monkeypatch)
 
 @pytest.mark.parametrize("mode", ["translate", "pool"])
 def test_nondirect_rack_validation_never_falls_back_to_invented_hostnames(monkeypatch, mode):
-    import native_status as ns
+    import config_env
     import node_targets
 
-    monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: mode)
+    monkeypatch.setattr(config_env, "rack_mapping_mode", lambda: mode)
     monkeypatch.setattr(node_targets, "_rack_node_hostnames_from_inventory", lambda _rack: [])
     with pytest.raises(ValueError, match="select explicit node hostnames"):
         node_targets.validation_target_for_rack("F41", None)
+
+
+def test_query_and_target_primitives_import_without_the_status_orchestrator():
+    backend = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.modules['native_status'] = None; import slurm_query; import node_targets"],
+        cwd=backend, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_grafana_embed_host_regex_prefers_rack_prefix():

@@ -18,6 +18,7 @@ import native_status as ns
 import nvis_id_templates as ids
 import pytest
 import rack_status_engine as engine
+import slurm_query
 
 
 @pytest.fixture(autouse=True)
@@ -40,6 +41,7 @@ def isolated_inventory(monkeypatch):
         sinfo_cmd=lambda opts: ("sinfo", opts),
         scontrol_hostnames_cmd=lambda spec: ("scontrol-hostnames", spec),
     ))
+    monkeypatch.setattr(slurm_query, "_get_platform", lambda: ns._get_platform())
     for name in ("run_slurm_on_host", "run_on_host", "which", "resolve"):
         monkeypatch.setattr(ns.host_exec, name, Mock(side_effect=AssertionError("unexpected host call")))
 
@@ -92,19 +94,19 @@ class TestRackMappingMode:
     """
 
     def test_direct_parses_the_rack_out_of_the_hostname(self, monkeypatch):
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "direct")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "direct")
         inv = ns.build_node_inventory(_MAP_NODES, _MAP_RACKS, records=[])
         assert inv[0]["rack"] == "p1-r5"
 
     def test_translate_ignores_the_hostname_when_provider_is_silent(self, monkeypatch):
         """No provider placement -> ungrouped, rather than a hostname-guessed rack."""
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "translate")
         inv = ns.build_node_inventory(_MAP_NODES, _MAP_RACKS, records=[])
         assert inv[0]["rack"] is None
 
     def test_translate_places_from_the_provider_rack_attribute(self, monkeypatch):
         """The NC path: rack/slot come from the cluster manager's device record, not the name."""
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "translate")
         records = [{"id": "p1-r5-ct3", "rack": "p1-r5", "ip": ""}]
         inv = ns.build_node_inventory(_MAP_NODES, _MAP_RACKS, records=records)
         assert inv[0]["rack"] == "p1-r5"
@@ -133,7 +135,7 @@ class TestProviderRackCounts:
 def test_translated_slurm_uses_bcm_placement_without_changing_roster(monkeypatch):
     from platforms.bcm import BCMProvider
 
-    monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+    monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "translate")
     naming = ids.get_nvis_naming("F[41-42]", "dgx-b300-[01-04]", "")
     monkeypatch.setattr(ns, "_nvis_naming", lambda: naming)
     monkeypatch.setattr(ns, "_get_platform", BCMProvider)
@@ -159,7 +161,7 @@ def test_translated_slurm_uses_bcm_placement_without_changing_roster(monkeypatch
 
 
 def test_translated_placement_failure_keeps_slurm_nodes_and_gpu_shape(monkeypatch):
-    monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+    monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "translate")
     provider = SimpleNamespace(compute_node_inventory=Mock(side_effect=RuntimeError("BCM offline")))
     monkeypatch.setattr(ns, "_get_platform", lambda: provider)
     monkeypatch.setattr(ns, "collect_sinfo_nodes_and_shapes", lambda: (
@@ -540,23 +542,23 @@ class TestPoolMode:
     """No rack objects, no provider rack, no hostname rack: the node is the atom."""
 
     def test_mode_resolves_and_is_detected(self, monkeypatch):
-        monkeypatch.setattr(ns, "_native_env_ds", lambda _k, _d="": "pool")
+        monkeypatch.setattr(ns.config_env, "_eget", lambda _k, _d="": "pool")
         assert ns._rack_mapping_mode() == "pool"
         assert ns.is_pool_mode() is True
         assert ns._hostname_encodes_rack() is False
 
     def test_unknown_mode_falls_back_to_direct(self, monkeypatch):
-        monkeypatch.setattr(ns, "_native_env_ds", lambda _k, _d="": "bananas")
+        monkeypatch.setattr(ns.config_env, "_eget", lambda _k, _d="": "bananas")
         assert ns._rack_mapping_mode() == "direct"
 
     def test_pool_does_not_invent_a_rack_from_the_hostname(self, monkeypatch):
         # A hostname the direct template WOULD parse; pool must still leave it ungrouped.
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "pool")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "pool")
         inv = ns.build_node_inventory(_MAP_NODES, _MAP_RACKS, records=[])
         assert inv[0]["rack"] is None
 
     def test_pool_ignores_provider_placement(self, monkeypatch):
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "pool")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "pool")
         inv = ns.build_node_inventory(_MAP_NODES, _MAP_RACKS, records=[
             {"id": "p1-r5-ct3", "rack": "p1-r5", "rack_unit": "3"},
         ])
@@ -564,7 +566,7 @@ class TestPoolMode:
         assert "rack_unit" not in inv[0]
 
     def test_snapshot_reports_pool_and_keeps_shape(self, monkeypatch):
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "pool")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "pool")
         run = Mock(return_value=slurm_response("gpu-rno-248 idle gpu:nvidia:8\n"))
         monkeypatch.setattr(ns.host_exec, "run_slurm_on_host", run)
         state = ns.NativeRackTableState("pool", Path("/logs"))

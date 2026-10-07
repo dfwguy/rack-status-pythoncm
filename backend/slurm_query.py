@@ -27,6 +27,7 @@ reportable condition the UI shows, not a 500. A timeout reports the budget it sp
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shlex
@@ -35,14 +36,17 @@ import threading
 import time
 from pathlib import Path
 
+import config_env
 import host_exec
-import native_status
 from config_env import _eget, _env_int
 from core import SLURM_JOB_ID_RE, SLURM_STDOUT_RE
 from core import rpath as _rpath
 from core import slurm_job_base_id as _slurm_job_base_id
+from naming import provider_node_racks
 from paths import _allowed_roots, _default_log_dir, _resolve_log_dir
 from platforms import get_platform as _get_platform
+
+_logger = logging.getLogger(__name__)
 
 _SACCT_FIELD_ORDER = (
     "job_id", "name", "partition", "nnodes", "nodelist", "start", "end", "elapsed", "state", "exit_code",
@@ -113,6 +117,17 @@ def _all_slurm_nodenames() -> list[str]:
         return cached
 
 
+def collect_slurm_placement_records() -> list[dict[str, str | None]] | None:
+    """Optional provider placement; failure must never erase the scheduler roster."""
+    if config_env.rack_mapping_mode() != "translate":
+        return None
+    try:
+        return _get_platform().compute_node_inventory()
+    except Exception:
+        _logger.warning("Provider placement unavailable; retaining ungrouped Slurm nodes", exc_info=True)
+        return []
+
+
 def _rack_node_hostnames_from_inventory(rack: str) -> list[str]:
     """Real node hostnames belonging to *rack*, derived from live Slurm inventory.
 
@@ -126,12 +141,8 @@ def _rack_node_hostnames_from_inventory(rack: str) -> list[str]:
     hosts = _all_slurm_nodenames()
     if not hosts:
         return []
-    if native_status.rack_mapping_mode() != "direct":
-        inventory = native_status.build_node_inventory(
-            dict.fromkeys(hosts, ""), [rid],
-            records=native_status.collect_slurm_placement_records(),
-        )
-        return [node["id"] for node in inventory if node["rack"] is not None]
+    if config_env.rack_mapping_mode() != "direct":
+        return list(provider_node_racks(hosts, [rid], collect_slurm_placement_records()))
     rid_cf = rid.casefold()
     seps = ("-", "_", ".", ":", "/")
     matched: list[str] = []

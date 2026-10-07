@@ -76,6 +76,7 @@ from paths import (
     _script_exists,
 )
 from platforms import get_platform as _get_platform
+from slurm_query import collect_slurm_placement_records
 
 _logger = logging.getLogger(__name__)
 
@@ -413,7 +414,7 @@ def run_rack_status(log_dir: Path, include_raw: bool = False) -> dict:
             records = None
             if _eget("RACK_SCHEDULER", "slurm") == "slurm":
                 node_states = native_status.collect_sinfo_nodes()
-                records = native_status.collect_slurm_placement_records()
+                records = collect_slurm_placement_records()
             else:
                 records = _get_platform().compute_node_inventory()
                 node_states = {record["id"]: record.get("scheduler_state", "") for record in records}

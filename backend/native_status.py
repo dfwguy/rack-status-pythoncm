@@ -51,7 +51,9 @@ import nvis_id_templates as _nvis_ids
 import results_history
 from core import is_valid_node_hostname
 from json_db import atomic_write_json
+from naming import provider_node_racks
 from platforms import get_platform as _get_platform
+from slurm_query import collect_slurm_placement_records
 
 _logger = logging.getLogger(__name__)
 
@@ -187,10 +189,7 @@ def _rack_mapping_mode() -> str:
     the historical behaviour, so a stale or empty value never hides a cluster's racks. Only the
     three known values are honoured; 'pool' must be set explicitly (a blank value never means pool).
     """
-    mode = _native_env_ds("NVIS_RACK_MAPPING_MODE", "direct").strip().lower()
-    if mode in ("translate", "pool"):
-        return mode
-    return "direct"
+    return config_env.rack_mapping_mode()
 
 
 def _hostname_encodes_rack() -> bool:
@@ -1100,21 +1099,6 @@ def sample_node_gpu_shapes_via_smi(
     return out
 
 
-def collect_slurm_placement_records() -> list[dict[str, Any]] | None:
-    """Enrich a Slurm roster with provider placement only in Translate mode.
-
-    Placement failure must not hide the scheduler's real nodes or prevent node validation.
-    An empty enrichment leaves them ungrouped; never substitute hostname guesses.
-    """
-    if rack_mapping_mode() != "translate":
-        return None
-    try:
-        return _get_platform().compute_node_inventory()
-    except Exception:
-        _logger.warning("Provider placement unavailable; retaining ungrouped Slurm nodes", exc_info=True)
-        return []
-
-
 def build_node_inventory(
     nodes: dict[str, str], racks: Iterable[str], ds_text: str = "",
     records: list[dict[str, Any]] | None = None,
@@ -1149,6 +1133,9 @@ def build_node_inventory(
     # mis-set CT template; in 'pool' there is no rack at all so parsing fabricates one. In both the
     # node stays ungrouped rather than mis-grouped. See _hostname_encodes_rack.
     parse_hostname = _hostname_encodes_rack()
+    provider_racks = {} if is_pool_mode() else provider_node_racks(
+        nodes, rack_ids.values(), records, naming=naming, normalize=_normalize_rack_key_for_ds,
+    )
     result: list[dict[str, Any]] = []
     for host, scheduler_state in sorted(nodes.items(), key=lambda item: item[0].casefold()):
         detail = details.get(host.casefold(), {})
@@ -1156,10 +1143,8 @@ def build_node_inventory(
         if parse_hostname:
             parsed = naming.sinfo_rack_from_host(host.lower().split(".")[0])
             rack = rack_ids.get(_normalize_rack_key_for_ds(parsed[0]).casefold()) if parsed else None
-        placement = detail.get("rack")
-        if placement and not is_pool_mode():
-            mapped = naming.map_cmsh_rack_list_token(placement) or _normalize_rack_key_for_ds(placement)
-            rack = rack_ids.get(mapped.casefold())
+        if detail.get("rack") and not is_pool_mode():
+            rack = provider_racks.get(host)
         if rack is None and parse_hostname:
             # Support real names whose extra components do not fit the tray template.
             matches = [value for key, value in rack_ids.items()
