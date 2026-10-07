@@ -116,4 +116,115 @@ export const p2pContent: HelpContent[] = [
     aiContext:
       "Dragonfly Settings is the per-cluster NVIS-P2P instance configuration for the active cluster (backend P2pSettings). It edits the Manager/app-server addresses, the app-server SSH connection the reconcile runs over (the app server is its own host, not the cluster control node), the compute-peer inventory pattern and source path, and install/storage paths. Secrets are generated on the app server, never stored. It names provisioning blockers and exposes a gated Provision action that starts a reconcile workflow run.",
   },
+  {
+    id: "p2pCatalog",
+    kind: "view",
+    title: "Catalog",
+    domain: "Artifact Distribution",
+    routePath: "/p2p/catalog",
+    summary:
+      "Edit the active cluster's catalog — the container images (tasks) P2P can distribute — and pin each one to the exact file staged on the origin.",
+    description:
+      "The Catalog is the list of distributable images for the active cluster, stored by Rack Status as the source of truth. Each entry is a bare *.sqsh filename, a display name, its size in bytes and a SHA-256 pin. Every node verifies a download against that pin, so the pin must match the file staged on the origin byte for byte; a blank pin marks an image added but not yet imported. Saving does not touch the fleet: a Sync operation (Artifact Fleet) projects the catalog onto the cluster's manifest and the nodes, and each node also refreshes its copy of the catalog every 15 minutes. If no catalog has been authored yet, the editor opens with the cluster's current manifest.",
+    features: [
+      "Per-image order, name, *.sqsh filename, size and SHA-256 pin",
+      "Validation of filenames (bare names only, never a path) and pins (64 hex characters, or blank)",
+      "Opens with the cluster's current manifest when nothing has been authored yet",
+    ],
+    howTo: [
+      {
+        task: "Add a newly staged image",
+        steps: [
+          "Compute the SHA-256 and byte size of the file staged on the origin.",
+          "Add a row with the bare filename, a name, the size and the pin, then Save.",
+          "Run Sync from Artifact Fleet so the cluster's manifest and the nodes carry the new pin.",
+        ],
+      },
+    ],
+    tips: [
+      "A rebuilt image never reproduces an earlier hash: re-pin from the staged file, not from a previous build.",
+      "A pin that does not match the staged file fails verification on every node that downloads it.",
+    ],
+    keywords: ["p2p", "catalog", "task", "image", "sqsh", "sha256", "pin", "manifest", "sync"],
+    related: ["p2pArtifacts", "p2pCampaigns"],
+    aria: {
+      label: "Catalog",
+      description: "Edit the container images P2P can distribute and their SHA-256 pins.",
+    },
+    aiContext:
+      "Catalog is the editable list of distributable container images (tasks) for the active cluster's NVIS-P2P instance (backend P2pCatalog, GET/PUT /api/p2p/catalog). Each image has an order, name, bare *.sqsh filename, byte size and a SHA-256 pin that every node verifies downloads against — a pin that does not match the file staged on the origin fails verification fleet-wide, and a rebuilt image always has a new hash. A blank pin means added but not yet imported. Saving changes only Rack Status's copy; the Sync operation projects it onto the cluster manifest and nodes, and nodes also refresh their catalog every 15 minutes.",
+  },
+  {
+    id: "p2pRosters",
+    kind: "view",
+    title: "Rosters",
+    domain: "Artifact Distribution",
+    routePath: "/p2p/rosters",
+    summary: "Named node lists that a fleet operation or campaign can target instead of the whole inventory.",
+    description:
+      "A roster is a named list of compute nodes — one hostname per line — stored per cluster. Fleet operations in Artifact Fleet and campaigns can target a roster by name, so a rollout can be scoped to one scalable unit, a set of verified nodes, or a canary group without editing the cluster's inventory. A roster name is free text (it may contain spaces); node entries must be bare hostnames. An operation that names a roster that no longer exists is refused before it reaches the fleet.",
+    features: [
+      "Named node lists, one hostname per line",
+      "Targeting from Artifact Fleet operations and from campaigns",
+      "Bare-hostname validation for every node entry",
+    ],
+    howTo: [
+      {
+        task: "Roll an image out to a canary group first",
+        steps: [
+          "Add a roster with a name such as canary and the canary hostnames, then Save.",
+          "Create or edit a campaign that targets that roster and launch it.",
+          "Once the canaries verify, launch the same image to the whole fleet.",
+        ],
+      },
+    ],
+    tips: ["Leaving the roster blank on a campaign or operation targets the cluster's default inventory."],
+    keywords: ["p2p", "roster", "nodes", "target", "canary", "scalable unit", "su", "inventory"],
+    related: ["p2pCampaigns", "p2pArtifacts"],
+    aria: {
+      label: "Rosters",
+      description: "Named node lists that fleet operations and campaigns can target.",
+    },
+    aiContext:
+      "Rosters are named node lists for the active cluster's NVIS-P2P instance (backend P2pRosters, GET/PUT /api/p2p/rosters). A fleet operation or a campaign can target a roster by name instead of the cluster's default inventory; the resolved node list travels with the operation to the worker. Roster names are free text; node entries must be bare hostnames. An operation naming an unknown roster is refused with a 400.",
+  },
+  {
+    id: "p2pCampaigns",
+    kind: "view",
+    title: "Campaigns",
+    domain: "Artifact Distribution",
+    routePath: "/p2p/campaigns",
+    summary:
+      "Saved distributions — an image, a roster and optional pacing — that you name once and launch to the fleet on demand.",
+    description:
+      "A campaign pairs one catalog image with a roster (or the whole fleet) and optional pacing overrides: wave size, parallelism, poll interval, launch and unreachable limits, and timeout. A pacing field left at 0 inherits the cluster's rollout default from Dragonfly Settings. Launching a campaign asks for confirmation, then queues a distribute operation tagged with the campaign's name; it preheats the seeds and rolls the image out wave by wave, and its progress and log appear in Artifact Fleet. Only one operation runs at a time, so a launch is refused while another is in flight. Re-launching is safe: nodes that already hold the pinned image are skipped.",
+    features: [
+      "Image × roster × pacing, saved per cluster",
+      "Confirm-before-launch, with a link to the launched operation's log",
+      "Pacing overrides where 0 inherits the cluster default",
+      "Runs tagged with the campaign name in the operations history",
+    ],
+    howTo: [
+      {
+        task: "Distribute a new image to the fleet",
+        steps: [
+          "Add and pin the image in Catalog, then run Sync.",
+          "Add a campaign with that image and a roster (blank for the whole fleet), then Save.",
+          "Click Launch, confirm, and follow the waves in Artifact Fleet or the operation log.",
+        ],
+      },
+    ],
+    tips: [
+      "A launch is refused while another operation is running; wait for it to finish.",
+      "Nodes deferred as unreachable in one run are picked up by launching the same campaign again.",
+    ],
+    keywords: ["p2p", "campaign", "launch", "distribute", "rollout", "wave", "pacing", "roster", "image"],
+    related: ["p2pCatalog", "p2pRosters", "p2pArtifacts", "p2pSettings"],
+    aria: {
+      label: "Campaigns",
+      description: "Saved image distributions that can be launched to a roster or the whole fleet.",
+    },
+    aiContext:
+      "Campaigns are saved distributions for the active cluster's NVIS-P2P instance (backend P2pCampaigns, GET/PUT /api/p2p/campaigns). A campaign names a catalog image, a roster (blank = whole fleet) and optional pacing overrides (wave_size, parallelism, poll_seconds, max_launches, max_unreachable, timeout_seconds; 0 inherits the cluster default). Launch is confirm-gated and enqueues an ordinary distribute operation through POST /api/p2p/operations tagged with the campaign name; the worker preheats the seeds then rolls out in waves. One operation runs at a time (409 otherwise). Re-launching is idempotent: nodes holding the pinned image are skipped by receipt.",
+  },
 ];
