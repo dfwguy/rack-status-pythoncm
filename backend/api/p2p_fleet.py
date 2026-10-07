@@ -33,6 +33,7 @@ import json
 import logging
 import pathlib
 
+import p2p_catalog
 import p2p_config
 import p2p_operations as p2p_ops
 import p2p_provision  # noqa: F401 -- imported for its side effect: registers the p2p_stage_assets native step
@@ -58,19 +59,37 @@ _PROVISION_WORKFLOW = "nvis-p2p-provision"
 _CATALOG_MANIFEST = paths.REPO_ROOT / "deploy" / "p2p" / "catalog" / "images.json"
 
 
-def _load_catalog(catalog_path: str = "") -> dict:
+def _authored_catalog(cluster_id: str) -> dict | None:
+    """The cluster's edited catalog as the frontend `Catalog` shape, or None if none authored.
+
+    Rack Status is the catalog's source of truth, so an operator-authored catalog is what the view
+    shows even before a sync projects it onto the cluster file; runtime observations stay blank until
+    an instance reports them.
+    """
+    if not cluster_id or not p2p_catalog.has_catalog(cluster_id):
+        return None
+    cat = p2p_catalog.get_catalog(cluster_id)
+    images = [{**img, "canonical_present": False, "persistent_import": None}
+              for img in cat.to_dict()["images"]]
+    return {"schema_version": 1, "catalog_name": "authored", "canonical_directory": "",
+            "generated_at_utc": None, "images": images}
+
+
+def _load_catalog(catalog_path: str = "", cluster_id: str = "") -> dict:
     """The catalog manifest as the frontend `Catalog` shape.
 
-    Resolves per cluster: ``catalog_path`` is the active cluster's configured manifest
-    (``P2pSettings.catalog_path``), used when it names a file this process can read; otherwise the
-    shipped default that ships in the image. A configured-but-unreadable path (common when the
-    manifest lives on the cluster's app server and is not mounted here) falls back to the shipped
-    list rather than an empty catalog — the shipped list is the floor of what P2P distributes.
+    Resolves per cluster, most-authoritative first: the operator's edited catalog document, then the
+    cluster's configured manifest file (``P2pSettings.catalog_path``) when readable, then the shipped
+    default in the image. A configured-but-unreadable path (common when the manifest lives on the
+    cluster's app server and is not mounted here) falls back rather than showing an empty catalog.
 
     `canonical_present` and `persistent_import` are runtime observations, not manifest facts — on a
     cluster with no provisioned instance nothing has been observed, so they read false/null. When an
     instance exists these come from the live snapshot instead of this loader.
     """
+    authored = _authored_catalog(cluster_id)
+    if authored is not None:
+        return authored
     source = pathlib.Path(catalog_path) if catalog_path.strip() else _CATALOG_MANIFEST
     try:
         raw = json.loads(source.read_text(encoding="utf-8"))
@@ -107,15 +126,15 @@ def _load_catalog(catalog_path: str = "") -> dict:
     }
 
 
-def _not_provisioned_status(catalog_path: str = "") -> dict:
+def _not_provisioned_status(catalog_path: str = "", cluster_id: str = "") -> dict:
     """A valid `FleetStatus` for an enabled-but-unprovisioned cluster.
 
-    The catalog is real (it is what P2P will distribute) and resolved from the cluster's own
-    ``catalog_path`` when readable; everything observed from a running instance is empty because
-    there is no instance yet. The view renders the catalog and a zeroed coverage rather than an error.
+    The catalog is real (the operator's edited catalog, else the cluster's own ``catalog_path`` when
+    readable); everything observed from a running instance is empty because there is no instance yet.
+    The view renders the catalog and a zeroed coverage rather than an error.
     """
     return {
-        "catalog": _load_catalog(catalog_path),
+        "catalog": _load_catalog(catalog_path, cluster_id),
         "object_store_healthy": False,
         "fleet": [],
         "coverage": {
@@ -161,7 +180,7 @@ def p2p_status():
     snapshot = p2p_snapshot.load_snapshot(cluster.id)
     if snapshot is not None:
         return jsonify(snapshot)
-    return jsonify(_not_provisioned_status(settings.catalog_path))
+    return jsonify(_not_provisioned_status(settings.catalog_path, cluster.id))
 
 
 @bp.route("/operations", methods=["POST"])
@@ -214,6 +233,46 @@ def p2p_operation_log(op_id: str):
         return jsonify({"ok": False, "error": "P2P is not enabled for the active cluster."}), 404
     result = p2p_ops.read_log(cluster.id, op_id)
     return jsonify(result), 200 if result.get("ok") else 404
+
+
+@bp.route("/catalog", methods=["GET"])
+@action(get="p2p:read")
+def p2p_catalog_get():
+    """The active cluster's editable catalog (the task list).
+
+    The authored document when one exists; otherwise the current manifest (file or shipped) so the
+    editor opens populated with reality rather than empty. ``authored`` says which it is.
+    """
+    _project, cluster, _platform = catalog_context.resolve()
+    if cluster is None or not getattr(cluster, "p2p_enabled", False):
+        return jsonify({"ok": False, "message": "P2P is not enabled for the active cluster."}), 404
+    if p2p_catalog.has_catalog(cluster.id):
+        images = p2p_catalog.get_catalog(cluster.id).to_dict()["images"]
+        authored = True
+    else:
+        settings = p2p_config.get_settings(cluster.id)
+        loaded = _load_catalog(settings.catalog_path)  # no cluster_id: the file/shipped, not the authored branch
+        keep = ("order", "name", "filename", "bytes", "sha256", "required_by")
+        images = [{k: img.get(k) for k in keep} for img in loaded["images"]]
+        authored = False
+    return jsonify({"ok": True, "cluster_id": cluster.id, "authored": authored, "images": images})
+
+
+@bp.route("/catalog", methods=["PUT"])
+@action(put="p2p:catalog")
+def p2p_catalog_put():
+    """Replace the active cluster's catalog (the task list). 400 on an invalid document."""
+    _project, cluster, _platform = catalog_context.resolve()
+    if cluster is None or not getattr(cluster, "p2p_enabled", False):
+        return jsonify({"ok": False, "message": "P2P is not enabled for the active cluster."}), 404
+    body = request.get_json(silent=True) or {}
+    catalog = models.P2pCatalog.from_dict({"cluster_id": cluster.id, "images": body.get("images", [])})
+    try:
+        saved = p2p_catalog.save_catalog(catalog)
+    except ValueError as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+    return jsonify({"ok": True, "cluster_id": cluster.id, "authored": True,
+                    "images": saved.to_dict()["images"]})
 
 
 @bp.route("/provision", methods=["POST"])

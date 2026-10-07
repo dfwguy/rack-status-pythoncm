@@ -76,6 +76,7 @@ export type ViewId =
   | "obsAuditTrail"
   | "multirack"
   | "p2pArtifacts"
+  | "p2pCatalog"
   | "p2pSettings"
   | "reports"
   | "analytics"
@@ -156,6 +157,7 @@ const navEntries: NavEntry[] = [
     icon: <Package size={ICON_SIZE} />,
     leaves: [
       { id: "p2pArtifacts", label: "Artifact Fleet", icon: <HardDriveDownload size={ICON_SIZE} /> },
+      { id: "p2pCatalog", label: "Catalog", icon: <Boxes size={ICON_SIZE} /> },
       { id: "p2pSettings", label: "Dragonfly Settings", icon: <Settings size={ICON_SIZE} /> },
     ],
   },

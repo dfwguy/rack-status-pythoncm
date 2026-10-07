@@ -369,6 +369,51 @@ class TestP2pSnapshot:
         assert p2p_snapshot.load_snapshot("c1") is None
 
 
+class TestP2pCatalogModel:
+    def test_round_trip(self):
+        c = models.P2pCatalog.from_dict({"cluster_id": "c1", "images": [
+            {"order": 1, "name": "NeMo", "filename": "nemo.sqsh", "bytes": 10, "sha256": "a" * 64}]})
+        d = c.to_dict()
+        assert d["id"] == "c1"
+        back = models.P2pCatalog.from_dict(d)
+        assert back.images[0].filename == "nemo.sqsh" and back.validate() == []
+
+    def test_validation(self):
+        bad = models.P2pCatalog.from_dict({"cluster_id": "c1", "images": [
+            {"name": "x", "filename": "../evil", "sha256": "zz"},
+            {"name": "", "filename": "ok.sqsh"},
+            {"name": "d1", "filename": "dup.sqsh"}, {"name": "d2", "filename": "dup.sqsh"}]})
+        probs = bad.validate()
+        assert any("bare *.sqsh" in p for p in probs)
+        assert any("64 hex" in p for p in probs)
+        assert any("name is required" in p for p in probs)
+        assert any("duplicate" in p for p in probs)
+
+
+class TestP2pCatalogApi:
+    def test_get_seeds_from_shipped_when_none_authored(self, client):
+        _set_active_p2p(True)
+        body = client.get("/api/p2p/catalog").get_json()
+        assert body["ok"] and body["authored"] is False and body["images"]
+
+    def test_put_then_get_and_status_reflect_it(self, client):
+        _set_active_p2p(True)
+        imgs = [{"order": 1, "name": "Only", "filename": "only.sqsh", "bytes": 5, "sha256": "b" * 64}]
+        put = client.put("/api/p2p/catalog", json={"images": imgs})
+        assert put.status_code == 200 and put.get_json()["authored"] is True
+        got = client.get("/api/p2p/catalog").get_json()
+        assert got["authored"] is True and [i["filename"] for i in got["images"]] == ["only.sqsh"]
+        # The authored catalog is what the fleet status surfaces, even unprovisioned.
+        status = client.get("/api/p2p/status").get_json()
+        assert [i["name"] for i in status["catalog"]["images"]] == ["Only"]
+
+    def test_put_rejects_invalid(self, client):
+        _set_active_p2p(True)
+        bad = client.put("/api/p2p/catalog",
+                         json={"images": [{"name": "x", "filename": "x.sqsh", "sha256": "nope"}]})
+        assert bad.status_code == 400 and "64 hex" in bad.get_json()["message"]
+
+
 class TestP2pProvisionWorkflow:
     def test_native_stage_step_targets_the_app_server_current_dir(self, monkeypatch):
         import host_exec

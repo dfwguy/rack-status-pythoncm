@@ -1394,6 +1394,87 @@ class P2pSettings:
         }
 
 
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+#: A catalog filename is a bare enroot squashfs name -- never a path, so an edit cannot point the
+#: fabric at a file outside the canonical directory.
+_CATALOG_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*\.sqsh$")
+
+
+@dataclass
+class P2pCatalogImage:
+    """One catalog image -- a "task" an operator can distribute.
+
+    ``filename`` is the canonical enroot squashfs name and the key within a catalog; ``sha256`` is
+    the content pin every node verifies a download against, and may be blank for an image added but
+    not yet imported/pinned.
+    """
+
+    order: int = 0
+    name: str = ""
+    filename: str = ""
+    bytes: int = 0
+    sha256: str = ""
+    required_by: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: Any) -> P2pCatalogImage:
+        d = _as_dict(d)
+        return cls(
+            order=_as_int(d.get("order"), 0),
+            name=_as_str(d.get("name")),
+            filename=_as_str(d.get("filename")),
+            bytes=_as_int(d.get("bytes"), 0),
+            sha256=_as_str(d.get("sha256")).lower(),
+            required_by=_as_str_list(d.get("required_by")),
+        )
+
+
+@dataclass
+class P2pCatalog:
+    """A cluster's editable catalog -- the list of distributable images ("tasks").
+
+    Stored whole by ``cluster_id`` behind the ``Repo`` (a document, like :class:`P2pSettings`), and
+    rendered to the instance's ``catalog_path`` by a sync so the fabric uses what the operator
+    authored. Rack Status is the source of truth; the file on the cluster is a projection of it.
+    """
+
+    cluster_id: str
+    images: list[P2pCatalogImage] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: Any) -> P2pCatalog:
+        d = _as_dict(d)
+        images_raw = d.get("images")
+        images = [P2pCatalogImage.from_dict(i) for i in images_raw] if isinstance(images_raw, list) else []
+        return cls(cluster_id=_as_str(d.get("cluster_id")), images=images)
+
+    def to_dict(self) -> dict[str, Any]:
+        out = asdict(self)
+        out["id"] = self.cluster_id
+        return out
+
+    def validate(self) -> list[str]:
+        problems: list[str] = []
+        if not valid_id(self.cluster_id):
+            problems.append(f"invalid cluster id: {self.cluster_id!r}")
+        seen: set[str] = set()
+        for i, img in enumerate(self.images):
+            where = img.filename or f"image #{i + 1}"
+            if not _CATALOG_FILENAME_RE.match(img.filename):
+                problems.append(f"{where}: filename must be a bare *.sqsh name")
+            elif img.filename in seen:
+                problems.append(f"{where}: duplicate filename")
+            else:
+                seen.add(img.filename)
+            if not img.name.strip():
+                problems.append(f"{where}: name is required")
+            if img.sha256 and not _SHA256_RE.match(img.sha256):
+                problems.append(f"{where}: sha256 must be 64 hex characters")
+            if img.bytes < 0:
+                problems.append(f"{where}: bytes must not be negative")
+        return problems
+
+
 @dataclass
 class Project:
     id: str

@@ -26,6 +26,37 @@ export function getFleetStatus(): Promise<FleetStatus> {
   return apiJson<FleetStatus>(`${BASE}/status`);
 }
 
+/** One editable catalog image (a "task"). sha256 may be blank for an image not yet pinned. */
+export type CatalogImageEdit = {
+  order: number;
+  name: string;
+  filename: string;
+  bytes: number;
+  sha256: string;
+  required_by: string[];
+};
+
+export type CatalogDoc = {
+  ok: boolean;
+  cluster_id: string;
+  /** false when the images are seeded from the current manifest rather than an authored document. */
+  authored: boolean;
+  images: CatalogImageEdit[];
+};
+
+/** The active cluster's editable catalog (the task list). */
+export function getCatalog(): Promise<CatalogDoc> {
+  return apiJson<CatalogDoc>(`${BASE}/catalog`);
+}
+
+/** Replace the active cluster's catalog. Rejects with an `ApiError` (400) on an invalid document. */
+export function saveCatalog(images: CatalogImageEdit[]): Promise<CatalogDoc> {
+  return apiJson<CatalogDoc>(`${BASE}/catalog`, {
+    method: "PUT",
+    body: JSON.stringify({ images }),
+  });
+}
+
 export type OperationRequest = {
   action: OperationAction;
   sus: number[];

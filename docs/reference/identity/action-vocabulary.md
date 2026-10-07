@@ -10,7 +10,7 @@ Every action the product declares, which is what a policy's `actions` field may 
 **Generated from the live registry** — a route without a declaration cannot appear here,
 and the build gate in `backend/tests/test_action_coverage.py` fails if one exists.
 
-191 actions across 56 services: 64 reads and 127 mutations.
+192 actions across 56 services: 64 reads and 128 mutations.
 
 A read-only role is `["*:read", "*:list"]` — the two read verbs — rather than an
 enumeration of the reads below.
@@ -59,7 +59,7 @@ case does not match.
 | [`observability`](#observability) | instance | 2 | Grafana surfaces: the deeplinks catalogue and the live 5-minute rack charts. |
 | [`oidc.token`](#oidctoken) | singleton | 3 | The OIDC provider endpoints (FR-10 .. FR-14). |
 | [`openapi`](#openapi) | singleton | 1 | The deployment's own OpenAPI 3.1 description, in JSON and YAML. |
-| [`p2p`](#p2p) | singleton | 4 | NVIS-P2P (artifact distribution) gateway — the `/api/p2p/*` surface. |
+| [`p2p`](#p2p) | singleton | 5 | NVIS-P2P (artifact distribution) gateway — the `/api/p2p/*` surface. |
 | [`policy`](#policy) | instance | 7 | Policy CRUD, attachment, and the vocabulary the editor validates against (FR-19, FR-20, FR-21). |
 | [`rack`](#rack) | instance | 2 | The dashboard core: rack status, cluster overview, app stats, and the settings writer. |
 | [`rack.bmc`](#rackbmc) | instance | 2 | Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts. |
@@ -574,10 +574,11 @@ Owned by `backend/api/p2p_fleet.py`.
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
+| `p2p:catalog` | mutate | singleton | `PUT p2p_fleet.p2p_catalog_put` |
 | `p2p:configure` | mutate | singleton | `PUT p2p_fleet.p2p_put_settings` |
 | `p2p:operate` | mutate | singleton | `POST p2p_fleet.p2p_operations` |
 | `p2p:provision` | mutate | singleton | `POST p2p_fleet.p2p_start_provision` |
-| `p2p:read` | read | singleton | `GET p2p_fleet.p2p_get_settings`<br>`GET p2p_fleet.p2p_status` |
+| `p2p:read` | read | singleton | `GET p2p_fleet.p2p_catalog_get`<br>`GET p2p_fleet.p2p_get_settings`<br>`GET p2p_fleet.p2p_operation_log`<br>`GET p2p_fleet.p2p_status` |
 
 ## `policy`
 
