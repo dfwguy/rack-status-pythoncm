@@ -69,29 +69,12 @@ TSRC="$(cd "$NCCL_TESTS_SRC" && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRUB="$SCRIPT_DIR/enroot_scrub_rootfs.sh"
 [ -x "$SCRUB" ] || { echo "ERROR: scrub helper missing beside this script: $SCRUB"; exit 2; }
+BUILD_LIB="$SCRIPT_DIR/lib/enroot_build.inc.sh"
+[ -r "$BUILD_LIB" ] || { echo "ERROR: helper library missing beside this script: $BUILD_LIB"; exit 2; }
+# shellcheck source=lib/enroot_build.inc.sh
+. "$BUILD_LIB"   # enroot_rootfs_dir, src_rev
 mkdir -p "$(dirname "$OUT_SQSH")"
 
-# Where `enroot create` puts a container's rootfs: $ENROOT_DATA_PATH (env wins over the config file,
-# as in enroot itself), else enroot.conf's value -- which may hold shell like "$(id -u)", hence the
-# eval -- else enroot's own default.
-enroot_rootfs_dir() {
-  local data="${ENROOT_DATA_PATH:-}"
-  if [ -z "$data" ] && [ -r /etc/enroot/enroot.conf ]; then
-    data="$(awk '$1 == "ENROOT_DATA_PATH" { $1 = ""; sub(/^[ \t]+/, ""); print; exit }' /etc/enroot/enroot.conf)"
-    data="$(eval "printf '%s' \"$data\"")"
-  fi
-  [ -n "$data" ] || data="${XDG_DATA_HOME:-$HOME/.local/share}/enroot"
-  printf '%s/%s\n' "$data" "$1"
-}
-
-# Provenance of each source tree: tag (or commit) plus a warning when it is not exactly at a tag.
-src_rev() {
-  local rev
-  rev="$(git -C "$1" describe --tags --always 2>/dev/null || echo unknown)"
-  git -C "$1" describe --tags --exact-match >/dev/null 2>&1 \
-    || echo "WARNING: $1 is not at a tag ($rev) -- the image will not be reproducible" >&2
-  printf '%s' "$rev"
-}
 NCCL_REV="$(src_rev "$NSRC")"
 TESTS_REV="$(src_rev "$TSRC")"
 echo "-- sources: NCCL $NCCL_REV | nccl-tests $TESTS_REV | base $(basename "$BASE_SQSH") --"
