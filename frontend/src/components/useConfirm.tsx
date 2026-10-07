@@ -13,6 +13,11 @@ import { useCallback, useRef, useState } from "react";
 import { ConfirmDialog, type ConfirmOptions } from "./ConfirmDialog";
 
 export function useConfirm() {
+  // Open and options are separate on purpose. Closing only flips `open`: the dialog stays mounted
+  // through its exit fade, and clearing the options with it repainted that fade with the defaults
+  // ("Confirm" / "Cancel" / "Confirm", an empty body, a danger button turning brand) -- the ask
+  // visibly changed into a different dialog as it left. The options persist until the next ask.
+  const [open, setOpen] = useState(false);
   const [options, setOptions] = useState<ConfirmOptions | null>(null);
   const resolver = useRef<((v: boolean) => void) | null>(null);
 
@@ -23,6 +28,7 @@ export function useConfirm() {
         resolver.current?.(false);
         resolver.current = resolve;
         setOptions(opts);
+        setOpen(true);
       }),
     [],
   );
@@ -36,12 +42,12 @@ export function useConfirm() {
   const settle = useCallback((result: boolean) => {
     resolver.current?.(result);
     resolver.current = null;
-    setOptions(null);
+    setOpen(false);
   }, []);
 
   const confirmDialog = (
     <ConfirmDialog
-      open={options !== null}
+      open={open}
       message={options?.message ?? ""}
       title={options?.title}
       confirmLabel={options?.confirmLabel}

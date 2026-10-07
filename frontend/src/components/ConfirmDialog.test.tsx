@@ -9,7 +9,7 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, waitForElementToBeRemoved } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { useConfirm } from "./useConfirm";
@@ -52,5 +52,20 @@ describe("useConfirm", () => {
     expect(screen.queryByText("Cancel")).not.toBeInTheDocument();
     fireEvent.click(screen.getByText("OK"));
     await waitFor(() => expect(onResult).toHaveBeenCalledWith(true));
+  });
+
+  it("keeps what it asked on screen while it closes, then leaves the page usable", async () => {
+    const onResult = vi.fn();
+    render(<Harness onResult={onResult} />);
+    fireEvent.click(screen.getByText("ask"));
+    await screen.findByText("Really remove it?");
+    fireEvent.click(screen.getByText("Delete"));
+    // Mid-exit the dialog is still mounted: it must still show the question and its danger label,
+    // not repaint as a blank default "Confirm" dialog.
+    expect(screen.getByText("Really remove it?")).toBeInTheDocument();
+    expect(screen.getByText("Delete")).toBeInTheDocument();
+    await waitForElementToBeRemoved(() => screen.queryByRole("dialog", { hidden: true }));
+    expect(screen.getByRole("button", { name: "ask" })).toBeInTheDocument(); // no longer aria-hidden
+    expect(onResult).toHaveBeenCalledWith(true);
   });
 });

@@ -157,17 +157,18 @@ describe("PostRunNodeReportView deep-audit launch", () => {
     service.startDeepAudit.mockResolvedValue(runId);
     service.fetchDeepAudit.mockResolvedValue({ state: "completed", run_id: runId });
     service.fetchDeepAuditOutput.mockResolvedValue("ink50-dh01-d01-32: PASS - healthy");
-    vi.spyOn(window, "confirm").mockReturnValue(true);
-
     render(<PostRunNodeReportView />);
     const nodeLabel = await screen.findByText("d01-32");
     fireEvent.click(nodeLabel.closest("button") as HTMLButtonElement);
     fireEvent.click(screen.getByRole("button", { name: /run hardware audit/i }));
+    // The launch asks through the themed ConfirmDialog, not window.confirm: accept it there.
+    fireEvent.click(await screen.findByRole("button", { name: "Run audit" }));
 
     await waitFor(() => expect(service.fetchDeepAudit).toHaveBeenCalledWith(runId));
     expect(await screen.findAllByText(/Job 147892/)).not.toHaveLength(0);
     expect(screen.getByText("Validation participation (1)")).toBeInTheDocument();
-    fireEvent.click(screen.getAllByRole("button", { name: "Full output" })[0]);
+    // findAll, not getAll: the confirm dialog is still fading out and hides the page until it is gone.
+    fireEvent.click((await screen.findAllByRole("button", { name: "Full output" }))[0]);
     expect(await screen.findByText(/d01-32: PASS - healthy/)).toBeInTheDocument();
   });
 });
