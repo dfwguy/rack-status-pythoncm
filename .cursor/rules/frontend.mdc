@@ -212,7 +212,7 @@ dompurify` in the first place, so fixing dompurify clears it.
 
 - **KUI components**: `style` prop. Example: `style={{ color: "var(--text-color-secondary)" }}`
 - **MUI components**: `sx` prop. Example: `sx={{ display: "flex", gap: 2 }}`
-- **Colors**: NVIDIA design tokens: `--text-color-primary`, `--text-color-secondary`, `--text-color-subtle`, `--background-color-surface-base`. No hardcoded hex.
+- **Colors**: NVIDIA design tokens: `--text-color-primary`, `--text-color-secondary`, `--text-color-subtle`, `--background-color-surface-base`. No hardcoded hex — **including the fallback**: `var(--token, #hex)` still ships a hex, and that hex is what renders when the token name is wrong, which is how a surface ends up light in a dark theme. Inside MUI `sx`, prefer theme tokens that track light/dark (`color: "text.primary"`, `bgcolor: "action.hover"`) over raw CSS vars. **Never set a background without a paired foreground** — a surface with inherited text is the white-on-white trap that sank the P2P operation-log viewer.
 - **Font sizes**: Minimum 14px. Never `fontSize: 12` or `variant="caption"`.
 - **Icons**: `lucide-react` exclusively.
 
