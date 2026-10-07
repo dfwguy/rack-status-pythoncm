@@ -111,6 +111,9 @@ def test_an_unpinned_image_is_a_valid_row(node):
         pytest.param(_catalog(f"1\tNeMo\tnemo.sqsh\t1e9\t{SHA}"), id="non-numeric-bytes"),
         pytest.param(_catalog("1\tNeMo\tnemo.sqsh\t100"), id="missing-field"),
         pytest.param(GOOD_NEW[:-40], id="truncated"),
+        # A whole last row without its newline: valid fields, but `while read` consumers on the node
+        # would skip that image, and it is how a cut-off download usually ends.
+        pytest.param(GOOD_NEW.rstrip("\n"), id="no-final-newline"),
     ],
 )
 def test_a_bad_catalog_never_replaces_a_good_one(node, bad):

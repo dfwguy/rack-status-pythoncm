@@ -44,6 +44,13 @@ if ! curl -fsS --max-time 60 -o "$tmp" "$url"; then
   exit 1
 fi
 
+# A response that does not end in a newline was cut off mid-line -- and node-side `while read`
+# consumers would silently skip its last image even if the line were whole. Reject it.
+if [[ -n $(tail -c 1 "$tmp") ]]; then
+  report "CATALOG_REFRESH_REJECTED reason=invalid-catalog detail=no-final-newline url=$url"
+  exit 1
+fi
+
 # The shape catalog sync writes: an exact header, then order, name, *.sqsh filename, bytes, and a
 # sha256 that is 64 lowercase hex or blank (an image added but not yet pinned). At least one image.
 # (No regex intervals: node awks vary, so the sha length is checked with length().)
