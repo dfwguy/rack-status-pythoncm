@@ -37,7 +37,8 @@ scp -q "${ssh_opts[@]}" "$root/deploy/systemd/nvis-p2p-catalog-refresh.timer" "$
 
 status=$(ssh "${ssh_opts[@]}" "$node" bash -s -- "$base" "$url" <<'REMOTE'
 set -euo pipefail
-base=$1 url=$2
+# ssh joins its arguments into one command line, so an empty URL arrives as no argument at all.
+base=$1 url=${2:-}
 env=$base/catalog-refresh.env
 if [[ -n $url ]]; then
   printf 'NVIS_P2P_CATALOG_URL=%s\n' "$url" > "$env.next"
