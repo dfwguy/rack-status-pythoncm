@@ -131,12 +131,24 @@ def enqueue(cluster_id: str, settings: P2pSettings, action: str,
         # The resolved roster travels with the request so the worker targets exactly these nodes
         # instead of the cluster's default inventory.
         request["request"]["roster_nodes"] = roster_nodes
-    if action == "sync":
-        # A sync carries the authored catalog so the worker writes exactly what the operator saved,
-        # without reaching back into the store from the app server.
-        catalog_images = p2p_catalog.get_catalog(cluster_id).to_dict()["images"]
-        if not catalog_images:
-            raise OperationError("no authored catalog to sync — edit and save the catalog first")
+    catalog_images = p2p_catalog.get_catalog(cluster_id).to_dict()["images"] if p2p_catalog.has_catalog(cluster_id) else []
+    if action == "sync" and not catalog_images:
+        raise OperationError("no authored catalog to sync — edit and save the catalog first")
+    if action in IMAGE_REQUIRED and catalog_images:
+        # Seeds and nodes verify an image against the cluster manifest's pin, so an image the
+        # authored catalog cannot pin would fail on every node -- refuse it here, where the
+        # operator can fix it, instead of after a preheat and a wave.
+        pins = {img["filename"]: img.get("sha256", "") for img in catalog_images}
+        missing = [i for i in images if i not in pins]
+        if missing:
+            raise OperationError(f"not in the catalog: {', '.join(missing)} — add it under Catalog first")
+        unpinned = [i for i in images if not pins[i]]
+        if unpinned:
+            raise OperationError(f"not pinned in the catalog: {', '.join(unpinned)} — set its sha256 under Catalog first")
+    if catalog_images and (action == "sync" or action in IMAGE_REQUIRED):
+        # The authored catalog travels with the request: a sync writes exactly what the operator
+        # saved, and an image operation lets the worker sync a manifest whose pins went stale --
+        # neither reaches back into the store from the app server.
         request["request"]["catalog"] = catalog_images
         request["request"]["appserver_ip"] = settings.appserver_ip or settings.manager_ip
     directory = _ops_dir(cluster_id)

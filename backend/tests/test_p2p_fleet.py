@@ -734,3 +734,61 @@ class TestP2pSnapshotMaxAge:
     )
     def test_a_bad_value_falls_back_instead_of_failing_import(self, reload_with, raw, expected):
         assert reload_with(raw)._MAX_AGE_SECONDS == expected
+
+
+class TestImageOperationsAgainstTheCatalog:
+    """An image operation is checked against the authored catalog before anything is queued.
+
+    Seeds and nodes verify a download against the cluster manifest's pin. An image the authored
+    catalog cannot pin would fail on every node, after a preheat and a wave; the gateway refuses it
+    instead, and otherwise carries the authored pins so the worker can sync a stale manifest first.
+    """
+
+    PIN = "d" * 64
+
+    def _ready(self, monkeypatch, tmp_path):
+        import p2p_operations
+
+        _set_active_p2p(True)
+        _configure_active_p2p(manager_ip="10.0.0.1", appserver_ip="10.0.0.2", inventory_pattern="n[01-09]")
+        monkeypatch.setattr(p2p_operations, "_OPS_DIR", tmp_path / "ops")
+
+    def _queued(self, tmp_path, action="distribute"):
+        import json as _json
+
+        cluster_id = get_active(get_repo())["cluster"]
+        return _json.loads(next((tmp_path / "ops" / cluster_id).glob(f"{action}-*.json")).read_text())
+
+    def _catalog(self, client, sha):
+        client.put("/api/p2p/catalog", json={"images": [
+            {"order": 1, "name": "NeMo", "filename": "nemo.sqsh", "bytes": 5, "sha256": sha}]})
+
+    def test_an_image_missing_from_the_catalog_is_refused(self, client, monkeypatch, tmp_path):
+        self._ready(monkeypatch, tmp_path)
+        self._catalog(client, self.PIN)
+        resp = client.post("/api/p2p/operations", json={"action": "distribute", "images": ["other.sqsh"]})
+        assert resp.status_code == 400 and "not in the catalog: other.sqsh" in resp.get_json()["message"]
+        assert not (tmp_path / "ops").exists() or not list((tmp_path / "ops").rglob("*.json"))
+
+    @pytest.mark.parametrize("action", ["persist", "distribute", "repair"])
+    def test_an_unpinned_image_is_refused(self, client, monkeypatch, tmp_path, action):
+        self._ready(monkeypatch, tmp_path)
+        self._catalog(client, "")
+        resp = client.post("/api/p2p/operations", json={"action": action, "images": ["nemo.sqsh"]})
+        assert resp.status_code == 400 and "not pinned in the catalog: nemo.sqsh" in resp.get_json()["message"]
+
+    def test_a_pinned_image_carries_the_authored_pins_to_the_worker(self, client, monkeypatch, tmp_path):
+        self._ready(monkeypatch, tmp_path)
+        self._catalog(client, self.PIN)
+        resp = client.post("/api/p2p/operations", json={"action": "distribute", "images": ["nemo.sqsh"]})
+        assert resp.status_code == 202
+        inner = self._queued(tmp_path)["request"]
+        assert [(i["filename"], i["sha256"]) for i in inner["catalog"]] == [("nemo.sqsh", self.PIN)]
+        assert inner["appserver_ip"] == "10.0.0.2"
+
+    def test_without_an_authored_catalog_nothing_is_checked_or_carried(self, client, monkeypatch, tmp_path):
+        """The manifest is then the only source of pins; behaviour is unchanged."""
+        self._ready(monkeypatch, tmp_path)
+        resp = client.post("/api/p2p/operations", json={"action": "distribute", "images": ["anything.sqsh"]})
+        assert resp.status_code == 202
+        assert "catalog" not in self._queued(tmp_path)["request"]

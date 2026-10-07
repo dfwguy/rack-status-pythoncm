@@ -9,6 +9,11 @@ Get one image onto a roster of nodes using the campaign tooling, in bounded wave
 not overwhelmed. For the model behind these steps see
 [How catalog images reach every node](../explanation/p2p-catalog-distribution.md).
 
+In Rack Status the same thing is one action: pin the image under **Artifact Distribution →
+Catalog**, then launch a campaign under **Campaigns**. The operations worker runs steps 3–4 for you,
+and before it preheats it checks that the cluster's manifest pins the image as the catalog does —
+syncing first when it does not. Use the steps below when you need to drive a rollout by hand.
+
 All commands run on the appserver as a member of the `cmods` group (no `sudo` needed for P2P
 operations).
 
@@ -29,32 +34,31 @@ awk -F'\t' '$3=="<image>.sqsh"{print $5}' \
 sha256sum /cluster/containers/<image>.sqsh | cut -c1-64             # must match the pin
 ```
 
-If the pin does not match the file (for example after re-importing an image), re-pin it in both
-manifests:
+If the pin does not match the file (for example after re-importing an image — a rebuilt image never
+reproduces an earlier hash), re-pin it under **Artifact Distribution → Catalog** and run **Sync**.
+Do not edit `images.tsv` or `images.json` on the cluster by hand: Rack Status is the catalog's
+source of truth, and the next sync rewrites both files from it.
 
-```bash
-sed -i 's/<old-sha>/<new-sha>/g' \
-  /cluster/containers/.nvis-p2p/catalog/images.{tsv,json}
-```
-
-## 2. Refresh the catalog on the nodes — completely
+## 2. Make sure the nodes carry the new pin
 
 A node resolves the expected `sha` from its *own* catalog copy. If that copy is stale, the node
-pulls the correct bytes and rejects them as a digest mismatch. Push the current manifest to every
-node in the roster and verify the count:
+pulls the correct bytes and rejects them as a digest mismatch (or refuses the image outright as
+`CATALOG_IMAGE_UNKNOWN`). Every peer refreshes its copy from the origin every 15 minutes
+(`nvis-p2p-catalog-refresh.timer`), so after a sync you can simply wait one interval. To push it now
+instead, run the same validated refresh on every node, then verify the count:
 
 ```bash
 xargs -P50 -I{} ssh -o ConnectTimeout=10 -o BatchMode=yes {} \
-  'curl -s -m10 http://<appserver>:12130/.nvis-p2p/catalog/images.tsv \
-     -o /opt/containers/.nvis-p2p/catalog/images.tsv' < roster.txt
+  'sudo -n systemctl start nvis-p2p-catalog-refresh.service' < roster.txt
 
 # verify: how many carry the new pin
 xargs -P50 -I{} ssh {} grep -l <new-sha> \
   /opt/containers/.nvis-p2p/catalog/images.tsv < roster.txt | wc -l
 ```
 
-Do not proceed until the refreshed count equals the roster size. A missed block here becomes a
-block of deferred nodes later.
+Do not proceed until the count equals the roster size. A missed block here becomes a block of
+deferred nodes later. A node without the timer (`systemctl is-active
+nvis-p2p-catalog-refresh.timer`) never catches up on its own — re-deploy its peer.
 
 ## 3. Preheat the seeds
 
@@ -107,7 +111,9 @@ later waves should add almost nothing to the seed total.
 ## 6. Repair stragglers
 
 Deferred nodes fall into two buckets: `launch_limit_N` (pulled but never verified — usually a stale
-catalog, so go back to step 2 for them) and `unreachable_after_N_checks` (down or unreachable).
+catalog, so go back to step 2 for them; `launch_limit_N:not_started` means the peer itself is not
+running, see [How to bring P2P peers back after a reimage](recover-p2p-peers-after-a-reimage.md))
+and `unreachable_after_N_checks` (down or unreachable).
 Collect them into a new roster and re-run — the campaign is idempotent, so nodes that already have
 the image short-circuit instantly:
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import fcntl
 import json
 import os
 import pathlib
@@ -125,6 +126,47 @@ def _sync_catalog(inner: dict, roster: pathlib.Path, log: pathlib.Path) -> int:
     return 0
 
 
+def _manifest_pins(catalog_path: str) -> dict[str, str]:
+    """``filename -> sha256`` from the cluster's manifest, or ``{}`` if it cannot be read."""
+    try:
+        doc = json.loads(pathlib.Path(catalog_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {i.get("filename", ""): i.get("sha256", "") for i in doc.get("images", []) if isinstance(i, dict)}
+
+
+def _ensure_pinned(inner: dict, images: list[str], roster: pathlib.Path, log: pathlib.Path) -> int:
+    """Make the cluster's manifest pin each image as the authored catalog does, before any transfer.
+
+    Seeds and nodes verify a download against the MANIFEST's pin, so an image staged and pinned in
+    Rack Status but not yet synced -- or re-staged under the same name with a new hash -- fails on
+    every node, and only after preheat and a whole wave. When the request carries the authored
+    catalog and the manifest disagrees for any image, sync first and re-check; refuse if it still
+    disagrees. No authored catalog means the manifest is the only source, and there is nothing to
+    compare.
+    """
+    authored = {i.get("filename", ""): i.get("sha256", "") for i in inner.get("catalog") or []}
+    if not authored:
+        return 0
+    unpinned = [i for i in images if not authored.get(i)]
+    if unpinned:
+        _append(log, f"[worker] not pinned in the authored catalog: {', '.join(unpinned)}; refusing")
+        return 2
+    stale = [i for i in images if _manifest_pins(inner.get("catalog_path", "")).get(i) != authored[i]]
+    if not stale:
+        return 0
+    _append(log, f"[worker] cluster manifest pins differ from the catalog for {', '.join(stale)}; syncing first")
+    rc = _sync_catalog(inner, roster, log)
+    if rc != 0:
+        return rc
+    manifest = _manifest_pins(inner.get("catalog_path", ""))
+    still = [i for i in images if manifest.get(i) != authored[i]]
+    if still:
+        _append(log, f"[worker] manifest still disagrees after sync for {', '.join(still)}; refusing")
+        return 3
+    return 0
+
+
 def _handle(req: dict, args: argparse.Namespace, log: pathlib.Path) -> int:
     action = req.get("action", "")
     inner = req.get("request", {})
@@ -141,6 +183,10 @@ def _handle(req: dict, args: argparse.Namespace, log: pathlib.Path) -> int:
     else:
         roster = pathlib.Path(args.roster)
 
+    if action in ("persist", "distribute", "repair"):
+        rc = _ensure_pinned(inner, req.get("images") or [], roster, log)
+        if rc != 0:
+            return rc
     if action == "preflight":
         return _run(["bash", f"{scripts}/preflight-catalog-fleet.sh", str(roster)], log, env, 600)
     if action == "persist":
@@ -180,19 +226,40 @@ def _claim_and_run(path: pathlib.Path, args: argparse.Namespace) -> None:
         lock.unlink(missing_ok=True)
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--ops-dir", required=True, type=pathlib.Path, help="per-cluster operations directory")
-    ap.add_argument("--roster", required=True, help="eligible-node file for fleet-scoped actions")
-    args = ap.parse_args()
-    if not args.ops_dir.is_dir():
-        return 0
-    for path in sorted(args.ops_dir.glob("*.json")):
+def _pending(ops_dir: pathlib.Path) -> list[pathlib.Path]:
+    """Unfinished requests in the order they were enqueued.
+
+    Not filename order: ids start with the action, so a distribute enqueued after a sync would sort
+    -- and run -- first ("d" < "s"). Enqueue time first, id as the tie-break.
+    """
+    pending: list[tuple[str, str, pathlib.Path]] = []
+    for path in ops_dir.glob("*.json"):
         try:
             req = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
         if not req.get("finished_at"):
+            pending.append((str(req.get("started_at") or ""), path.name, path))
+    return [path for _, _, path in sorted(pending)]
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--ops-dir", required=True, type=pathlib.Path, help="per-cluster operations directory")
+    ap.add_argument("--roster", required=True, help="eligible-node file for fleet-scoped actions")
+    args = ap.parse_args(argv)
+    if not args.ops_dir.is_dir():
+        return 0
+    # One worker at a time per cluster. The per-request lock stops two workers running the SAME
+    # request; it does not stop a cron tick starting the next request while a long rollout is still
+    # going, which put two fleet-wide transfers on the seeds at once. A tick that finds the worker
+    # busy leaves the queue to it.
+    with open(args.ops_dir / ".worker.lock", "w", encoding="utf-8") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return 0
+        for path in _pending(args.ops_dir):
             _claim_and_run(path, args)
     return 0
 
