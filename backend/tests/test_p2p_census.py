@@ -117,11 +117,9 @@ class TestNodeState:
         assert _node(fleet, **overrides)[0] == "needs-prep"
 
     def test_an_unwritable_container_directory_needs_prep(self, fleet):
-        fleet["containers"].chmod(0o555)
-        try:
-            state, d = _node(fleet)
-        finally:
-            fleet["containers"].chmod(0o755)
+        # Not chmod: CI runs as root, which writes through any mode, so a 0555 directory still reads
+        # as writable there. A directory that does not exist is unwritable for every user.
+        state, d = _node(fleet, NVIS_P2P_CONTAINER_DIR=str(fleet["tmp"] / "no-such-dir"))
         assert (state, d["containers_writable"]) == ("needs-prep", "no")
 
     def test_a_configured_allowlist_must_name_the_service_account(self, fleet):
