@@ -92,7 +92,9 @@ export function OperationLogDialog({ open, onClose, operation }: OperationLogDia
               // minHeight keeps an empty log a readable rectangle (the scheduler's
               // JobLogContentDialog uses the same 12rem) instead of collapsing to a thin bar.
               minHeight: "12rem", maxHeight: "60vh", overflow: "auto",
-              background: "var(--color-surface-secondary, #f5f5f5)", borderRadius: 1,
+              // Theme-aware text + surface -- a hardcoded light background left the text (which
+              // inherits the dark theme's near-white colour) invisible on a white box.
+              color: "text.primary", bgcolor: "action.hover", borderRadius: 1,
             }}
           />
           {empty && !busy && !error && tooLarge === null && (
