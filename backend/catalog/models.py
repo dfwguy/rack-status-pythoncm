@@ -1475,6 +1475,74 @@ class P2pCatalog:
         return problems
 
 
+#: A node name is a bare hostname -- no spaces or path characters, so a roster cannot smuggle a
+#: shell fragment to the fan-out that targets it.
+_ROSTER_NODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+@dataclass
+class P2pRoster:
+    """A named list of eligible nodes an operation can target."""
+
+    name: str = ""
+    description: str = ""
+    nodes: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: Any) -> P2pRoster:
+        d = _as_dict(d)
+        return cls(
+            name=_as_str(d.get("name")),
+            description=_as_str(d.get("description")),
+            nodes=[n.strip() for n in _as_str_list(d.get("nodes")) if n.strip()],
+        )
+
+
+@dataclass
+class P2pRosters:
+    """A cluster's named rosters -- node lists an operation targets by name instead of the single
+    inventory. Stored whole by ``cluster_id`` behind the ``Repo``, like the other P2P documents."""
+
+    cluster_id: str
+    rosters: list[P2pRoster] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: Any) -> P2pRosters:
+        d = _as_dict(d)
+        rosters_raw = d.get("rosters")
+        rosters = [P2pRoster.from_dict(r) for r in rosters_raw] if isinstance(rosters_raw, list) else []
+        return cls(cluster_id=_as_str(d.get("cluster_id")), rosters=rosters)
+
+    def to_dict(self) -> dict[str, Any]:
+        out = asdict(self)
+        out["id"] = self.cluster_id
+        return out
+
+    def get(self, name: str) -> P2pRoster | None:
+        """The roster with this name, or None."""
+        return next((r for r in self.rosters if r.name == name), None)
+
+    def validate(self) -> list[str]:
+        problems: list[str] = []
+        if not valid_id(self.cluster_id):
+            problems.append(f"invalid cluster id: {self.cluster_id!r}")
+        seen: set[str] = set()
+        for i, roster in enumerate(self.rosters):
+            where = roster.name or f"roster #{i + 1}"
+            if not roster.name.strip():
+                problems.append(f"{where}: name is required")
+            elif roster.name in seen:
+                problems.append(f"{where}: duplicate name")
+            else:
+                seen.add(roster.name)
+            if not roster.nodes:
+                problems.append(f"{where}: at least one node is required")
+            bad = next((n for n in roster.nodes if not _ROSTER_NODE_RE.match(n)), None)
+            if bad is not None:
+                problems.append(f"{where}: invalid node name {bad!r}")
+        return problems
+
+
 @dataclass
 class Project:
     id: str

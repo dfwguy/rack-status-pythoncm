@@ -440,6 +440,50 @@ class TestP2pCatalogApi:
         assert bad.status_code == 400 and "64 hex" in bad.get_json()["message"]
 
 
+class TestP2pRostersModel:
+    def test_round_trip_and_get(self):
+        r = models.P2pRosters.from_dict({"cluster_id": "c1", "rosters": [
+            {"name": "SU19", "description": "unit 19", "nodes": ["n1", "n2"]}]})
+        d = r.to_dict()
+        assert d["id"] == "c1"
+        back = models.P2pRosters.from_dict(d)
+        assert back.get("SU19").nodes == ["n1", "n2"] and back.validate() == []
+        assert back.get("missing") is None
+
+    def test_validation(self):
+        bad = models.P2pRosters.from_dict({"cluster_id": "c1", "rosters": [
+            {"name": "", "nodes": ["n1"]},
+            {"name": "A", "nodes": []},
+            {"name": "B", "nodes": ["bad node!"]},
+            {"name": "dup", "nodes": ["n"]}, {"name": "dup", "nodes": ["m"]}]})
+        probs = bad.validate()
+        assert any("name is required" in p for p in probs)
+        assert any("at least one node" in p for p in probs)
+        assert any("invalid node name" in p for p in probs)
+        assert any("duplicate name" in p for p in probs)
+
+
+class TestP2pRostersApi:
+    def test_get_empty_when_none(self, client):
+        _set_active_p2p(True)
+        body = client.get("/api/p2p/rosters").get_json()
+        assert body["ok"] and body["rosters"] == []
+
+    def test_put_then_get(self, client):
+        _set_active_p2p(True)
+        put = client.put("/api/p2p/rosters",
+                         json={"rosters": [{"name": "verified", "description": "", "nodes": ["sys1-a", "sys1-b"]}]})
+        assert put.status_code == 200
+        got = client.get("/api/p2p/rosters").get_json()
+        assert [x["name"] for x in got["rosters"]] == ["verified"]
+        assert got["rosters"][0]["nodes"] == ["sys1-a", "sys1-b"]
+
+    def test_put_rejects_invalid(self, client):
+        _set_active_p2p(True)
+        bad = client.put("/api/p2p/rosters", json={"rosters": [{"name": "x", "nodes": ["bad node!"]}]})
+        assert bad.status_code == 400 and "invalid node name" in bad.get_json()["message"]
+
+
 class TestP2pProvisionWorkflow:
     def test_native_stage_step_targets_the_app_server_current_dir(self, monkeypatch):
         import host_exec

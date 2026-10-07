@@ -63,6 +63,7 @@ const MultirackView = lazy(() => import("./views/MultirackView").then((m) => ({ 
 // and only mounts when an operator opens it on a cluster that has P2P enabled.
 const ArtifactFleetView = lazy(() => import("./features/p2p/views/ArtifactFleetView"));
 const CatalogEditorView = lazy(() => import("./features/p2p/views/CatalogEditorView"));
+const RostersEditorView = lazy(() => import("./features/p2p/views/RostersEditorView"));
 const P2pSettingsView = lazy(() => import("./features/p2p/views/P2pSettingsView"));
 const SlurmView = lazy(() => import("./views/SlurmView").then((m) => ({ default: m.SlurmView })));
 const ReportsView = lazy(() => import("./views/ReportsView").then((m) => ({ default: m.ReportsView })));
@@ -120,6 +121,7 @@ const VIEW_TITLES: Record<ViewId, string> = {
   multirack: "Multirack operations",
   p2pArtifacts: "Artifact Fleet",
   p2pCatalog: "Catalog",
+  p2pRosters: "Rosters",
   p2pSettings: "Dragonfly Settings",
   reports: "Reports",
   analytics: "Analytics",
@@ -419,6 +421,7 @@ function AppContent() {
           <Route path="/compute/scheduler" element={<SlurmView logDir={logDir} />} />
           <Route path="/p2p/artifacts" element={<ArtifactFleetView />} />
           <Route path="/p2p/catalog" element={<CatalogEditorView />} />
+          <Route path="/p2p/rosters" element={<RostersEditorView />} />
           <Route path="/p2p/settings" element={<P2pSettingsView />} />
           <Route path="/infrastructure/ethernet" element={<InfrastructureView segment="ethernet" />} />
           <Route path="/infrastructure/ib-nvlink" element={<InfrastructureView segment="ib-nvlink" />} />

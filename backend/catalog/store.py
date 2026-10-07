@@ -54,6 +54,7 @@ TABLE_NPI_TOOLS = "npi_tools"
 #: no joins) -- see models.P2pSettings and citizen 15.
 TABLE_P2P_SETTINGS = "p2p_settings"
 TABLE_P2P_CATALOG = "p2p_catalog"
+TABLE_P2P_ROSTERS = "p2p_rosters"
 TABLE_META = "meta"
 
 SCHEMA_VERSION = 2

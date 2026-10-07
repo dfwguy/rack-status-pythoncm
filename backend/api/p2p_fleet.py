@@ -37,6 +37,7 @@ import p2p_catalog
 import p2p_config
 import p2p_operations as p2p_ops
 import p2p_provision  # noqa: F401 -- imported for its side effect: registers the p2p_stage_assets native step
+import p2p_rosters
 import p2p_snapshot
 import paths
 import throttle
@@ -273,6 +274,33 @@ def p2p_catalog_put():
         return jsonify({"ok": False, "message": str(exc)}), 400
     return jsonify({"ok": True, "cluster_id": cluster.id, "authored": True,
                     "images": saved.to_dict()["images"]})
+
+
+@bp.route("/rosters", methods=["GET"])
+@action(get="p2p:read")
+def p2p_rosters_get():
+    """The active cluster's named rosters (node lists an operation can target by name)."""
+    _project, cluster, _platform = catalog_context.resolve()
+    if cluster is None or not getattr(cluster, "p2p_enabled", False):
+        return jsonify({"ok": False, "message": "P2P is not enabled for the active cluster."}), 404
+    rosters = p2p_rosters.get_rosters(cluster.id).to_dict()["rosters"]
+    return jsonify({"ok": True, "cluster_id": cluster.id, "rosters": rosters})
+
+
+@bp.route("/rosters", methods=["PUT"])
+@action(put="p2p:roster")
+def p2p_rosters_put():
+    """Replace the active cluster's named rosters. 400 on an invalid document."""
+    _project, cluster, _platform = catalog_context.resolve()
+    if cluster is None or not getattr(cluster, "p2p_enabled", False):
+        return jsonify({"ok": False, "message": "P2P is not enabled for the active cluster."}), 404
+    body = request.get_json(silent=True) or {}
+    rosters = models.P2pRosters.from_dict({"cluster_id": cluster.id, "rosters": body.get("rosters", [])})
+    try:
+        saved = p2p_rosters.save_rosters(rosters)
+    except ValueError as exc:
+        return jsonify({"ok": False, "message": str(exc)}), 400
+    return jsonify({"ok": True, "cluster_id": cluster.id, "rosters": saved.to_dict()["rosters"]})
 
 
 @bp.route("/provision", methods=["POST"])

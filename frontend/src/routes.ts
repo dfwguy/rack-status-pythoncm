@@ -50,6 +50,7 @@ export const ROUTES: RouteDef[] = [
   { viewId: "slurm", path: "/compute/scheduler", domain: "Compute", label: "Scheduler" },
   { viewId: "p2pArtifacts", path: "/p2p/artifacts", domain: "Artifact Distribution", label: "Artifact Fleet" },
   { viewId: "p2pCatalog", path: "/p2p/catalog", domain: "Artifact Distribution", label: "Catalog" },
+  { viewId: "p2pRosters", path: "/p2p/rosters", domain: "Artifact Distribution", label: "Rosters" },
   { viewId: "p2pSettings", path: "/p2p/settings", domain: "Artifact Distribution", label: "Dragonfly Settings" },
   { viewId: "infraEthernet", path: "/infrastructure/ethernet", domain: "Infrastructure", label: "Ethernet" },
   { viewId: "infraIbNvlink", path: "/infrastructure/ib-nvlink", domain: "Infrastructure", label: "IB / NVLink" },

@@ -57,6 +57,32 @@ export function saveCatalog(images: CatalogImageEdit[]): Promise<CatalogDoc> {
   });
 }
 
+/** One named roster: a node list an operation can target by name. */
+export type RosterEdit = {
+  name: string;
+  description: string;
+  nodes: string[];
+};
+
+export type RostersDoc = {
+  ok: boolean;
+  cluster_id: string;
+  rosters: RosterEdit[];
+};
+
+/** The active cluster's named rosters. */
+export function getRosters(): Promise<RostersDoc> {
+  return apiJson<RostersDoc>(`${BASE}/rosters`);
+}
+
+/** Replace the active cluster's rosters. Rejects with an `ApiError` (400) on an invalid document. */
+export function saveRosters(rosters: RosterEdit[]): Promise<RostersDoc> {
+  return apiJson<RostersDoc>(`${BASE}/rosters`, {
+    method: "PUT",
+    body: JSON.stringify({ rosters }),
+  });
+}
+
 export type OperationRequest = {
   action: OperationAction;
   sus: number[];
