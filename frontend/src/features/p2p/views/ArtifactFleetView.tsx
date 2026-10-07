@@ -17,7 +17,7 @@
 // Button policy is this app's bordered-only rule: the primary CTA is solid
 // brand, everything routine is bordered neutral, and anything destructive is
 // solid danger. Nothing clickable is allowed to read as a caption.
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Banner,
   Button,
@@ -30,6 +30,7 @@ import {
   Tag,
   Text,
 } from "@nvidia/foundations-react-core";
+import Box from "@mui/material/Box";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
@@ -52,7 +53,7 @@ import { useNavigate } from "react-router-dom";
 import { NodeHeatmap } from "../components/fleet/NodeHeatmap";
 import { OperationLogDialog } from "../components/OperationLogDialog";
 import { useFleetStatus } from "../hooks/useFleetStatus";
-import { startOperation } from "../services/fleetService";
+import { getRosters, startOperation } from "../services/fleetService";
 import { provision } from "../services/settingsService";
 import { ApiError } from "../lib/apiFetch";
 import { integrityExceptions, integrityToneOf } from "../lib/fleetHeatmap";
@@ -78,6 +79,16 @@ export default function ArtifactFleetView() {
   const [refreshing, setRefreshing] = useState(false);
   const [provisionBusy, setProvisionBusy] = useState(false);
   const [logOp, setLogOp] = useState<Operation | null>(null);
+  const [rosterNames, setRosterNames] = useState<string[]>([]);
+  const [selectedRoster, setSelectedRoster] = useState<string>("");
+
+  useEffect(() => {
+    let live = true;
+    void getRosters()
+      .then((doc) => { if (live) setRosterNames(doc.rosters.map((r) => r.name)); })
+      .catch(() => { if (live) setRosterNames([]); });
+    return () => { live = false; };
+  }, []);
   const navigate = useNavigate();
 
   // Enabled-but-bare clusters report `provisioned: false`: the catalog still lists the shipped
@@ -117,8 +128,8 @@ export default function ArtifactFleetView() {
     async (action: OperationAction) => {
       setActionError(null);
       setNotice(null);
-      if (!selectedSus.length) {
-        setActionError("Select at least one SU.");
+      if (!selectedRoster && !selectedSus.length) {
+        setActionError("Select at least one SU, or choose a roster.");
         return;
       }
       const operationImages = IMAGE_SCOPED.has(action) ? chosenImages : [];
@@ -133,8 +144,9 @@ export default function ArtifactFleetView() {
         return;
       }
       try {
-        const operation = await startOperation({ action, sus: selectedSus, images: operationImages });
-        setNotice(`Started ${action} on ${selectedSus.length} SU(s). Operation ${operation.id}.`);
+        const operation = await startOperation({ action, sus: selectedSus, images: operationImages, roster: selectedRoster });
+        const target = selectedRoster ? `roster "${selectedRoster}"` : `${selectedSus.length} SU(s)`;
+        setNotice(`Started ${action} on ${target}. Operation ${operation.id}.`);
         await refresh();
       } catch (reason) {
         // 409 is the server's single-mutation lock, which is a normal answer an
@@ -146,7 +158,7 @@ export default function ArtifactFleetView() {
         setActionError(reason instanceof Error ? reason.message : "Operation failed to start");
       }
     },
-    [chosenImages, refresh, selectedSus],
+    [chosenImages, refresh, selectedSus, selectedRoster],
   );
 
   // A manual refresh with visible feedback: `loading` only covers the first fetch, so without this
@@ -400,6 +412,23 @@ export default function ArtifactFleetView() {
               None
             </Button>
           </Flex>
+          {rosterNames.length > 0 ? (
+            <>
+              <Text kind="body/regular/sm">Or target a named roster (overrides the SU scope):</Text>
+              <Box
+                component="select"
+                aria-label="Roster"
+                value={selectedRoster}
+                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSelectedRoster(e.target.value)}
+                sx={{ p: 1, borderRadius: 1, border: "1px solid var(--color-border-subtle, #ccc)", fontSize: 14, maxWidth: 360 }}
+              >
+                <option value="">— default inventory —</option>
+                {rosterNames.map((n) => (
+                  <option key={n} value={n}>{n}</option>
+                ))}
+              </Box>
+            </>
+          ) : null}
         </Flex>
       </Card>
 

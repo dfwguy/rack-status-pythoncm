@@ -219,6 +219,30 @@ class TestP2pStatus:
         assert [i["filename"] for i in req["request"]["catalog"]] == ["n.sqsh"]
         assert req["request"]["appserver_ip"] == "10.0.0.2"
 
+    def test_operation_targets_a_named_roster(self, client, tmp_path, monkeypatch):
+        import json as _json
+
+        import p2p_operations
+
+        _set_active_p2p(True)
+        self._complete_settings()
+        monkeypatch.setattr(p2p_operations, "_OPS_DIR", tmp_path / "ops")
+        client.put("/api/p2p/rosters", json={"rosters": [{"name": "SU19", "nodes": ["n1", "n2"]}]})
+        resp = client.post("/api/p2p/operations", json={"action": "verify", "roster": "SU19"})
+        assert resp.status_code == 202 and resp.get_json()["roster"] == "SU19"
+        cluster_id = get_active(get_repo())["cluster"]
+        req = _json.loads(next((tmp_path / "ops" / cluster_id).glob("verify-*.json")).read_text())
+        assert req["request"]["roster_nodes"] == ["n1", "n2"]
+
+    def test_operation_rejects_unknown_roster(self, client, tmp_path, monkeypatch):
+        import p2p_operations
+
+        _set_active_p2p(True)
+        self._complete_settings()
+        monkeypatch.setattr(p2p_operations, "_OPS_DIR", tmp_path / "ops")
+        resp = client.post("/api/p2p/operations", json={"action": "verify", "roster": "nope"})
+        assert resp.status_code == 400 and "unknown roster" in resp.get_json()["message"]
+
 
 class TestP2pProvision:
     def test_provision_404_when_disabled(self, client):

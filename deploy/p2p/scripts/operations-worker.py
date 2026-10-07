@@ -22,6 +22,7 @@ import json
 import os
 import pathlib
 import subprocess
+import tempfile
 
 
 def _now() -> str:
@@ -108,12 +109,20 @@ def _sync_catalog(inner: dict, roster: pathlib.Path, log: pathlib.Path) -> int:
     if not appserver or not roster.exists():
         _append(log, "[worker] sync: no appserver ip or roster; manifest written, node refresh skipped")
         return 0
+    # Best-effort node refresh: each peer re-pulls the origin's images.tsv. A node that is down
+    # returns ssh 255; `|| true` keeps xargs from aborting the whole batch on it, and the refresh
+    # never fails the sync -- the manifest is already the truth and the node sync-timer reconciles
+    # stragglers.
     origin = f"http://{appserver}:12130/.nvis-p2p/catalog/images.tsv"
-    refresh = (f"xargs -P40 -I{{}} ssh -o ConnectTimeout=10 -o BatchMode=yes {{}} "
-               f"'curl -s -m10 {origin} -o /opt/containers/.nvis-p2p/catalog/images.tsv' < {roster}")
-    rc = _run(["bash", "-c", refresh], log, dict(os.environ), 600)
-    _append(log, f"[worker] node catalog refresh exit={rc}")
-    return rc
+    refresh = (
+        "xargs -P40 -I@ bash -c '"
+        "ssh -o ConnectTimeout=10 -o BatchMode=yes @ "
+        '"curl -s -m10 ' + origin + ' -o /opt/containers/.nvis-p2p/catalog/images.tsv" || true'
+        "' < " + str(roster)
+    )
+    _run(["bash", "-c", refresh], log, dict(os.environ), 900)
+    _append(log, "[worker] node catalog refresh dispatched (best-effort)")
+    return 0
 
 
 def _handle(req: dict, args: argparse.Namespace, log: pathlib.Path) -> int:
@@ -122,7 +131,15 @@ def _handle(req: dict, args: argparse.Namespace, log: pathlib.Path) -> int:
     root = inner.get("install_root") or "/opt/nvis-p2p"
     scripts = f"{root.rstrip('/')}/current/scripts"
     env = _rollout_env(os.environ, inner.get("rollout", {}), root)
-    roster = pathlib.Path(args.roster)
+    # A named roster travels with the request as roster_nodes; write it out and target it instead of
+    # the cluster's default inventory. Blank -> the default roster the cron passes.
+    roster_nodes = inner.get("roster_nodes")
+    if roster_nodes:
+        roster = pathlib.Path(tempfile.gettempdir()) / f"op-{req.get('id', 'roster')}.nodes"
+        roster.write_text("\n".join(roster_nodes) + "\n", encoding="utf-8")
+        _append(log, f"[worker] targeting roster '{req.get('roster')}' ({len(roster_nodes)} nodes)")
+    else:
+        roster = pathlib.Path(args.roster)
 
     if action == "preflight":
         return _run(["bash", f"{scripts}/preflight-catalog-fleet.sh", str(roster)], log, env, 600)

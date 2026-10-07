@@ -30,6 +30,7 @@ import re
 import uuid
 
 import p2p_catalog
+import p2p_rosters
 from catalog.models import P2pSettings
 
 #: An operation id is this shape (the enqueue builder); validated before it reaches the filesystem so
@@ -63,18 +64,26 @@ def _ops_dir(cluster_id: str) -> pathlib.Path:
 
 
 def enqueue(cluster_id: str, settings: P2pSettings, action: str,
-            images: list[str] | None, sus: list[int] | None) -> dict:
+            images: list[str] | None, sus: list[int] | None, roster_name: str = "") -> dict:
     """Validate and queue one operation. Returns the ``Operation`` the UI renders.
 
-    Raises :class:`OperationError` for a request the worker could not run: an unknown action, or an
-    image-scoped action with no image. The caller maps that to a 400.
+    Raises :class:`OperationError` for a request the worker could not run: an unknown action, an
+    image-scoped action with no image, or a named roster that does not exist. The caller maps that
+    to a 400. A blank ``roster_name`` leaves the worker on the cluster's default inventory.
     """
     images = [i for i in (images or []) if i]
     sus = [int(s) for s in (sus or [])]
+    roster_name = (roster_name or "").strip()
     if action not in SUPPORTED_ACTIONS:
         raise OperationError(f"unsupported operation: {action!r}")
     if action in IMAGE_REQUIRED and not images:
         raise OperationError(f"operation {action!r} requires at least one image")
+    roster_nodes: list[str] = []
+    if roster_name:
+        roster = p2p_rosters.get_rosters(cluster_id).get(roster_name)
+        if roster is None:
+            raise OperationError(f"unknown roster: {roster_name!r}")
+        roster_nodes = roster.nodes
 
     op_id = f"{action}-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
     request = {
@@ -82,6 +91,7 @@ def enqueue(cluster_id: str, settings: P2pSettings, action: str,
         "action": action,
         "sus": sus,
         "images": images,
+        "roster": roster_name or None,
         "state": "running",  # queued-for-the-worker reads as running to the UI until it resolves
         "started_at": _now(),
         "finished_at": None,
@@ -103,6 +113,10 @@ def enqueue(cluster_id: str, settings: P2pSettings, action: str,
             },
         },
     }
+    if roster_nodes:
+        # The resolved roster travels with the request so the worker targets exactly these nodes
+        # instead of the cluster's default inventory.
+        request["request"]["roster_nodes"] = roster_nodes
     if action == "sync":
         # A sync carries the authored catalog so the worker writes exactly what the operator saved,
         # without reaching back into the store from the app server.

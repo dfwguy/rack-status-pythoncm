@@ -213,7 +213,7 @@ def p2p_operations():
     body = request.get_json(silent=True) or {}
     try:
         operation = p2p_ops.enqueue(cluster.id, settings, str(body.get("action", "")),
-                                    body.get("images"), body.get("sus"))
+                                    body.get("images"), body.get("sus"), str(body.get("roster", "")))
     except p2p_ops.OperationError as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400
     return jsonify(operation), 202

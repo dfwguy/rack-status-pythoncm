@@ -88,6 +88,8 @@ export type OperationRequest = {
   sus: number[];
   /** Required for persist/distribute/repair; ignored by the others. */
   images?: string[];
+  /** A named roster to target; blank/absent targets the cluster's default inventory. */
+  roster?: string;
 };
 
 /**
@@ -105,6 +107,7 @@ export function startOperation(request: OperationRequest): Promise<Operation> {
       action: request.action,
       sus: request.sus,
       images: request.images ?? [],
+      roster: request.roster ?? "",
     }),
   });
 }
