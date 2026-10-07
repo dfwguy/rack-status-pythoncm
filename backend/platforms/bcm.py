@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 
 import bcm_query
+import config_env
 
 from platforms.base import PlatformProvider, _compute_node_records
 
@@ -33,7 +34,7 @@ class BCMProvider(PlatformProvider):
             raise RuntimeError(f"BCM node inventory failed: {reason or 'query unsuccessful'}")
         return _compute_node_records(
             result.get("data"), provider="BCM", rack_field="rack_id", ip_field="bmc_ip",
-            rack_unit_field="rack_unit",
+            rack_unit_field="rack_unit" if config_env.uses_bcm_slurm() else "",
         )
 
     def list_racks_cmd(self) -> list[str]:

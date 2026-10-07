@@ -119,7 +119,7 @@ def _all_slurm_nodenames() -> list[str]:
 
 def collect_slurm_placement_records() -> list[dict[str, str | None]] | None:
     """Optional provider placement; failure must never erase the scheduler roster."""
-    if config_env.rack_mapping_mode() != "translate":
+    if not config_env.uses_bcm_slurm() or config_env.rack_mapping_mode() != "translate":
         return None
     try:
         return _get_platform().compute_node_inventory()
@@ -141,7 +141,7 @@ def _rack_node_hostnames_from_inventory(rack: str) -> list[str]:
     hosts = _all_slurm_nodenames()
     if not hosts:
         return []
-    if config_env.rack_mapping_mode() != "direct":
+    if config_env.uses_bcm_slurm() and config_env.rack_mapping_mode() != "direct":
         return list(provider_node_racks(hosts, [rid], collect_slurm_placement_records()))
     rid_cf = rid.casefold()
     seps = ("-", "_", ".", ":", "/")

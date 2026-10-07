@@ -172,6 +172,41 @@ def test_query_and_target_primitives_import_without_the_status_orchestrator():
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.parametrize(("manager", "scheduler"), [
+    (manager, scheduler) for manager in ("bcm", "maas")
+    for scheduler in ("slurm", "pythoncm", "local", "runai", "slinky", "maas")
+    if (manager, scheduler) != ("bcm", "slurm")
+])
+def test_other_cluster_types_skip_placement_and_keep_prefix_targeting(monkeypatch, manager, scheduler):
+    import config_env
+    import slurm_query
+
+    values = {"RACK_PLATFORM": manager, "RACK_SCHEDULER": scheduler,
+              "NVIS_RACK_MAPPING_MODE": "translate"}
+    monkeypatch.setattr(config_env, "_eget", lambda key, default=None: values.get(key, default))
+    provider = mock.Mock()
+    provider.compute_node_inventory.side_effect = AssertionError("unexpected placement query")
+    monkeypatch.setattr(slurm_query, "_get_platform", lambda: provider)
+    monkeypatch.setattr(slurm_query, "_all_slurm_nodenames", lambda: ["F41-node-01", "F42-node-02"])
+    assert slurm_query.collect_slurm_placement_records() is None
+    assert slurm_query._rack_node_hostnames_from_inventory("F41") == ["F41-node-01"]
+    provider.compute_node_inventory.assert_not_called()
+
+
+def test_maas_slurm_retains_template_fallback(monkeypatch):
+    import config_env
+    import node_targets
+
+    values = {"RACK_PLATFORM": "maas", "RACK_SCHEDULER": "slurm"}
+    monkeypatch.setattr(config_env, "_eget", lambda key, default=None: values.get(key, default))
+    monkeypatch.setattr(config_env, "rack_mapping_mode", lambda: "translate")
+    monkeypatch.setattr(node_targets, "_rack_node_hostnames_from_inventory", lambda _rack: [])
+    naming = mock.Mock()
+    naming.build_validation_target.return_value = "existing-template-target"
+    monkeypatch.setattr(node_targets, "_nvis_naming", lambda: naming)
+    assert node_targets.validation_target_for_rack("F41", None) == "existing-template-target"
+
+
 def test_grafana_embed_host_regex_prefers_rack_prefix():
     from grafana_embed import _grafana_embed_host_regex_and_mode
 

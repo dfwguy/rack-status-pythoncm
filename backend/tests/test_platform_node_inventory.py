@@ -73,6 +73,19 @@ def test_bcm_preserves_physical_rack_unit(monkeypatch):
     assert (node["rack"], node["rack_unit"]) == ("F41", "2")
 
 
+def test_bcm_without_slurm_keeps_existing_record_shape(monkeypatch):
+    import config_env
+
+    values = {"RACK_PLATFORM": "bcm", "RACK_SCHEDULER": "pythoncm"}
+    monkeypatch.setattr(config_env, "_eget", lambda key, default=None: values.get(key, default))
+    monkeypatch.setattr("bcm_query.nodes", lambda: {"ok": True, "data": [
+        {"hostname": "gpu001", "rack_id": "U19", "rack_unit": "2"},
+    ]})
+    assert BCMProvider().compute_node_inventory() == [
+        {"id": "gpu001", "rack": "U19", "status": "unknown", "ip": "", "scheduler_state": ""},
+    ]
+
+
 def test_maas_uses_machine_hostnames_without_fabricating_racks_or_health(monkeypatch):
     machine = {"hostname": "maas-gpu-1", "status": 6, "status_name": "Deployed",
                "ip_addresses": ["10.0.0.9"], "tag_names": ["rack-a"]}

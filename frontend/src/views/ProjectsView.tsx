@@ -182,6 +182,7 @@ export function ProjectsView() {
   const suSlug = (label: string) =>
     label.trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
   const clMode = clusterDraft?.cluster.rack_mapping_mode || "direct";
+  const clBcmSlurm = clusterDraft?.cluster.cluster_manager === "bcm" && clusterDraft?.cluster.scheduler === "slurm";
   const clSUs = clusterDraft?.cluster.scalable_units || [];
 
   /**
@@ -458,12 +459,12 @@ export function ProjectsView() {
           <FormField
             name="cl-rackmapping"
             slotLabel="Rack mapping"
-            slotHelp="Direct: the rack id is in the hostname (parsed by the templates below). Translate: rack/slot come from the cluster manager; optional SU grouping comes from the list below. Pool: there is no placement at all — nodes render as a flat list (GPU counts still come from the scheduler)."
+            slotHelp="Direct: the rack id is in the hostname (parsed by the templates below). Translate: rack/slot come from the cluster manager and SU grouping from the list below; the SU list is optional for BCM with Slurm. Pool: there is no placement at all — nodes render as a flat list (GPU counts still come from the scheduler)."
           >
             <Select
               items={[
                 { value: "direct", children: "Direct (rack id in hostname)" },
-                { value: "translate", children: "Translate (provider rack/slot)" },
+                { value: "translate", children: clBcmSlurm ? "Translate (provider rack/slot)" : "Translate (provider rack + SU list)" },
                 { value: "pool", children: "Pool (no placement — flat node list)" },
               ]}
               value={clMode}
@@ -502,7 +503,7 @@ export function ProjectsView() {
             <>
               <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>Scalable Unit translation</Text>
               <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginTop: -4 }}>
-                Optional: one row per SU, with a label and its comma-separated rack ids (the rack ids the cluster manager reports, e.g. U19, U20). Leave empty when the cluster has no SU grouping.
+                One row per SU: a label and its comma-separated rack ids (the rack ids the cluster manager reports, e.g. U19, U20). {clBcmSlurm ? "Optional for BCM with Slurm; leave empty when the cluster has no SU grouping." : "Required in translate mode."}
               </Text>
               <Flex direction="column" gap="1.5">
                 {clSUs.map((su, i) => (

@@ -173,7 +173,7 @@ def validation_target_for_rack(rack: str, override: str | None) -> str:
             return ",".join(hosts)
     if not rack:
         raise ValueError("an explicit node target is required when rack is empty")
-    if config_env.rack_mapping_mode() != "direct":
+    if config_env.uses_bcm_slurm() and config_env.rack_mapping_mode() != "direct":
         raise ValueError("rack placement is unavailable; select explicit node hostnames")
     return _nvis_naming().build_validation_target(
         rack, _validation_ct_inner(), override

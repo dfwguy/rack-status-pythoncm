@@ -18,6 +18,7 @@ carries that choice on the cluster record so one instance serves both kinds.
 """
 from __future__ import annotations
 
+import pytest
 from catalog import context, models
 
 
@@ -60,6 +61,16 @@ class TestTranslateSuGrouping:
     def test_translate_without_scalable_units_is_accepted(self):
         """BCM physical placement does not imply a fabric scalable unit."""
         assert _cluster(rack_mapping_mode="translate").validate() == []
+
+    @pytest.mark.parametrize(("manager", "scheduler"), [
+        (manager, scheduler) for manager in models.CLUSTER_MANAGERS for scheduler in models.SCHEDULERS
+        if (manager, scheduler) != ("bcm", "slurm")
+    ])
+    def test_other_cluster_types_still_require_sus(self, manager, scheduler):
+        problems = _cluster(
+            cluster_manager=manager, scheduler=scheduler, rack_mapping_mode="translate",
+        ).validate()
+        assert any("requires a scalable_units" in p for p in problems)
 
     def test_translate_with_scalable_units_is_accepted(self):
         c = _cluster(

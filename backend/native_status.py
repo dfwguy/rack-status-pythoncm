@@ -1133,9 +1133,11 @@ def build_node_inventory(
     # mis-set CT template; in 'pool' there is no rack at all so parsing fabricates one. In both the
     # node stays ungrouped rather than mis-grouped. See _hostname_encodes_rack.
     parse_hostname = _hostname_encodes_rack()
-    provider_racks = {} if is_pool_mode() else provider_node_racks(
+    bcm_slurm = config_env.uses_bcm_slurm()
+    accept_placement = not (bcm_slurm and is_pool_mode())
+    provider_racks = provider_node_racks(
         nodes, rack_ids.values(), records, naming=naming, normalize=_normalize_rack_key_for_ds,
-    )
+    ) if accept_placement else {}
     result: list[dict[str, Any]] = []
     for host, scheduler_state in sorted(nodes.items(), key=lambda item: item[0].casefold()):
         detail = details.get(host.casefold(), {})
@@ -1143,7 +1145,7 @@ def build_node_inventory(
         if parse_hostname:
             parsed = naming.sinfo_rack_from_host(host.lower().split(".")[0])
             rack = rack_ids.get(_normalize_rack_key_for_ds(parsed[0]).casefold()) if parsed else None
-        if detail.get("rack") and not is_pool_mode():
+        if detail.get("rack") and accept_placement:
             rack = provider_racks.get(host)
         if rack is None and parse_hostname:
             # Support real names whose extra components do not fit the tray template.
@@ -1159,7 +1161,7 @@ def build_node_inventory(
             "id": host, "rack": rack, "status": device_states.get(host.casefold(), state),
             "scheduler_state": scheduler_state, "ip": detail.get("ip", ""),
         }
-        if rack is not None and detail.get("rack_unit"):
+        if bcm_slurm and rack is not None and detail.get("rack_unit"):
             node_rec["rack_unit"] = detail["rack_unit"]
         shape = shape_by_host.get(host.casefold())
         if shape:

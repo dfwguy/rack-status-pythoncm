@@ -174,6 +174,18 @@ def test_translated_placement_failure_keeps_slurm_nodes_and_gpu_shape(monkeypatc
     assert state.node_inventory_error == ""
 
 
+def test_other_cluster_types_keep_existing_provider_placement_contract(monkeypatch):
+    monkeypatch.setattr(ns.config_env, "_eget", lambda key, default="": (
+        "maas" if key == "RACK_PLATFORM" else default
+    ))
+    monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "pool")
+    inv = ns.build_node_inventory(_MAP_NODES, _MAP_RACKS, records=[
+        {"id": "p1-r5-ct3", "rack": "p1-r5", "rack_unit": "3"},
+    ])
+    assert inv[0]["rack"] == "p1-r5"
+    assert "rack_unit" not in inv[0]
+
+
 def test_expanded_hostnames_are_actual_roster_and_expanded_only_once(monkeypatch):
     run = Mock(side_effect=[
         slurm_response("GPU[01-02] idle\nGPU01 idle\n"),

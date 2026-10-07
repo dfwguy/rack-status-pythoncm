@@ -109,6 +109,17 @@ beforeEach(() => {
 });
 
 describe("rack mapping mode", () => {
+  it("makes SU grouping optional only for BCM with Slurm", async () => {
+    await openNewCluster();
+    choose(/Rack mapping/i, /Translate/);
+    await waitFor(() => expect(screen.getByText(/Optional for BCM with Slurm; leave empty/)).toBeTruthy());
+    choose(/Cluster manager/i, /^maas$/);
+    await waitFor(() => expect(screen.getByText(/Required in translate mode\./)).toBeTruthy());
+    choose(/Cluster manager/i, /^bcm$/);
+    choose(/^Scheduler$/i, /^pythoncm$/);
+    await waitFor(() => expect(screen.getByText(/Required in translate mode\./)).toBeTruthy());
+  });
+
   it("defaults to direct: shows CT/NVSwitch templates, hides the SU list", async () => {
     await openNewCluster();
     expect(screen.getByText("Node/CT id template")).toBeTruthy();
