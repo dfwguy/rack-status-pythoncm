@@ -24,6 +24,9 @@ export function OperationLogDialog({ open, onClose, operation }: OperationLogDia
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [tooLarge, setTooLarge] = useState<number | null>(null);
+  // A finished-or-running operation may have an empty .log (nothing written yet). Track it so the
+  // viewer shows an explicit "no output" note inside the box rather than a blank, collapsed bar.
+  const [empty, setEmpty] = useState(false);
 
   useEffect(() => {
     if (!open || !operation) return;
@@ -32,6 +35,7 @@ export function OperationLogDialog({ open, onClose, operation }: OperationLogDia
     setBusy(true);
     setError("");
     setTooLarge(null);
+    setEmpty(false);
     /* eslint-enable react-hooks/set-state-in-effect */
     if (preRef.current) preRef.current.textContent = "";
 
@@ -47,7 +51,9 @@ export function OperationLogDialog({ open, onClose, operation }: OperationLogDia
           setTooLarge(log.size_bytes ?? 0);
           return;
         }
-        if (preRef.current) preRef.current.textContent = log.content ?? "";
+        const content = log.content ?? "";
+        if (preRef.current) preRef.current.textContent = content;
+        setEmpty(content.trim().length === 0);
       } catch (e: unknown) {
         const err = e as { name?: string };
         if (err?.name !== "AbortError") setError(String(e));
@@ -73,17 +79,35 @@ export function OperationLogDialog({ open, onClose, operation }: OperationLogDia
             server at the operation&rsquo;s {".log"} file.
           </Text>
         )}
-        {!busy && !error && tooLarge === null && (
+        {/* The <pre> is always mounted so the imperative textContent set survives the busy->ready
+            re-render -- gating it (as before) unmounted the ref mid-fetch and silently dropped the
+            log. The loading / error / too-large states render as messages above it. */}
+        <Box sx={{ position: "relative", mt: busy || error || tooLarge !== null ? 1 : 0 }}>
           <Box
             component="pre"
             ref={preRef}
             sx={{
               m: 0, p: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word",
-              fontFamily: "ui-monospace, monospace", fontSize: 13, maxHeight: "60vh", overflow: "auto",
+              fontFamily: "ui-monospace, monospace", fontSize: 13,
+              // minHeight keeps an empty log a readable rectangle (the scheduler's
+              // JobLogContentDialog uses the same 12rem) instead of collapsing to a thin bar.
+              minHeight: "12rem", maxHeight: "60vh", overflow: "auto",
               background: "var(--color-surface-secondary, #f5f5f5)", borderRadius: 1,
             }}
           />
-        )}
+          {empty && !busy && !error && tooLarge === null && (
+            <Box
+              sx={{
+                position: "absolute", inset: 0, display: "flex",
+                alignItems: "center", justifyContent: "center", pointerEvents: "none",
+              }}
+            >
+              <Text kind="body/regular/md" style={{ color: "var(--color-text-secondary, #888)" }}>
+                No log output yet.
+              </Text>
+            </Box>
+          )}
+        </Box>
       </DialogContent>
       <DialogActions>
         <Button kind="secondary" color="neutral" size="small" onClick={onClose}>
