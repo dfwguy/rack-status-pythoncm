@@ -72,7 +72,7 @@ export function OperationLogDialog({ open, onClose, operation }: OperationLogDia
       </DialogTitle>
       <DialogContent dividers>
         {busy && <Text kind="body/regular/md">Loading…</Text>}
-        {error && <Text kind="body/regular/md" style={{ color: "var(--color-text-danger, #c00)" }}>{error}</Text>}
+        {error && <Box sx={{ color: "error.main", fontSize: 14 }}>{error}</Box>}
         {tooLarge !== null && (
           <Text kind="body/regular/md">
             Log is {Math.round(tooLarge / 1024)} KB — too large to show inline. It is on the app
@@ -104,9 +104,7 @@ export function OperationLogDialog({ open, onClose, operation }: OperationLogDia
                 alignItems: "center", justifyContent: "center", pointerEvents: "none",
               }}
             >
-              <Text kind="body/regular/md" style={{ color: "var(--color-text-secondary, #888)" }}>
-                No log output yet.
-              </Text>
+              <Box sx={{ color: "text.secondary", fontSize: 14 }}>No log output yet.</Box>
             </Box>
           )}
         </Box>
