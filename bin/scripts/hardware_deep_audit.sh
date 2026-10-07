@@ -78,8 +78,15 @@ if systemctl list-unit-files CMDaemon.service >/dev/null 2>&1 && ! systemctl is-
   fail service_cmdaemon "CMDaemon is installed but not active"
 fi
 
-if [[ -e /dev/md0 || -e /proc/mdstat ]]; then
-  if ! awk '/^md0[[:space:]]*:/ && /active/ {ok=1} END {exit !ok}' /proc/mdstat 2>/dev/null; then
+# Only a *configured* md0 must be active. Guard on md0 actually appearing in /proc/mdstat, the way
+# the /raid check below guards on the directory existing. The md driver is loaded on every node, so
+# `-e /proc/mdstat` is always true -- the old guard failed the whole fleet of nodes that run no md
+# RAID at all (GB300 boots nvme directly: mdstat reads `unused devices: <none>`). An md0 that is
+# assembled-but-degraded still prints an `md0 :` line without `active`, so this still catches it.
+if grep -qE '^md0[[:space:]]*:' /proc/mdstat 2>/dev/null; then
+  # State is the field after "md0 :" -- match it whole. A plain /active/ regex also matches
+  # "inactive" (it contains "active"), which would score a degraded array as healthy.
+  if ! awk '$1=="md0" && $3=="active" {ok=1} END {exit !ok}' /proc/mdstat 2>/dev/null; then
     fail storage_md0 "md0 is not active"
   fi
 fi
