@@ -29,6 +29,8 @@ import os
 import pathlib
 import time
 
+import config_env
+
 _logger = logging.getLogger("rack_web.p2p_snapshot")
 
 #: Where the producer drops ``<cluster_id>.json``. Defaults under the app's state dir, which on a
@@ -36,7 +38,9 @@ _logger = logging.getLogger("rack_web.p2p_snapshot")
 _SNAPSHOT_DIR = pathlib.Path(os.environ.get("RACK_P2P_SNAPSHOT_DIR", "/app/var/p2p-snapshots"))
 #: A snapshot older than this is treated as absent: a stopped producer must degrade to greenfield,
 #: not pin the view to a stale coverage forever. Generous enough to tolerate a missed producer run.
-_MAX_AGE_SECONDS = int(os.environ.get("RACK_P2P_SNAPSHOT_MAX_AGE", "900"))
+#: Read at import, so it goes through `env_int`: a bare `int(...)` here turned a typo such as "30m"
+#: into an app that would not start. Zero or negative is meaningless and falls back to the default.
+_MAX_AGE_SECONDS = config_env.env_int("RACK_P2P_SNAPSHOT_MAX_AGE", 900, min_valid=1)
 #: The view polls faster than the producer runs; re-reading the file every few seconds is enough.
 _CACHE_TTL_SECONDS = 10
 

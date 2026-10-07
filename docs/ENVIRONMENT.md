@@ -667,6 +667,27 @@ results-ingest path, which needs the honest status back.
 
 ---
 
+## 16c. Artifact distribution (NVIS-P2P): the shared-state directories
+
+The P2P gateway (`/api/p2p/*`) never calls the cluster's P2P services over the network. Two
+directories under the app's state directory are the channel instead: the fleet-snapshot producer
+(`deploy/p2p/scripts/fleet-snapshot.py`) writes into one, and the operations worker
+(`deploy/p2p/scripts/operations-worker.py`) claims requests from the other. Both run where the P2P
+instance lives, so each directory must be the **same path seen from both sides** — on a co-located
+deployment, the state directory bind-mounted into the container at `/app/var`. Both are per
+cluster: one snapshot file, and one operations subdirectory, per `cluster_id`.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| **`RACK_P2P_SNAPSHOT_DIR`** | `/app/var/p2p-snapshots` | Where `GET /api/p2p/status` reads `<cluster_id>.json`, the fleet snapshot the producer writes. Point the producer's `--out` at the same directory. |
+| **`RACK_P2P_SNAPSHOT_MAX_AGE`** | `900` (seconds) | A snapshot whose `generated_at` is older than this is treated as absent, and the view falls back to the unprovisioned state rather than showing stale coverage indefinitely. Set it comfortably above the producer's interval plus its run time: Nscale NC runs the producer every 15 minutes and its fleet audit of ~800 nodes takes minutes, so it sets `1800`. A value that is not a positive integer is ignored and the default applies. |
+| **`RACK_P2P_OPERATIONS_DIR`** | `/app/var/p2p-operations` | Where `POST /api/p2p/operations` (and a campaign launch, which is one) enqueues `<cluster_id>/<op_id>.json`, and where the operation log viewer reads `<op_id>.log`. Point the worker's `--ops-dir` at `<this dir>/<cluster_id>`. |
+
+All three are process-wide and read at import: changing one needs a restart, and the Settings screen
+cannot set them.
+
+---
+
 ## 17. Execution target: connection topology vs. the flat env contract
 
 How NVIS reaches the cluster can be expressed two ways. The env vars below are the
@@ -793,6 +814,9 @@ RACK_NVSWITCH_SDN_RESET_SCRIPT
 RACK_NVSWITCH_SDN_RESET_TIMEOUT
 RACK_NVSWITCH_SYSTEM_RESET_SCRIPT
 RACK_NVSWITCH_SYSTEM_RESET_TIMEOUT
+RACK_P2P_OPERATIONS_DIR
+RACK_P2P_SNAPSHOT_DIR
+RACK_P2P_SNAPSHOT_MAX_AGE
 RACK_PARSER_EXPORT_DISABLED
 RACK_PARSER_EXPORT_GLOB
 RACK_PARSER_EXPORT_TIMEOUT

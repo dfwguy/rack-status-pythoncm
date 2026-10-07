@@ -11,9 +11,9 @@ Every environment variable the backend reads, found by scanning the source rathe
 importing it — a variable read inside a function body is never reached by an import, so only
 the source knows the whole set.
 
-**255 settings.** 17 are *declared* in
+**356 settings.** 17 are *declared* in
 `backend/config_registry.py`, which is the set `rackstatus.toml` can carry, the required-
-setting preflight can demand, and `rackstatus.toml.example` lists. 120 are named in
+setting preflight can demand, and `rackstatus.toml.example` lists. 172 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
 whether that document mentions the setting at all. It is not in this site yet; see
 `docs/README.md` for why the migration is page-at-a-time.
@@ -33,7 +33,7 @@ process environment and cannot be set per cluster or from the Settings screen.
 
 ## Undescribed settings
 
-3 settings have no declaration, no prose in `docs/ENVIRONMENT.md`
+52 settings have no declaration, no prose in `docs/ENVIRONMENT.md`
 and no hint in `docs/settings-hints.toml`. Each name links to its row in the table
 below, which still gives you its reader, its default and the module that reads it.
 
@@ -41,7 +41,7 @@ They are listed because an inventory that hid them would be the reason nobody kn
 generator must not invent a description, so each of these is a real to-do — write one
 into `docs/settings-hints.toml` and it moves out of this list on the next build.
 
-<a href="#s-nvis-log-dir"><code>NVIS_LOG_DIR</code></a>, <a href="#s-rack-bringup-report-benchmarks"><code>RACK_BRINGUP_REPORT_BENCHMARKS</code></a>, <a href="#s-rack-bringup-report-job-status"><code>RACK_BRINGUP_REPORT_JOB_STATUS</code></a>
+<a href="#s-nvis-log-dir"><code>NVIS_LOG_DIR</code></a>, <a href="#s-nvis-up-gz-deadline-sec"><code>NVIS_UP_GZ_DEADLINE_SEC</code></a>, <a href="#s-nvis-up-gz-limit-bytes"><code>NVIS_UP_GZ_LIMIT_BYTES</code></a>, <a href="#s-nvis-up-header-only-max-lines"><code>NVIS_UP_HEADER_ONLY_MAX_LINES</code></a>, <a href="#s-nvis-up-head-bytes"><code>NVIS_UP_HEAD_BYTES</code></a>, <a href="#s-nvis-up-max-errors"><code>NVIS_UP_MAX_ERRORS</code></a>, <a href="#s-nvis-up-max-metrics"><code>NVIS_UP_MAX_METRICS</code></a>, <a href="#s-nvis-up-max-nodes"><code>NVIS_UP_MAX_NODES</code></a>, <a href="#s-nvis-up-max-warnings"><code>NVIS_UP_MAX_WARNINGS</code></a>, <a href="#s-nvis-up-sniff-bytes"><code>NVIS_UP_SNIFF_BYTES</code></a>, <a href="#s-nvis-up-tail-bytes"><code>NVIS_UP_TAIL_BYTES</code></a>, <a href="#s-nvis-up-tail-chars"><code>NVIS_UP_TAIL_CHARS</code></a>, <a href="#s-rack-bmc-recovery-timeout"><code>RACK_BMC_RECOVERY_TIMEOUT</code></a>, <a href="#s-rack-bringup-report-benchmarks"><code>RACK_BRINGUP_REPORT_BENCHMARKS</code></a>, <a href="#s-rack-bringup-report-job-status"><code>RACK_BRINGUP_REPORT_JOB_STATUS</code></a>, <a href="#s-rack-clusterkit-timeout"><code>RACK_CLUSTERKIT_TIMEOUT</code></a>, <a href="#s-rack-cluster-bcm-cmsh-display-lines"><code>RACK_CLUSTER_BCM_CMSH_DISPLAY_LINES</code></a>, <a href="#s-rack-cluster-bcm-cmsh-display-max"><code>RACK_CLUSTER_BCM_CMSH_DISPLAY_MAX</code></a>, <a href="#s-rack-cluster-bcm-cmsh-timeout"><code>RACK_CLUSTER_BCM_CMSH_TIMEOUT</code></a>, <a href="#s-rack-cluster-dashboard-meta-max-len"><code>RACK_CLUSTER_DASHBOARD_META_MAX_LEN</code></a>, <a href="#s-rack-cluster-slurm-probe-timeout"><code>RACK_CLUSTER_SLURM_PROBE_TIMEOUT</code></a>, <a href="#s-rack-cluster-squeue-overview-max-bytes"><code>RACK_CLUSTER_SQUEUE_OVERVIEW_MAX_BYTES</code></a>, <a href="#s-rack-exemplar-llama-timeout"><code>RACK_EXEMPLAR_LLAMA_TIMEOUT</code></a>, <a href="#s-rack-fabric-probe-timeout"><code>RACK_FABRIC_PROBE_TIMEOUT</code></a>, <a href="#s-rack-host-read-timeout"><code>RACK_HOST_READ_TIMEOUT</code></a>, <a href="#s-rack-inventory-nodenames-ttl-sec"><code>RACK_INVENTORY_NODENAMES_TTL_SEC</code></a>, <a href="#s-rack-llmb-nccl-container-timeout"><code>RACK_LLMB_NCCL_CONTAINER_TIMEOUT</code></a>, <a href="#s-rack-llmb-nccl-timeout"><code>RACK_LLMB_NCCL_TIMEOUT</code></a>, <a href="#s-rack-log-export-max-bytes"><code>RACK_LOG_EXPORT_MAX_BYTES</code></a>, <a href="#s-rack-mac-change-timeout"><code>RACK_MAC_CHANGE_TIMEOUT</code></a>, <a href="#s-rack-native-rack-list-ttl-sec"><code>RACK_NATIVE_RACK_LIST_TTL_SEC</code></a>, <a href="#s-rack-nccl-fullrack-timeout"><code>RACK_NCCL_FULLRACK_TIMEOUT</code></a>, <a href="#s-rack-node-shape-smi-timeout-sec"><code>RACK_NODE_SHAPE_SMI_TIMEOUT_SEC</code></a>, <a href="#s-rack-node-shape-ttl-sec"><code>RACK_NODE_SHAPE_TTL_SEC</code></a>, <a href="#s-rack-nvlink-preflight-timeout"><code>RACK_NVLINK_PREFLIGHT_TIMEOUT</code></a>, <a href="#s-rack-nvloom-rack-samples"><code>RACK_NVLOOM_RACK_SAMPLES</code></a>, <a href="#s-rack-nvloom-singlerack-timeout"><code>RACK_NVLOOM_SINGLERACK_TIMEOUT</code></a>, <a href="#s-rack-parser-sn-llama-max-files"><code>RACK_PARSER_SN_LLAMA_MAX_FILES</code></a>, <a href="#s-rack-post-run-report-ttl-sec"><code>RACK_POST_RUN_REPORT_TTL_SEC</code></a>, <a href="#s-rack-post-run-sacct-timeout"><code>RACK_POST_RUN_SACCT_TIMEOUT</code></a>, <a href="#s-rack-sinfo-nodes-timeout"><code>RACK_SINFO_NODES_TIMEOUT</code></a>, <a href="#s-rack-slurm-logfind-timeout"><code>RACK_SLURM_LOGFIND_TIMEOUT</code></a>, <a href="#s-rack-slurm-sacct-timeout"><code>RACK_SLURM_SACCT_TIMEOUT</code></a>, <a href="#s-rack-tools-download-containers-timeout"><code>RACK_TOOLS_DOWNLOAD_CONTAINERS_TIMEOUT</code></a>, <a href="#s-rack-tools-install-cuda-nccl-workspace-timeout"><code>RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_TIMEOUT</code></a>, <a href="#s-rack-tools-install-dcgm-workspace-timeout"><code>RACK_TOOLS_INSTALL_DCGM_WORKSPACE_TIMEOUT</code></a>, <a href="#s-rack-tools-install-dgxc-benchmarking-timeout"><code>RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_TIMEOUT</code></a>, <a href="#s-rack-tools-install-hpcx-workspace-timeout"><code>RACK_TOOLS_INSTALL_HPCX_WORKSPACE_TIMEOUT</code></a>, <a href="#s-rack-tools-install-nvloom-workspace-timeout"><code>RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_TIMEOUT</code></a>, <a href="#s-rack-tools-launch-grafana-bright-prometheus-timeout"><code>RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_TIMEOUT</code></a>, <a href="#s-rack-validation-collect-grace-sec"><code>RACK_VALIDATION_COLLECT_GRACE_SEC</code></a>, <a href="#s-rack-validation-preset-timeout"><code>RACK_VALIDATION_PRESET_TIMEOUT</code></a>
 
 ## Declared, read indirectly
 
@@ -54,12 +54,12 @@ scan simply cannot point at a call site.
 
 ## Read outside the resolution ladder
 
-160 of them are read only via `os.environ`, so a cluster overlay and the
+246 of them are read only via `os.environ`, so a cluster overlay and the
 Settings screen cannot influence them — the setting is process-wide. New code should
 prefer `_eget` (`core-designs.mdc` §5); these are the ones that predate the rule or
 genuinely belong to the process rather than to a cluster.
 
-They are not listed here — 160 names in a paragraph is not something
+They are not listed here — 246 names in a paragraph is not something
 anyone reads.
 The table below marks each one `environment` in its `Reader` column, which answers the
 same question setting by setting, where you are already looking.
@@ -140,6 +140,17 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-nvis-scripts-tree"></a>`NVIS_SCRIPTS_TREE` | ladder |  | Override the root of the layered script tree. | `backend/script_tree.py` |
 | <a id="s-nvis-ssh-key-dir"></a>`NVIS_SSH_KEY_DIR` | environment |  | Where cluster SSH private keys are written, owner-only. Defaults under `var/secrets/ssh`. | `backend/ssh_key_store.py` |
 | <a id="s-nvis-token-vault-dir"></a>`NVIS_TOKEN_VAULT_DIR` | environment |  | See `docs/ENVIRONMENT.md` | `backend/token_vault.py` |
+| <a id="s-nvis-up-gz-deadline-sec"></a>`NVIS_UP_GZ_DEADLINE_SEC` | environment | `20` | — | `backend/universal_parser.py` |
+| <a id="s-nvis-up-gz-limit-bytes"></a>`NVIS_UP_GZ_LIMIT_BYTES` | environment |  | — | `backend/universal_parser.py` |
+| <a id="s-nvis-up-header-only-max-lines"></a>`NVIS_UP_HEADER_ONLY_MAX_LINES` | environment | `8` | — | `backend/universal_parser.py` |
+| <a id="s-nvis-up-head-bytes"></a>`NVIS_UP_HEAD_BYTES` | environment |  | — | `backend/universal_parser.py` |
+| <a id="s-nvis-up-max-errors"></a>`NVIS_UP_MAX_ERRORS` | environment | `40` | — | `backend/universal_parser.py` |
+| <a id="s-nvis-up-max-metrics"></a>`NVIS_UP_MAX_METRICS` | environment | `400` | — | `backend/universal_parser.py` |
+| <a id="s-nvis-up-max-nodes"></a>`NVIS_UP_MAX_NODES` | environment | `4096` | — | `backend/universal_parser.py` |
+| <a id="s-nvis-up-max-warnings"></a>`NVIS_UP_MAX_WARNINGS` | environment | `40` | — | `backend/universal_parser.py` |
+| <a id="s-nvis-up-sniff-bytes"></a>`NVIS_UP_SNIFF_BYTES` | environment |  | — | `backend/universal_parser.py` |
+| <a id="s-nvis-up-tail-bytes"></a>`NVIS_UP_TAIL_BYTES` | environment |  | — | `backend/universal_parser.py` |
+| <a id="s-nvis-up-tail-chars"></a>`NVIS_UP_TAIL_CHARS` | environment | `4000` | — | `backend/universal_parser.py` |
 | <a id="s-nvis-var-dir"></a>`NVIS_VAR_DIR` | ladder |  | The `var/` directory. Exported to scripts and launchers so they never derive it from their own location. | `backend/script_tree.py` |
 | <a id="s-nvis-vault-master-key"></a>`NVIS_VAULT_MASTER_KEY` | environment |  | See `docs/ENVIRONMENT.md` | `backend/token_vault.py` |
 | <a id="s-nvis-workspace-dir"></a>`NVIS_WORKSPACE_DIR` | ladder |  | Shared workspace on the cluster where tools are installed. Defaults to `/home/cmsupport/workspace`. | `backend/config_env.py` |
@@ -160,6 +171,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-bmc-recovery-disabled"></a>`RACK_BMC_RECOVERY_DISABLED` | environment |  | Refuse BMC recovery. | `backend/api/rack_power.py` |
 | <a id="s-rack-bmc-recovery-dry-run"></a>`RACK_BMC_RECOVERY_DRY_RUN` | environment |  | Run BMC recovery without touching a BMC, to rehearse the targeting. | `backend/api/rack_power.py` |
 | <a id="s-rack-bmc-recovery-script"></a>`RACK_BMC_RECOVERY_SCRIPT` | ladder |  | Absolute path to the BMC recovery script, overriding the script tree. | `backend/api/rack_power.py` |
+| <a id="s-rack-bmc-recovery-timeout"></a>`RACK_BMC_RECOVERY_TIMEOUT` | environment | `120` | — | `backend/api/rack_power.py` |
 | <a id="s-rack-bringup-cache-ttl-sec"></a>`RACK_BRINGUP_CACHE_TTL_SEC` | environment | `30` | See `docs/ENVIRONMENT.md` | `backend/bringup.py` |
 | <a id="s-rack-bringup-disabled"></a>`RACK_BRINGUP_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/bringup.py` |
 | <a id="s-rack-bringup-home"></a>`RACK_BRINGUP_HOME` | environment |  | See `docs/ENVIRONMENT.md` | `backend/bringup.py` |
@@ -167,55 +179,87 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-bringup-report-job-status"></a>`RACK_BRINGUP_REPORT_JOB_STATUS` | environment |  | — | `backend/bringup.py` |
 | <a id="s-rack-bug-report-disabled"></a>`RACK_BUG_REPORT_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
 | <a id="s-rack-bug-report-dry-run"></a>`RACK_BUG_REPORT_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
+| <a id="s-rack-bug-report-list-timeout"></a>`RACK_BUG_REPORT_LIST_TIMEOUT` | environment | `600` | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
+| <a id="s-rack-bug-report-pdsh-fanout"></a>`RACK_BUG_REPORT_PDSH_FANOUT` | environment | `32` | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
 | <a id="s-rack-bug-report-remote-dir"></a>`RACK_BUG_REPORT_REMOTE_DIR` | ladder |  | Base directory the bug-report and NVLMapper outputs are written to on each node (pdsh) and read from on the dashboard host (the Reports page). Point it at the project's own prefix -- a directory the service account can create and the dashboard host can see over the shared mount. Default /home/cmsupport/reports exists on only one appliance, so most deployments set this. NVLMapper's base (RACK_NVLMAPPER_REPORTS_BASE) defaults to it, so one value moves both. | `backend/paths.py` |
+| <a id="s-rack-bug-report-ssh-cat-timeout"></a>`RACK_BUG_REPORT_SSH_CAT_TIMEOUT` | environment | `3600` | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
 | <a id="s-rack-bug-report-ssh-opts"></a>`RACK_BUG_REPORT_SSH_OPTS` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
 | <a id="s-rack-bug-report-ssh-user"></a>`RACK_BUG_REPORT_SSH_USER` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
+| <a id="s-rack-bug-report-timeout"></a>`RACK_BUG_REPORT_TIMEOUT` | environment | `10800` | See `docs/ENVIRONMENT.md` | `backend/api/bug_report.py` |
 | <a id="s-rack-clusterkit-cuda-major"></a>`RACK_CLUSTERKIT_CUDA_MAJOR` | ladder |  | CUDA major for ClusterKit. | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
 | <a id="s-rack-clusterkit-disabled"></a>`RACK_CLUSTERKIT_DISABLED` | environment |  | Refuse ClusterKit launches. | `backend/api/validation_runs.py` |
+| <a id="s-rack-clusterkit-timeout"></a>`RACK_CLUSTERKIT_TIMEOUT` | ladder | `14400` | — | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
+| <a id="s-rack-cluster-bcm-cmsh-display-lines"></a>`RACK_CLUSTER_BCM_CMSH_DISPLAY_LINES` | environment | `1` | — | `backend/api/dashboard.py` |
+| <a id="s-rack-cluster-bcm-cmsh-display-max"></a>`RACK_CLUSTER_BCM_CMSH_DISPLAY_MAX` | environment | `120` | — | `backend/api/dashboard.py` |
+| <a id="s-rack-cluster-bcm-cmsh-timeout"></a>`RACK_CLUSTER_BCM_CMSH_TIMEOUT` | environment | `60` | — | `backend/api/dashboard.py` |
 | <a id="s-rack-cluster-dashboard-metadata-file"></a>`RACK_CLUSTER_DASHBOARD_METADATA_FILE` | environment |  | Operator-maintained metadata shown on the cluster dashboard. | `backend/cluster_metadata.py` |
+| <a id="s-rack-cluster-dashboard-meta-max-len"></a>`RACK_CLUSTER_DASHBOARD_META_MAX_LEN` | environment | `512` | — | `backend/api/dashboard.py`, `backend/cluster_metadata.py` |
 | <a id="s-rack-cluster-gpu-per-tray"></a>`RACK_CLUSTER_GPU_PER_TRAY` | ladder | `8` | GPUs per tray for the overview's capacity arithmetic. Default 8. | `backend/api/dashboard.py`, `backend/rack_status_engine.py` |
 | <a id="s-rack-cluster-id"></a>`RACK_CLUSTER_ID` | environment |  | Stable identifier for the cluster, recorded in fleet snapshots so history survives a rename. | `backend/rack_status_engine.py` |
 | <a id="s-rack-cluster-name"></a>`RACK_CLUSTER_NAME` | environment |  | Display name of the active cluster, shown on the dashboard and stamped into snapshots. | `backend/rack_status_engine.py` |
 | <a id="s-rack-cluster-overview-live-db"></a>`RACK_CLUSTER_OVERVIEW_LIVE_DB` | environment |  | SQLite database backing the live cluster overview. | `backend/api/dashboard.py` |
 | <a id="s-rack-cluster-product-line"></a>`RACK_CLUSTER_PRODUCT_LINE` | ladder |  | Product-line label such as GB300 NVL72, shown on the overview and in reports. | `backend/api/validation_runs.py` |
+| <a id="s-rack-cluster-slurm-probe-timeout"></a>`RACK_CLUSTER_SLURM_PROBE_TIMEOUT` | environment | `40` | — | `backend/api/dashboard.py` |
 | <a id="s-rack-cluster-snapshot-db"></a>`RACK_CLUSTER_SNAPSHOT_DB` | environment |  | SQLite database of fleet status snapshots. | `backend/rack_status_engine.py` |
+| <a id="s-rack-cluster-squeue-overview-max-bytes"></a>`RACK_CLUSTER_SQUEUE_OVERVIEW_MAX_BYTES` | environment | `262144` | — | `backend/api/dashboard.py` |
 | <a id="s-rack-cmsh"></a>`RACK_CMSH` | ladder | `cmsh` | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/api/rack_power.py` +1 |
 | <a id="s-rack-cmsh-include-r00"></a>`RACK_CMSH_INCLUDE_R00` | environment |  | See `docs/ENVIRONMENT.md` | `backend/native_status.py` |
+| <a id="s-rack-cmsh-rack-list-timeout-sec"></a>`RACK_CMSH_RACK_LIST_TIMEOUT_SEC` | environment | `120` | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
 | <a id="s-rack-comments-file"></a>`RACK_COMMENTS_FILE` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/comments_store.py` |
+| <a id="s-rack-comment-max-len"></a>`RACK_COMMENT_MAX_LEN` | environment | `4000` | See `docs/ENVIRONMENT.md` | `backend/comments_store.py` |
 | <a id="s-rack-direct-node-ssh"></a>`RACK_DIRECT_NODE_SSH` | environment |  | See `docs/ENVIRONMENT.md` | `backend/host_exec.py` |
 | <a id="s-rack-enable-web-terminal"></a>`RACK_ENABLE_WEB_TERMINAL` | environment | `1` | Install the browser terminal. Default on; when off the endpoint does not exist rather than refusing. | `backend/api/terminal.py` |
 | <a id="s-rack-exec-mode"></a>`RACK_EXEC_MODE` | ladder | `local` | How commands reach the cluster: 'ssh' or 'local'. Deprecated in favour of the topology-based transport config, and 'ssh' is the default; kept because deployed sites still set it. | `backend/native_status.py` |
 | <a id="s-rack-exemplar-llama-ct-range"></a>`RACK_EXEMPLAR_LLAMA_CT_RANGE` | ladder | `11-18,28-35` | Tray ranges the Exemplar Llama run targets. Default `11-18,28-35`. | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
+| <a id="s-rack-exemplar-llama-timeout"></a>`RACK_EXEMPLAR_LLAMA_TIMEOUT` | ladder | `900` | — | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
 | <a id="s-rack-export-nodes-per-rack"></a>`RACK_EXPORT_NODES_PER_RACK` | ladder | `18` | See `docs/ENVIRONMENT.md` | `backend/api/exports.py` |
+| <a id="s-rack-export-success-grep-timeout"></a>`RACK_EXPORT_SUCCESS_GREP_TIMEOUT` | environment | `180` | See `docs/ENVIRONMENT.md` | `backend/results_ingest.py` |
+| <a id="s-rack-fabric-probe-timeout"></a>`RACK_FABRIC_PROBE_TIMEOUT` | environment | `60` | — | `backend/api/fabric_probe.py` |
 | <a id="s-rack-fanout-max-workers"></a>`RACK_FANOUT_MAX_WORKERS` | environment | `8` | See `docs/ENVIRONMENT.md` | `backend/workflow_engine.py` |
 | <a id="s-rack-fs-dir-cache-ttl-sec"></a>`RACK_FS_DIR_CACHE_TTL_SEC` | environment | `30` | See `docs/ENVIRONMENT.md` | `backend/host_exec.py` |
 | <a id="s-rack-full-rack-nodes"></a>`RACK_FULL_RACK_NODES` | ladder |  | How many nodes count as a full rack, for target expansion and completeness checks. | `backend/naming.py` |
 | <a id="s-rack-gpu-reset-disabled"></a>`RACK_GPU_RESET_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
 | <a id="s-rack-gpu-reset-dry-run"></a>`RACK_GPU_RESET_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
 | <a id="s-rack-gpu-reset-script"></a>`RACK_GPU_RESET_SCRIPT` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/api/rack_power.py` |
+| <a id="s-rack-gpu-reset-timeout"></a>`RACK_GPU_RESET_TIMEOUT` | environment | `3600` | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
 | <a id="s-rack-grafana-password"></a>`RACK_GRAFANA_PASSWORD` | environment |  | Password for Grafana API requests behind the embedded panels. | `backend/grafana_embeds.py` |
+| <a id="s-rack-host-read-timeout"></a>`RACK_HOST_READ_TIMEOUT` | ladder | `90` | — | `backend/results_ingest.py` |
 | <a id="s-rack-hw-check-disabled"></a>`RACK_HW_CHECK_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/diagnostics.py` |
 | <a id="s-rack-hw-check-dry-run"></a>`RACK_HW_CHECK_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/diagnostics.py` |
 | <a id="s-rack-hw-check-help-disabled"></a>`RACK_HW_CHECK_HELP_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/diagnostics.py` |
+| <a id="s-rack-hw-check-help-timeout"></a>`RACK_HW_CHECK_HELP_TIMEOUT` | environment | `20` | See `docs/ENVIRONMENT.md` | `backend/api/diagnostics.py` |
+| <a id="s-rack-hw-check-timeout"></a>`RACK_HW_CHECK_TIMEOUT` | environment | `3600` | See `docs/ENVIRONMENT.md` | `backend/api/diagnostics.py` |
 | <a id="s-rack-id-alias-rules"></a>`RACK_ID_ALIAS_RULES` | environment |  | Rewrites a hostname-derived rack id to the BCM rack object's id, as `<regex>=><replacement>` pairs separated by `;`. Needed where the BCM rack name is not a prefix of the tray hostname — Nscale TX has racks `WH1H1..WH1H22` and trays `ink50-dh01-h01-11`, and without a rule no tray attaches to a rack. | `backend/native_status.py` |
+| <a id="s-rack-imex-reset-timeout"></a>`RACK_IMEX_RESET_TIMEOUT` | environment | `1800` | See `docs/ENVIRONMENT.md` | `backend/api/fabric_ops.py` |
+| <a id="s-rack-inventory-nodenames-ttl-sec"></a>`RACK_INVENTORY_NODENAMES_TTL_SEC` | environment | `60` | — | `backend/slurm_query.py` |
 | <a id="s-rack-lake-capture"></a>`RACK_LAKE_CAPTURE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/app.py` |
 | <a id="s-rack-launch-review"></a>`RACK_LAUNCH_REVIEW` | environment |  | See `docs/ENVIRONMENT.md` | `backend/validation_launch.py` |
 | <a id="s-rack-llama-disabled"></a>`RACK_LLAMA_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/validation_runs.py` |
+| <a id="s-rack-llama-timeout"></a>`RACK_LLAMA_TIMEOUT` | ladder | `7200` | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
 | <a id="s-rack-llmb-install"></a>`RACK_LLMB_INSTALL` | ladder | `/home/cmods/workspace/llmb` | LLMB install prefix on the cluster. | `backend/api/validation_runs.py` |
+| <a id="s-rack-llmb-nccl-container-timeout"></a>`RACK_LLMB_NCCL_CONTAINER_TIMEOUT` | ladder | `43200` | — | `backend/api/validation_runs.py` |
 | <a id="s-rack-llmb-nccl-disabled"></a>`RACK_LLMB_NCCL_DISABLED` | environment |  | Refuse LLMB NCCL launches. | `backend/api/validation_runs.py` |
 | <a id="s-rack-llmb-nccl-reservation"></a>`RACK_LLMB_NCCL_RESERVATION` | ladder |  | Slurm reservation to submit the LLMB NCCL run into. | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
+| <a id="s-rack-llmb-nccl-timeout"></a>`RACK_LLMB_NCCL_TIMEOUT` | ladder | `14400` | — | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
 | <a id="s-rack-locks-file"></a>`RACK_LOCKS_FILE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/rack_locks.py` |
+| <a id="s-rack-lock-max-age-sec"></a>`RACK_LOCK_MAX_AGE_SEC` | environment | `21600` | See `docs/ENVIRONMENT.md` | `backend/rack_locks.py` |
+| <a id="s-rack-log-analysis-cache-max-files"></a>`RACK_LOG_ANALYSIS_CACHE_MAX_FILES` | environment | `200` | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
+| <a id="s-rack-log-analysis-squeue-timeout-sec"></a>`RACK_LOG_ANALYSIS_SQUEUE_TIMEOUT_SEC` | environment | `60` | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
 | <a id="s-rack-log-export-disabled"></a>`RACK_LOG_EXPORT_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/exports.py` |
+| <a id="s-rack-log-export-max-bytes"></a>`RACK_LOG_EXPORT_MAX_BYTES` | environment |  | — | `backend/api/exports.py` |
+| <a id="s-rack-log-inline-max-bytes"></a>`RACK_LOG_INLINE_MAX_BYTES` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/logs.py`, `backend/api/slurm_ops.py` |
 | <a id="s-rack-maas-cli"></a>`RACK_MAAS_CLI` | environment |  | The `maas` CLI binary. Default `maas`. | `backend/platforms/maas.py` |
 | <a id="s-rack-maas-profile"></a>`RACK_MAAS_PROFILE` | environment |  | The `maas` CLI profile to use. Default `admin`. | `backend/platforms/maas.py` |
 | <a id="s-rack-macswap-python-module"></a>`RACK_MACSWAP_PYTHON_MODULE` | ladder |  | Environment Modules name loaded before invoking macswap. Default `python3`. | `backend/api/rack_power.py` |
 | <a id="s-rack-macswap-script"></a>`RACK_MACSWAP_SCRIPT` | ladder |  | Absolute path to the MAC-swap script. | `backend/api/rack_power.py` |
 | <a id="s-rack-mac-change-disabled"></a>`RACK_MAC_CHANGE_DISABLED` | environment |  | Refuse the MAC change action. | `backend/api/rack_power.py` |
 | <a id="s-rack-mac-change-dry-run"></a>`RACK_MAC_CHANGE_DRY_RUN` | environment |  | Run the MAC change without writing, to rehearse the targeting. | `backend/api/rack_power.py` |
+| <a id="s-rack-mac-change-timeout"></a>`RACK_MAC_CHANGE_TIMEOUT` | environment | `600` | — | `backend/api/rack_power.py` |
 | <a id="s-rack-mcp-allow-writes"></a>`RACK_MCP_ALLOW_WRITES` | environment |  | Let MCP callers perform mutations rather than only reads. | `backend/agent/mcp_server.py` |
 | <a id="s-rack-mcp-enabled"></a>`RACK_MCP_ENABLED` | environment |  | Serve the MCP endpoint. | `backend/agent/mcp_server.py` |
 | <a id="s-rack-mnubergemm-cuda-major"></a>`RACK_MNUBERGEMM_CUDA_MAJOR` | ladder |  | CUDA major for mnubergemm. Must match what DCGM picks, or the MPI launch cannot find the plugin. | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
 | <a id="s-rack-mnubergemm-stress-disabled"></a>`RACK_MNUBERGEMM_STRESS_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/validation_runs.py` |
+| <a id="s-rack-mnubergemm-stress-timeout"></a>`RACK_MNUBERGEMM_STRESS_TIMEOUT` | environment | `86400` | See `docs/ENVIRONMENT.md` | `backend/api/validation_runs.py` |
 | <a id="s-rack-modules-init"></a>`RACK_MODULES_INIT` | environment |  | Shell snippet that initialises Environment Modules before a Slurm command, replacing the built-in default. | `backend/host_exec.py` |
 | <a id="s-rack-multirack-campaign-id"></a>`RACK_MULTIRACK_CAMPAIGN_ID` | ladder |  | Identifier of the pinned acceptance campaign, so a stale browser cannot launch against last week's roster. | `backend/validation_launch.py` |
 | <a id="s-rack-multirack-campaign-manifest"></a>`RACK_MULTIRACK_CAMPAIGN_MANIFEST` | ladder |  | Path to the campaign manifest listing the exact nodes. | `backend/validation_launch.py` |
@@ -225,41 +269,73 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-multirack-ledger-file"></a>`RACK_MULTIRACK_LEDGER_FILE` | environment |  | The multirack results ledger. | `backend/validation_activities.py` |
 | <a id="s-rack-multirack-ledger-lake-disabled"></a>`RACK_MULTIRACK_LEDGER_LAKE_DISABLED` | environment |  | Stop publishing ledger rows to the data lake. | `backend/validation_activities.py` |
 | <a id="s-rack-multirack-ledger-markdown-file"></a>`RACK_MULTIRACK_LEDGER_MARKDOWN_FILE` | environment |  | Markdown rendering of that ledger. | `backend/validation_activities.py` |
+| <a id="s-rack-multirack-log-rack-scan-bytes"></a>`RACK_MULTIRACK_LOG_RACK_SCAN_BYTES` | environment | `524288` | See `docs/ENVIRONMENT.md` | `backend/native_status.py` |
+| <a id="s-rack-multirack-probe-timeout"></a>`RACK_MULTIRACK_PROBE_TIMEOUT` | environment | `180` | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
 | <a id="s-rack-multirack-site-prefix"></a>`RACK_MULTIRACK_SITE_PREFIX` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/naming.py` |
 | <a id="s-rack-multirack-validation-test"></a>`RACK_MULTIRACK_VALIDATION_TEST` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/rack_status_engine.py` |
+| <a id="s-rack-native-cmsh-timeout-sec"></a>`RACK_NATIVE_CMSH_TIMEOUT_SEC` | environment | `120` | See `docs/ENVIRONMENT.md` | `backend/native_status.py` |
+| <a id="s-rack-native-ds-timeout-sec"></a>`RACK_NATIVE_DS_TIMEOUT_SEC` | environment | `300` | See `docs/ENVIRONMENT.md` | `backend/native_status.py` |
+| <a id="s-rack-native-rack-list-ttl-sec"></a>`RACK_NATIVE_RACK_LIST_TTL_SEC` | environment | `900` | — | `backend/native_status.py` |
+| <a id="s-rack-native-scontrol-timeout-sec"></a>`RACK_NATIVE_SCONTROL_TIMEOUT_SEC` | environment | `60` | See `docs/ENVIRONMENT.md` | `backend/native_status.py` |
+| <a id="s-rack-native-sinfo-timeout-sec"></a>`RACK_NATIVE_SINFO_TIMEOUT_SEC` | environment | `120` | See `docs/ENVIRONMENT.md` | `backend/native_status.py` |
+| <a id="s-rack-native-squeue-job-lookup-timeout-sec"></a>`RACK_NATIVE_SQUEUE_JOB_LOOKUP_TIMEOUT_SEC` | environment | `45` | See `docs/ENVIRONMENT.md` | `backend/native_status.py` |
+| <a id="s-rack-native-squeue-timeout-sec"></a>`RACK_NATIVE_SQUEUE_TIMEOUT_SEC` | environment | `60` | See `docs/ENVIRONMENT.md` | `backend/native_status.py` |
 | <a id="s-rack-nccl-fullrack-disabled"></a>`RACK_NCCL_FULLRACK_DISABLED` | environment |  | Refuse full-rack NCCL launches. | `backend/api/validation_runs.py` |
 | <a id="s-rack-nccl-fullrack-end"></a>`RACK_NCCL_FULLRACK_END` | ladder |  | End size for the full-rack NCCL sweep. Default 16G. | `backend/api/validation_runs.py` |
 | <a id="s-rack-nccl-fullrack-launcher"></a>`RACK_NCCL_FULLRACK_LAUNCHER` | ladder |  | Which launcher the full-rack NCCL run uses. Default `llmb`. | `backend/api/validation_runs.py` |
+| <a id="s-rack-nccl-fullrack-timeout"></a>`RACK_NCCL_FULLRACK_TIMEOUT` | ladder | `7200` | — | `backend/api/validation_runs.py` |
 | <a id="s-rack-nccl-mpi-size-max"></a>`RACK_NCCL_MPI_SIZE_MAX` | ladder |  | Largest message size an NCCL sweep runs to. Default 16G. | `backend/api/validation_runs.py` |
 | <a id="s-rack-nccl-mpi-version"></a>`RACK_NCCL_MPI_VERSION` | ladder |  | NCCL version for an MPI NCCL run, when a launch does not name one. | `backend/api/validation_runs.py` |
 | <a id="s-rack-nemo-xrack-disabled"></a>`RACK_NEMO_XRACK_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/validation_runs.py` |
+| <a id="s-rack-nemo-xrack-timeout"></a>`RACK_NEMO_XRACK_TIMEOUT` | ladder | `7200` | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
 | <a id="s-rack-node-issues-file"></a>`RACK_NODE_ISSUES_FILE` | environment |  | Persisted per-node issue annotations. | `backend/node_issues.py` |
+| <a id="s-rack-node-shape-smi-timeout-sec"></a>`RACK_NODE_SHAPE_SMI_TIMEOUT_SEC` | environment | `30` | — | `backend/native_status.py` |
+| <a id="s-rack-node-shape-ttl-sec"></a>`RACK_NODE_SHAPE_TTL_SEC` | environment | `900` | — | `backend/native_status.py` |
 | <a id="s-rack-node-ssh-key"></a>`RACK_NODE_SSH_KEY` | environment |  | See `docs/ENVIRONMENT.md` | `backend/host_exec.py` |
 | <a id="s-rack-node-ssh-user"></a>`RACK_NODE_SSH_USER` | environment |  | See `docs/ENVIRONMENT.md` | `backend/host_exec.py` |
 | <a id="s-rack-nvftp-remote-base"></a>`RACK_NVFTP_REMOTE_BASE` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvftp_cache_sync.py` |
 | <a id="s-rack-nvftp-sftp-host"></a>`RACK_NVFTP_SFTP_HOST` | ladder | `transfer.nvftp.nvidia.com` | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvftp_cache_sync.py` |
 | <a id="s-rack-nvftp-sftp-port"></a>`RACK_NVFTP_SFTP_PORT` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/nvftp_cache_sync.py` |
 | <a id="s-rack-nvftp-sftp-user"></a>`RACK_NVFTP_SFTP_USER` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvftp_cache_sync.py` |
-| <a id="s-rack-nvftp-sync-interval-sec"></a>`RACK_NVFTP_SYNC_INTERVAL_SEC` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/nvftp_cache_sync.py` |
+| <a id="s-rack-nvftp-sync-interval-sec"></a>`RACK_NVFTP_SYNC_INTERVAL_SEC` | ladder | `7200` | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvftp_cache_sync.py` |
 | <a id="s-rack-nvlink-preflight-disabled"></a>`RACK_NVLINK_PREFLIGHT_DISABLED` | environment |  | Refuse the NVLink preflight. | `backend/api/fabric_ops.py` |
 | <a id="s-rack-nvlink-preflight-script"></a>`RACK_NVLINK_PREFLIGHT_SCRIPT` | ladder |  | Absolute path to the NVLink preflight script. | `backend/api/fabric_ops.py` |
+| <a id="s-rack-nvlink-preflight-timeout"></a>`RACK_NVLINK_PREFLIGHT_TIMEOUT` | environment |  | — | `backend/api/fabric_ops.py` |
 | <a id="s-rack-nvlmapper-disabled"></a>`RACK_NVLMAPPER_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/fabric_ops.py` |
 | <a id="s-rack-nvlmapper-reports-base"></a>`RACK_NVLMAPPER_REPORTS_BASE` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/paths.py` |
+| <a id="s-rack-nvlmapper-timeout"></a>`RACK_NVLMAPPER_TIMEOUT` | environment | `14400` | See `docs/ENVIRONMENT.md` | `backend/api/fabric_ops.py` |
 | <a id="s-rack-nvloom-cuda-major"></a>`RACK_NVLOOM_CUDA_MAJOR` | ladder |  | CUDA major for NVLoom, and the fallback for ClusterKit and mnubergemm. | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
+| <a id="s-rack-nvloom-rack-samples"></a>`RACK_NVLOOM_RACK_SAMPLES` | ladder | `5` | — | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
 | <a id="s-rack-nvloom-singlerack-disabled"></a>`RACK_NVLOOM_SINGLERACK_DISABLED` | environment |  | Refuse single-rack NVLoom launches. | `backend/api/validation_runs.py` |
+| <a id="s-rack-nvloom-singlerack-timeout"></a>`RACK_NVLOOM_SINGLERACK_TIMEOUT` | ladder | `10800` | — | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
 | <a id="s-rack-nvswitch-audit-disabled"></a>`RACK_NVSWITCH_AUDIT_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/fabric_ops.py` |
+| <a id="s-rack-nvswitch-audit-timeout"></a>`RACK_NVSWITCH_AUDIT_TIMEOUT` | environment | `7200` | See `docs/ENVIRONMENT.md` | `backend/api/fabric_ops.py` |
+| <a id="s-rack-nvswitch-nodeset-timeout"></a>`RACK_NVSWITCH_NODESET_TIMEOUT` | environment | `30` | See `docs/ENVIRONMENT.md` | `backend/api/fabric_ops.py` |
+| <a id="s-rack-nvswitch-sdn-reset-timeout"></a>`RACK_NVSWITCH_SDN_RESET_TIMEOUT` | environment | `1800` | See `docs/ENVIRONMENT.md` | `backend/api/fabric_ops.py` |
+| <a id="s-rack-nvswitch-system-reset-timeout"></a>`RACK_NVSWITCH_SYSTEM_RESET_TIMEOUT` | environment | `1800` | See `docs/ENVIRONMENT.md` | `backend/api/fabric_ops.py` |
+| <a id="s-rack-p2p-operations-dir"></a>`RACK_P2P_OPERATIONS_DIR` | environment | `/app/var/p2p-operations` | See `docs/ENVIRONMENT.md` | `backend/p2p_operations.py` |
+| <a id="s-rack-p2p-snapshot-dir"></a>`RACK_P2P_SNAPSHOT_DIR` | environment | `/app/var/p2p-snapshots` | See `docs/ENVIRONMENT.md` | `backend/p2p_snapshot.py` |
+| <a id="s-rack-p2p-snapshot-max-age"></a>`RACK_P2P_SNAPSHOT_MAX_AGE` | environment | `900` | See `docs/ENVIRONMENT.md` | `backend/p2p_snapshot.py` |
 | <a id="s-rack-parser-excel-report-dir"></a>`RACK_PARSER_EXCEL_REPORT_DIR` | ladder |  | Where the parser's spreadsheet report is copied after a run. | `backend/api/dashboard.py`, `backend/api/exports.py` |
 | <a id="s-rack-parser-export-disabled"></a>`RACK_PARSER_EXPORT_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/exports.py` |
 | <a id="s-rack-parser-export-glob"></a>`RACK_PARSER_EXPORT_GLOB` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/results_ingest.py` |
+| <a id="s-rack-parser-export-timeout"></a>`RACK_PARSER_EXPORT_TIMEOUT` | environment | `900` | See `docs/ENVIRONMENT.md` | `backend/api/exports.py` |
 | <a id="s-rack-parser-extra-args"></a>`RACK_PARSER_EXTRA_ARGS` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/results_ingest.py` |
+| <a id="s-rack-parser-sn-llama-max-files"></a>`RACK_PARSER_SN_LLAMA_MAX_FILES` | environment | `25` | — | `backend/api/parser_results.py` |
+| <a id="s-rack-parser-timeout"></a>`RACK_PARSER_TIMEOUT` | ladder | `300` | See `docs/ENVIRONMENT.md` | `backend/api/analytics.py`, `backend/api/dashboard.py` +1 |
 | <a id="s-rack-pdsh-w-skip-slurm-expand"></a>`RACK_PDSH_W_SKIP_SLURM_EXPAND` | environment |  | Pass a `pdsh -w` target through verbatim instead of expanding it via Slurm first. | `backend/node_targets.py` |
 | <a id="s-rack-physical-rf0-loose-hostnames"></a>`RACK_PHYSICAL_RF0_LOOSE_HOSTNAMES` | environment |  | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
 | <a id="s-rack-physical-rf0-map-disabled"></a>`RACK_PHYSICAL_RF0_MAP_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
+| <a id="s-rack-physical-rf0-timeout"></a>`RACK_PHYSICAL_RF0_TIMEOUT` | environment | `180` | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
 | <a id="s-rack-platform"></a>`RACK_PLATFORM` | ladder | `bcm` | Cluster manager provider: 'bcm' (Base Command Manager) or 'maas'. | `backend/native_status.py`, `backend/platforms/__init__.py` |
 | <a id="s-rack-post-run-history-file"></a>`RACK_POST_RUN_HISTORY_FILE` | environment |  | Append-only history of post-run report events. | `backend/post_run_report.py` |
 | <a id="s-rack-post-run-max-events"></a>`RACK_POST_RUN_MAX_EVENTS` | environment | `100000` | Ceiling on retained post-run events. Floors at 1000. | `backend/post_run_report.py` |
+| <a id="s-rack-post-run-report-ttl-sec"></a>`RACK_POST_RUN_REPORT_TTL_SEC` | environment | `30` | — | `backend/api/reports.py` |
+| <a id="s-rack-post-run-sacct-timeout"></a>`RACK_POST_RUN_SACCT_TIMEOUT` | environment | `120` | — | `backend/api/reports.py` |
 | <a id="s-rack-power-disabled"></a>`RACK_POWER_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
 | <a id="s-rack-power-dry-run"></a>`RACK_POWER_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
+| <a id="s-rack-power-reset-sleep-sec"></a>`RACK_POWER_RESET_SLEEP_SEC` | environment | `10` | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
+| <a id="s-rack-power-timeout"></a>`RACK_POWER_TIMEOUT` | environment | `120` | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
 | <a id="s-rack-product-line"></a>`RACK_PRODUCT_LINE` | ladder |  | Older alias for RACK_CLUSTER_PRODUCT_LINE; the specific one wins. | `backend/api/validation_runs.py` |
 | <a id="s-rack-project-token"></a>`RACK_PROJECT_TOKEN` | ladder |  | NVFTP project folder name. Not a credential, despite matching the sensitive-name pattern on 'TOKEN'. | `backend/api/dashboard.py`, `backend/nvftp_cache_sync.py` |
 | <a id="s-rack-prometheus-basic-auth-password"></a>`RACK_PROMETHEUS_BASIC_AUTH_PASSWORD` | ladder |  | Password for the BCM Prometheus endpoint. | `backend/api/dashboard.py`, `backend/api/tools.py` |
@@ -274,20 +350,27 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-remote-base-path"></a>`RACK_REMOTE_BASE_PATH` | ladder |  | Where the tooling is deployed on the head node. Script paths and the default log directory derive from it. Optional: unset falls back to the repo root, and a declared topology's scripts role root supersedes it. | `backend/host_exec.py`, `backend/paths.py` +2 |
 | <a id="s-rack-results-db"></a>`RACK_RESULTS_DB` | environment |  | SQLite database of parsed results history. | `backend/results_history.py` |
 | <a id="s-rack-results-db-busy-ms"></a>`RACK_RESULTS_DB_BUSY_MS` | environment |  | How long a results-database write waits on a lock before failing. | `backend/results_history.py` |
+| <a id="s-rack-sacct-timeout"></a>`RACK_SACCT_TIMEOUT` | environment | `30` | See `docs/ENVIRONMENT.md` | `backend/activity_hydration.py`, `backend/node_targets.py` |
 | <a id="s-rack-scheduler"></a>`RACK_SCHEDULER` | ladder | `slurm` | Scheduler provider selected by the active cluster. Defaults to `slurm`; other schedulers read compute inventory from the cluster manager. | `backend/native_status.py`, `backend/rack_status_engine.py` |
 | <a id="s-rack-scheduler-watch-disabled"></a>`RACK_SCHEDULER_WATCH_DISABLED` | ladder |  | Stop sampling whether the active cluster's scheduler can accept work. The samples are what answer *when* it stopped answering; on-demand probing still works without them. | `backend/scheduler_watch.py` |
 | <a id="s-rack-scheduler-watch-interval-sec"></a>`RACK_SCHEDULER_WATCH_INTERVAL_SEC` | ladder |  | Seconds between scheduler readiness samples. Default 60, floors at 10 so the check never becomes the load. | `backend/scheduler_watch.py` |
+| <a id="s-rack-scontrol-hostnames-timeout"></a>`RACK_SCONTROL_HOSTNAMES_TIMEOUT` | environment | `120` | See `docs/ENVIRONMENT.md` | `backend/node_targets.py` |
 | <a id="s-rack-services-restart-disabled"></a>`RACK_SERVICES_RESTART_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
 | <a id="s-rack-services-restart-dry-run"></a>`RACK_SERVICES_RESTART_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
+| <a id="s-rack-services-restart-timeout"></a>`RACK_SERVICES_RESTART_TIMEOUT` | environment | `1800` | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
+| <a id="s-rack-sinfo-nodes-timeout"></a>`RACK_SINFO_NODES_TIMEOUT` | environment | `60` | — | `backend/api/reports.py`, `backend/slurm_query.py` +1 |
 | <a id="s-rack-slurm-conf"></a>`RACK_SLURM_CONF` | environment |  | An explicit `SLURM_CONF` to export before running Slurm commands. Needed where the scripts host is not the Slurm controller. | `backend/bringup.py`, `backend/platforms/base.py` |
 | <a id="s-rack-slurm-drain-reason"></a>`RACK_SLURM_DRAIN_REASON` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/api/slurm_ops.py` |
+| <a id="s-rack-slurm-logfind-timeout"></a>`RACK_SLURM_LOGFIND_TIMEOUT` | environment | `20` | — | `backend/slurm_query.py` |
 | <a id="s-rack-slurm-module"></a>`RACK_SLURM_MODULE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/platforms/base.py` |
 | <a id="s-rack-slurm-nodes-state-disabled"></a>`RACK_SLURM_NODES_STATE_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/slurm_ops.py` |
 | <a id="s-rack-slurm-nodes-state-dry-run"></a>`RACK_SLURM_NODES_STATE_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/slurm_admin.py` |
 | <a id="s-rack-slurm-sacct-disabled"></a>`RACK_SLURM_SACCT_DISABLED` | environment |  | Stop querying `sacct`, for a cluster with no accounting database. | `backend/api/slurm_queries.py` |
 | <a id="s-rack-slurm-sacct-since"></a>`RACK_SLURM_SACCT_SINCE` | ladder |  | How far back the recent-jobs query looks. Default `now-7days`. | `backend/slurm_query.py` |
+| <a id="s-rack-slurm-sacct-timeout"></a>`RACK_SLURM_SACCT_TIMEOUT` | environment | `60` | — | `backend/slurm_query.py` |
 | <a id="s-rack-slurm-scancel-disabled"></a>`RACK_SLURM_SCANCEL_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/slurm_ops.py` |
 | <a id="s-rack-slurm-scontrol-show-job-disabled"></a>`RACK_SLURM_SCONTROL_SHOW_JOB_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/slurm_ops.py` |
+| <a id="s-rack-slurm-scontrol-timeout"></a>`RACK_SLURM_SCONTROL_TIMEOUT` | environment | `120` | See `docs/ENVIRONMENT.md` | `backend/api/slurm_ops.py`, `backend/slurm_admin.py` +1 |
 | <a id="s-rack-slurm-sinfo-r-disabled"></a>`RACK_SLURM_SINFO_R_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/slurm_queries.py` |
 | <a id="s-rack-slurm-skip-module-load"></a>`RACK_SLURM_SKIP_MODULE_LOAD` | environment |  | Skip 'module load slurm' before scheduler commands, for sites where Slurm is already on PATH. | `backend/platforms/base.py` |
 | <a id="s-rack-slurm-squeue-disabled"></a>`RACK_SLURM_SQUEUE_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/api/slurm_queries.py` |
@@ -299,32 +382,48 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-ssh-reachability-ttl-sec"></a>`RACK_SSH_REACHABILITY_TTL_SEC` | environment | `15` | How long a reachability result is cached. Default 15, floors at 3. | `backend/host_exec.py` |
 | <a id="s-rack-ssh-user"></a>`RACK_SSH_USER` | indirect |  | Account for the SSH control connection to the head node. |  |
 | <a id="s-rack-status-allowed-prefixes"></a>`RACK_STATUS_ALLOWED_PREFIXES` | environment |  | See `docs/ENVIRONMENT.md` | `backend/paths.py` |
+| <a id="s-rack-status-background-interval-sec"></a>`RACK_STATUS_BACKGROUND_INTERVAL_SEC` | ladder | `30` | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
 | <a id="s-rack-status-demo"></a>`RACK_STATUS_DEMO` | ladder |  | Synthetic data, no cluster contact. True on a developer laptop, and it also exempts the connection settings from the required-setting preflight. | `backend/app.py`, `backend/cli.py` +1 |
 | <a id="s-rack-status-extra-args"></a>`RACK_STATUS_EXTRA_ARGS` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
 | <a id="s-rack-status-log-dir"></a>`RACK_STATUS_LOG_DIR` | environment |  | Deprecated. The directory Rack Status ingests node logs from. This is one global value for every cluster at once, so a multi-tenant deployment would read a project's logs from a cluster it may not operate; set the log directory per cluster instead (the cluster's connection.log_dir). Kept only as a fallback for deployments still migrating, and it warns when used. | `backend/host_exec.py`, `backend/paths.py` |
+| <a id="s-rack-status-timeout"></a>`RACK_STATUS_TIMEOUT` | environment | `300` | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
 | <a id="s-rack-sysinfo-disabled"></a>`RACK_SYSINFO_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/_common.py` |
+| <a id="s-rack-sysinfo-timeout"></a>`RACK_SYSINFO_TIMEOUT` | ladder | `1800` | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/api/diagnostics.py` +1 |
+| <a id="s-rack-tail-initial-lines"></a>`RACK_TAIL_INITIAL_LINES` | environment | `400` | See `docs/ENVIRONMENT.md` | `backend/api/logs.py` |
 | <a id="s-rack-tail-linebuffer"></a>`RACK_TAIL_LINEBUFFER` | ladder | `1` | See `docs/ENVIRONMENT.md` | `backend/api/logs.py` |
 | <a id="s-rack-tail-log-disabled"></a>`RACK_TAIL_LOG_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/logs.py` |
 | <a id="s-rack-target-from-inventory"></a>`RACK_TARGET_FROM_INVENTORY` | environment | `1` | Expand a rack to nodes from live Slurm inventory rather than from the naming template. Default on; set to 0 to force the template path. | `backend/node_targets.py` |
 | <a id="s-rack-tools-download-containers-disabled"></a>`RACK_TOOLS_DOWNLOAD_CONTAINERS_DISABLED` | environment |  | Refuse container downloads. | `backend/api/tools.py` |
+| <a id="s-rack-tools-download-containers-timeout"></a>`RACK_TOOLS_DOWNLOAD_CONTAINERS_TIMEOUT` | environment | `14400` | — | `backend/api/tools.py` |
 | <a id="s-rack-tools-install-cuda-nccl-workspace-disabled"></a>`RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_DISABLED` | environment |  | Refuse the CUDA/NCCL workspace install. | `backend/api/tools.py` |
+| <a id="s-rack-tools-install-cuda-nccl-workspace-timeout"></a>`RACK_TOOLS_INSTALL_CUDA_NCCL_WORKSPACE_TIMEOUT` | environment | `28800` | — | `backend/api/tools.py` |
 | <a id="s-rack-tools-install-dcgm-workspace-disabled"></a>`RACK_TOOLS_INSTALL_DCGM_WORKSPACE_DISABLED` | environment |  | Refuse the DCGM workspace install. | `backend/api/tools.py` |
+| <a id="s-rack-tools-install-dcgm-workspace-timeout"></a>`RACK_TOOLS_INSTALL_DCGM_WORKSPACE_TIMEOUT` | environment | `7200` | — | `backend/api/tools.py` |
 | <a id="s-rack-tools-install-dgxc-benchmarking-disabled"></a>`RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_DISABLED` | environment |  | Refuse the DGXC benchmarking install. | `backend/api/tools.py` |
+| <a id="s-rack-tools-install-dgxc-benchmarking-timeout"></a>`RACK_TOOLS_INSTALL_DGXC_BENCHMARKING_TIMEOUT` | environment |  | — | `backend/api/tools.py` |
 | <a id="s-rack-tools-install-hpcx-workspace-disabled"></a>`RACK_TOOLS_INSTALL_HPCX_WORKSPACE_DISABLED` | environment |  | Refuse the HPC-X workspace install. | `backend/api/tools.py` |
+| <a id="s-rack-tools-install-hpcx-workspace-timeout"></a>`RACK_TOOLS_INSTALL_HPCX_WORKSPACE_TIMEOUT` | environment | `28800` | — | `backend/api/tools.py` |
 | <a id="s-rack-tools-install-nvloom-workspace-disabled"></a>`RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_DISABLED` | environment |  | Refuse the NVLoom workspace install. | `backend/api/tools.py` |
+| <a id="s-rack-tools-install-nvloom-workspace-timeout"></a>`RACK_TOOLS_INSTALL_NVLOOM_WORKSPACE_TIMEOUT` | environment | `28800` | — | `backend/api/tools.py` |
 | <a id="s-rack-tools-launch-grafana-bright-prometheus-disabled"></a>`RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_DISABLED` | environment |  | Refuse the Grafana/Bright Prometheus launch. | `backend/api/tools.py` |
+| <a id="s-rack-tools-launch-grafana-bright-prometheus-timeout"></a>`RACK_TOOLS_LAUNCH_GRAFANA_BRIGHT_PROMETHEUS_TIMEOUT` | environment | `7200` | — | `backend/api/tools.py` |
 | <a id="s-rack-universal-scan-ignore-re"></a>`RACK_UNIVERSAL_SCAN_IGNORE_RE` | environment |  | Regex of paths the universal log scan skips. | `backend/api/universal.py` |
 | <a id="s-rack-uptime-disabled"></a>`RACK_UPTIME_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
 | <a id="s-rack-uptime-dry-run"></a>`RACK_UPTIME_DRY_RUN` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
+| <a id="s-rack-uptime-pdsh-timeout"></a>`RACK_UPTIME_PDSH_TIMEOUT` | environment | `120` | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
 | <a id="s-rack-validation-activities-adopt-disabled"></a>`RACK_VALIDATION_ACTIVITIES_ADOPT_DISABLED` | environment |  | Stop adopting externally-started runs found in the log directory into the activity registry. | `backend/api/parser_results.py` |
 | <a id="s-rack-validation-activities-archive-db"></a>`RACK_VALIDATION_ACTIVITIES_ARCHIVE_DB` | environment |  | Where completed activities are archived. | `backend/validation_activities.py` |
 | <a id="s-rack-validation-activities-file"></a>`RACK_VALIDATION_ACTIVITIES_FILE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/validation_activities.py` |
 | <a id="s-rack-validation-activities-refresh-disabled"></a>`RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED` | ladder |  | Stop the background reconciliation of stored activities against Slurm. | `backend/api/activities.py`, `backend/app.py` |
 | <a id="s-rack-validation-activities-refresh-lock-file"></a>`RACK_VALIDATION_ACTIVITIES_REFRESH_LOCK_FILE` | ladder |  | Lock file that keeps two processes from reconciling activities at once. | `backend/app.py` |
+| <a id="s-rack-validation-collect-grace-sec"></a>`RACK_VALIDATION_COLLECT_GRACE_SEC` | environment | `900` | — | `backend/activity_hydration.py` |
 | <a id="s-rack-validation-container-root"></a>`RACK_VALIDATION_CONTAINER_ROOT` | ladder |  | Where this site mounts shared validation container images. Default `/cluster/containers`. Only the directory is configurable -- the image basename and its SHA256 stay code-owned, so a site can point at its own mirror of a reviewed image but cannot substitute a different one. | `backend/validation_presets.py` |
 | <a id="s-rack-validation-ct-range"></a>`RACK_VALIDATION_CT_RANGE` | ladder | `01-18` | See `docs/ENVIRONMENT.md` | `backend/node_targets.py`, `backend/workflow_engine.py` |
 | <a id="s-rack-validation-disabled"></a>`RACK_VALIDATION_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/validation_runs.py` |
 | <a id="s-rack-validation-excluded-nodes"></a>`RACK_VALIDATION_EXCLUDED_NODES` | ladder |  | Comma-list of nodes never eligible for a validation launch, whatever the selection. | `backend/validation_launch.py` |
+| <a id="s-rack-validation-preset-timeout"></a>`RACK_VALIDATION_PRESET_TIMEOUT` | ladder | `28800` | — | `backend/validation_launch.py` |
+| <a id="s-rack-validation-timeout"></a>`RACK_VALIDATION_TIMEOUT` | ladder | `600` | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
+| <a id="s-rack-web-active-client-ttl-sec"></a>`RACK_WEB_ACTIVE_CLIENT_TTL_SEC` | environment | `120` | See `docs/ENVIRONMENT.md` | `backend/app_clients.py` |
 | <a id="s-rack-web-allowed-origins"></a>`RACK_WEB_ALLOWED_ORIGINS` | environment |  | See `docs/ENVIRONMENT.md` | `backend/web_auth.py` |
 | <a id="s-rack-web-bind-addr"></a>`RACK_WEB_BIND_ADDR` | environment |  | See `docs/ENVIRONMENT.md` | `backend/cli.py` |
 | <a id="s-rack-web-csp-mode"></a>`RACK_WEB_CSP_MODE` | environment |  | See `docs/ENVIRONMENT.md` | `backend/app.py` |
@@ -334,6 +433,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-web-grafana-deeplink-disabled"></a>`RACK_WEB_GRAFANA_DEEPLINK_DISABLED` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py` |
 | <a id="s-rack-web-grafana-port"></a>`RACK_WEB_GRAFANA_PORT` | ladder | `3000` | See `docs/ENVIRONMENT.md` | `backend/app.py`, `backend/grafana_embed.py` |
 | <a id="s-rack-web-grafana-timezone"></a>`RACK_WEB_GRAFANA_TIMEZONE` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/grafana_embed.py` |
+| <a id="s-rack-web-grafana-time-pad-sec"></a>`RACK_WEB_GRAFANA_TIME_PAD_SEC` | environment | `120` | See `docs/ENVIRONMENT.md` | `backend/log_time_window.py` |
 | <a id="s-rack-web-grafana-uri"></a>`RACK_WEB_GRAFANA_URI` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/app.py`, `backend/grafana_embed.py` |
 | <a id="s-rack-web-grafana-var-host"></a>`RACK_WEB_GRAFANA_VAR_HOST` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/grafana_embed.py` |
 | <a id="s-rack-web-grafana-var-rack"></a>`RACK_WEB_GRAFANA_VAR_RACK` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/grafana_embed.py` |
@@ -344,6 +444,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-web-project-name"></a>`RACK_WEB_PROJECT_NAME` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py` |
 | <a id="s-rack-web-public-host"></a>`RACK_WEB_PUBLIC_HOST` | environment |  | Hostname operators reach this deployment by. Used to derive the OIDC issuer when one is not set explicitly. | `backend/identity/oidc.py` |
 | <a id="s-rack-web-secret-key"></a>`RACK_WEB_SECRET_KEY` | environment |  | See `docs/ENVIRONMENT.md` | `backend/app.py`, `backend/identity/srp.py` +3 |
+| <a id="s-rack-web-session-hours"></a>`RACK_WEB_SESSION_HOURS` | environment | `8` | See `docs/ENVIRONMENT.md` | `backend/web_auth.py` |
 | <a id="s-rack-web-signing-key-dir"></a>`RACK_WEB_SIGNING_KEY_DIR` | environment |  | See `docs/ENVIRONMENT.md` | `backend/identity/keys.py` |
 | <a id="s-rack-web-signing-key-validity-seconds"></a>`RACK_WEB_SIGNING_KEY_VALIDITY_SECONDS` | environment |  | See `docs/ENVIRONMENT.md` | `backend/identity/keys.py` |
 | <a id="s-rack-web-tls-cert"></a>`RACK_WEB_TLS_CERT` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/app.py`, `backend/cli.py` +2 |

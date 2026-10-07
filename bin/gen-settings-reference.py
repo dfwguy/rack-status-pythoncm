@@ -44,6 +44,7 @@ import os
 import pathlib
 import re
 import sys
+
 import tomllib
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -60,6 +61,17 @@ HINTS = REPO_ROOT / "docs" / "settings-hints.toml"
 #: so the document can say how much of that is left.
 _LADDER_READERS = {"_eget", "_eget_int", "config_env._eget", "config_env._eget_int"}
 _RAW_READERS = {"getenv"}
+#: `config_env.env_int` and the module-local `_env_int` wrappers that delegate to it read one
+#: variable by key straight from the process environment -- raw, not the ladder. Their callers pass
+#: the name as a literal, so the scan has to know them by name: before it did, 99 of the 100
+#: settings read through this family were missing from a document whose one claim is completeness.
+#: Every `_env_int` in the backend delegates to `config_env.env_int`; a new one that read through
+#: the ladder instead would have to be named for it, not added here.
+_RAW_HELPERS = {"env_int", "_env_int"}
+#: `config_env._job_env_int` checks Settings -> job environment first and only then the process
+#: environment, so the Settings screen CAN change it -- which is what `ladder` tells a reader, even
+#: though it skips the cluster overlay `_eget` consults. Thirteen settings are read only this way.
+_LADDER_HELPERS = {"_job_env_int"}
 
 #: Names that are not configuration: loop variables, test scaffolding, and the handful of
 #: all-caps locals that happen to be read from the environment by a helper taking a key.
@@ -70,9 +82,9 @@ def _is_env_read(node: ast.Call) -> str | None:
     """`"ladder"`, `"raw"` or `None` for one call node."""
     func = node.func
     if isinstance(func, ast.Name):
-        if func.id in {"_eget", "_eget_int"}:
+        if func.id in {"_eget", "_eget_int"} or func.id in _LADDER_HELPERS:
             return "ladder"
-        if func.id == "getenv":
+        if func.id == "getenv" or func.id in _RAW_HELPERS:
             return "raw"
         return None
     if isinstance(func, ast.Attribute):
@@ -89,9 +101,9 @@ def _is_env_read(node: ast.Call) -> str | None:
             target = func.value
             if isinstance(target, ast.Attribute) and target.attr == "environ":
                 return "raw"
-        if func.attr in {"_eget", "_eget_int"}:
+        if func.attr in {"_eget", "_eget_int"} or func.attr in _LADDER_HELPERS:
             return "ladder"
-        if func.attr == "getenv":
+        if func.attr == "getenv" or func.attr in _RAW_HELPERS:
             return "raw"
     return None
 

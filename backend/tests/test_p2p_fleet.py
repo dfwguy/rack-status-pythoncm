@@ -701,3 +701,36 @@ class TestP2pSettingsContract:
         d = models.P2pSettings(cluster_id="c1", appserver_ssh_user="svc", appserver_ssh_key="/k").to_dict()
         back = models.P2pSettings.from_dict(d)
         assert back.appserver_ssh_user == "svc" and back.appserver_ssh_key == "/k"
+
+
+class TestP2pSnapshotMaxAge:
+    """``RACK_P2P_SNAPSHOT_MAX_AGE`` is read at import, by a module the app imports.
+
+    A bare ``int(...)`` there meant a typo such as ``30m`` stopped the whole app from starting,
+    not just the P2P view. A value that is not a positive integer must fall back to the default.
+    """
+
+    @pytest.fixture
+    def reload_with(self, monkeypatch):
+        import importlib
+
+        import p2p_snapshot
+
+        def _reload(raw):
+            if raw is None:
+                monkeypatch.delenv("RACK_P2P_SNAPSHOT_MAX_AGE", raising=False)
+            else:
+                monkeypatch.setenv("RACK_P2P_SNAPSHOT_MAX_AGE", raw)
+            return importlib.reload(p2p_snapshot)
+
+        yield _reload
+        # Leave the module as every other test expects it: read with the variable unset.
+        monkeypatch.delenv("RACK_P2P_SNAPSHOT_MAX_AGE", raising=False)
+        importlib.reload(p2p_snapshot)
+
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [(None, 900), ("1800", 1800), (" 1800 ", 1800), ("30m", 900), ("0", 900), ("-60", 900), ("", 900)],
+    )
+    def test_a_bad_value_falls_back_instead_of_failing_import(self, reload_with, raw, expected):
+        assert reload_with(raw)._MAX_AGE_SECONDS == expected
