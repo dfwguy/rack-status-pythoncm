@@ -21,7 +21,9 @@ set -euo pipefail
 
 node=${1:?node is required}
 root=${NVIS_P2P_ROOT:-/opt/nvis-p2p}
-base=/opt/containers/.nvis-p2p
+# The node's P2P directory. Overridable like catalog-refresh.sh's, but the units hard-code the
+# default, so anything else is only for exercising this installer against a stand-in node.
+base=${NVIS_P2P_BASE:-/opt/containers/.nvis-p2p}
 url=${NVIS_P2P_CATALOG_URL:-}
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2)
 
