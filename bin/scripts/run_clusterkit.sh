@@ -10,7 +10,8 @@
 # its affiliates is strictly prohibited.
 # Single-rack ClusterKit Slurm driver: same hostlist convention as run_nvloom_singlerack.sh / run_mnubergemm_stress.sh.
 # Slurm stdout: log_dir/clusterkit/${USER}-CK-<rack>-%j.txt ; per-job artifacts under log_dir/clusterkit/<rack>/.
-# Manual and dashboard launches share the same cluster log root.
+# log_dir is RACK_JOB_LOG_DIR / RACK_STATUS_LOG_DIR, or the launch working directory ($PWD) that
+# the app points at the cluster's log_dir.
 #
 # Usage: ./bin/scripts/run_clusterkit.sh <Slurm hostlist; e.g. pNN-rMM-ct[range] or CBR… prefix[trays]>
 #
@@ -36,7 +37,7 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slurm-init.inc.sh"
 
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
+JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 # shellcheck disable=SC1091
 . "${_SCRIPT_DIR}/workspace-dir-common.sh"
 # shellcheck disable=SC1091

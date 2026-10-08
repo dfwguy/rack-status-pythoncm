@@ -25,7 +25,7 @@
 set -uo pipefail
 
 LLMB_INSTALL="${LLMB_INSTALL:-/home/cmods/workspace/llmb}"
-OUT_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
+OUT_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 EXP_ROOT="${LLMB_INSTALL%/}/workloads/microbenchmark_nccl/experiments"
 JOBID="${1:-}"
 

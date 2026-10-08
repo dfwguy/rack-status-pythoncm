@@ -15,7 +15,7 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-job_log_dir="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
+job_log_dir="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 mkdir -p "$job_log_dir" || { echo "ERROR: cannot create log directory: $job_log_dir" >&2; exit 2; }
 
 usage() {

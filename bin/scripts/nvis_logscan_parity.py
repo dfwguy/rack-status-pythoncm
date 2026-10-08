@@ -14,7 +14,7 @@
 Runs both extractors over the same corpus and compares the numbers that reach the dashboard.
 Intended to be run ON the head node, where the logs are:
 
-    python3 nvis_logscan_parity.py /cluster/benchmark/harish/rack_status/logs  # whole directory
+    python3 nvis_logscan_parity.py "$RACK_STATUS_LOG_DIR"  # whole directory (the cluster's log_dir)
     python3 nvis_logscan_parity.py --limit 40 <dir>                        # sample it
     python3 nvis_logscan_parity.py <file> [<file> ...]                     # named logs
 

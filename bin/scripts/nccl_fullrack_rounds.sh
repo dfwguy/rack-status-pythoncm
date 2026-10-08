@@ -39,7 +39,7 @@ ROUNDS="${2:-5}"; BEG="${3:-1K}"; END="${4:-16G}"
 # $5 (rack id) is passed positionally by the app because env (NVIS_RACK) is not forwarded over SSH.
 RACK_ARG="${5:-}"
 GPN="${GPUS_PER_NODE:-4}"
-LOG_ROOT="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
+LOG_ROOT="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 
 # Normalize <hosts> into a "host:GPN,host:GPN,..." CSV. Three cases:
 #   (a) already node:gpus CSV (contains ':')            -> use as-is

@@ -10,7 +10,8 @@
 # its affiliates is strictly prohibited.
 # Multinode NEMO launch. Pass rack targets as one comma-separated spec or multiple arguments, e.g.
 #   p5-r[13-14]-ct[01-18],p5-r[15-16]-ct[01-18]
-# Dashboard and manual launches use the same shared cluster log root.
+# Logs go where the launch says: RACK_JOB_LOG_DIR (per-launch) or RACK_STATUS_LOG_DIR (deployment);
+# absent both, the launch working directory ($PWD), which the app sets to the cluster's log_dir.
 #
 # Slurm stdout basename (example):
 #   root-NEMO-p5-r[13-14]-ct[01-18],p5-r[15-16]-ct[01-18]-72N-22403.txt
@@ -22,7 +23,7 @@ export PDSH_SSH_ARGS_APPEND="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/
 export PDSH_RCMD_TYPE=ssh
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
+JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 mkdir -p "${JOB_LOG_DIR}" || { echo "run-nemo-xrack: cannot create log directory: ${JOB_LOG_DIR}" >&2; exit 2; }
 
 # Which NeMo batch script to submit. Default = the Stage-2 soak / Stage-3 LLM engine

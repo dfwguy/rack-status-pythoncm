@@ -25,7 +25,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Non-login control-plane shells do not have a reliable Slurm PATH. Use the same
 # pinned site version and config source as every other rack-status launcher.
 source "${SCRIPT_DIR}/slurm-init.inc.sh"
-JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
+JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 LLAMA_LOG_DIR="${JOB_LOG_DIR%/}/sn-llama"
 mkdir -p "${LLAMA_LOG_DIR}" || { echo "run-llama: cannot create log directory: ${LLAMA_LOG_DIR}" >&2; exit 2; }
 export RACK_JOB_LOG_DIR="${JOB_LOG_DIR}"

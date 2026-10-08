@@ -68,6 +68,13 @@ done
 [[ "$local_container_dir" == /tmp/containers ]] || { echo "ERROR: local container directory is fixed to /tmp/containers" >&2; exit 2; }
 [[ "$storage" == local || "$rsync_enabled" == 0 ]] || { echo "ERROR: --rsync requires --storage local" >&2; exit 2; }
 
+# Hand our resolved log directory to every child launcher. The sbatch jobs below take it as an
+# explicit --output under "$log_dir", but the chained host launchers (run_nccl_mpi.sh,
+# run-exemplar-system-info.sh) read it only from RACK_JOB_LOG_DIR / RACK_STATUS_LOG_DIR. Without
+# this export a child fell back to its own baked-in default and tried to mkdir an absolute path
+# that does not exist on the execution host -- the whole preset failed before Slurm ever saw it.
+export RACK_JOB_LOG_DIR="$log_dir"
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if (( dry_run )); then
   node_count="${NVIS_PREPARED_NODE_COUNT:?NVIS_PREPARED_NODE_COUNT is required for offline dry-run}"

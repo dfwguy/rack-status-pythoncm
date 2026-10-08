@@ -9,7 +9,8 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 # nvloom single-rack Slurm job: expands a Slurm hostlist (same convention as validation / run_mnubergemm_stress.sh),
-# writes Slurm stdout under log_dir/nvloom/. Manual runs use the shared cluster log root.
+# writes Slurm stdout under log_dir/nvloom/. log_dir is RACK_JOB_LOG_DIR / RACK_STATUS_LOG_DIR, or
+# the launch working directory ($PWD) that the app points at the cluster's log_dir.
 #
 # Usage: ./run_nvloom_singlerack.sh <pNN-rMM-ct[range]>
 #
@@ -29,7 +30,7 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slurm-init.inc.sh"
 
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
+JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 # shellcheck disable=SC1091
 . "${_SCRIPT_DIR}/workspace-dir-common.sh"
 # shellcheck disable=SC1091

@@ -34,7 +34,7 @@ JID="${1:-}"
 RACK="${2:-}"
 [[ -n "${JID}" ]] || { echo "usage: $0 <jobid> [rack]" >&2; exit 2; }
 
-LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
+LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 LLMB_INSTALL="${LLMB_INSTALL:-/home/cmods/workspace/llmb}"
 MARKER="### NVIS: llmb inner log for job ${JID} appended below ###"
 

@@ -53,7 +53,7 @@ command -v sinfo >/dev/null 2>&1 || { echo "FATAL: sinfo not on PATH"; exit 1; }
 [ -f "${VENV}/bin/activate" ] && source "${VENV}/bin/activate"
 
 TS="$(date +%Y%m%d-%H%M%S)"
-LOG_ROOT="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
+LOG_ROOT="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 OUT="${NVIS_NCCL_CAMPAIGN_OUT:-${LOG_ROOT%/}/nccl_campaign/${TS}}"
 mkdir -p "${OUT}"
 RES="${OUT}/results.tsv"

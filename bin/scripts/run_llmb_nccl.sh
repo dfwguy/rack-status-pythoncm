@@ -44,9 +44,9 @@
 #   NCCL_IB_HCA / NCCL_SOCKET_IFNAME / UCX_* / OMPI_MCA_*  — override fabric auto-detect
 set -uo pipefail
 
-# Keep dashboard and manual launches on the shared cluster log root. RACK_JOB_LOG_DIR
-# remains the per-launch override; RACK_STATUS_LOG_DIR remains the deployment override.
-JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
+# RACK_JOB_LOG_DIR is the per-launch override; RACK_STATUS_LOG_DIR the deployment override; absent
+# both, the launch working directory ($PWD), which the app sets to the cluster's log_dir.
+JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 
 LLMB_VENV="${LLMB_VENV:-/home/nvis/llmb_venv}"
 LLMB_INSTALL="${LLMB_INSTALL:-/home/nvis/dgxc-benchmarking}"

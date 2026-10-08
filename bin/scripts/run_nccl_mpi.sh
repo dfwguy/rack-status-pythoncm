@@ -36,7 +36,7 @@
 #      NCCL_SIZE_MIN / NCCL_SIZE_MAX, RACK_JOB_LOG_DIR / RACK_STATUS_LOG_DIR.
 set -uo pipefail
 
-JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-/cluster/benchmark/harish/rack_status/logs}}"
+JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 # GPUS_PER_NODE resolved after node resolution (env > Slurm GRES > nvidia-smi > 4).
 GPUS_PER_NODE="${GPUS_PER_NODE:-}"
 DRY_RUN=0
