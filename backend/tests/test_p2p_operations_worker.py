@@ -198,3 +198,7 @@ class TestRolloutEnv:
 
     def test_zero_is_passed_through_as_off(self):
         assert worker._rollout_env({}, {"stall_seconds": 0}, "/opt/nvis-p2p")["NVIS_P2P_ROLLOUT_STALL_SECONDS"] == "0"
+
+    def test_the_download_limit_reaches_the_rollout_and_defaults_to_an_hour(self):
+        assert worker._rollout_env({}, {"download_timeout_seconds": 900}, "/r")["NVIS_P2P_DOWNLOAD_TIMEOUT_SECONDS"] == "900"
+        assert worker._rollout_env({}, {}, "/r")["NVIS_P2P_DOWNLOAD_TIMEOUT_SECONDS"] == "3600"

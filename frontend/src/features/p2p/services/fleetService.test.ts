@@ -45,6 +45,7 @@ const campaign = (patch: Partial<CampaignEdit> = {}): CampaignEdit => ({
   timeout_seconds: 0,
   fill_wave_size: 0,
   stall_seconds: 0,
+  download_timeout_seconds: 0,
   strategy: "",
   stages: [],
   ...patch,
@@ -97,9 +98,9 @@ describe("launchCampaign", () => {
     expect(lastCall().body?.pacing).toEqual({ strategy: "rack-staged", stages: ["1", "50%", "100%"], fill_wave_size: 72 });
   });
 
-  it("sends a shortened stall window as a pacing override", async () => {
-    await launchCampaign(campaign({ stall_seconds: 300 }));
-    expect(lastCall().body?.pacing).toEqual({ stall_seconds: 300 });
+  it("sends a shortened stall window and download limit as pacing overrides", async () => {
+    await launchCampaign(campaign({ stall_seconds: 300, download_timeout_seconds: 1800 }));
+    expect(lastCall().body?.pacing).toEqual({ stall_seconds: 300, download_timeout_seconds: 1800 });
   });
 
   it("sends no pacing at all when every field inherits the cluster default", async () => {

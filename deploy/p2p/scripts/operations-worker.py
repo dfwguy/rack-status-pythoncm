@@ -60,6 +60,7 @@ def _rollout_env(base: dict, rollout: dict, root: str) -> dict:
     env["NVIS_P2P_ROLLOUT_MAX_UNREACHABLE"] = str(rollout.get("max_unreachable", 3))
     env["NVIS_P2P_ROLLOUT_TIMEOUT_SECONDS"] = str(rollout.get("timeout_seconds", 1800))
     env["NVIS_P2P_ROLLOUT_STALL_SECONDS"] = str(rollout.get("stall_seconds", 600))
+    env["NVIS_P2P_DOWNLOAD_TIMEOUT_SECONDS"] = str(rollout.get("download_timeout_seconds", 3600))
     return env
 
 

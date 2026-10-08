@@ -13,11 +13,13 @@ timeout_seconds=${NVIS_P2P_ROLLOUT_TIMEOUT_SECONDS:-28800}
 # A download whose written bytes have not moved for this long is stopped and relaunched (or deferred
 # once it has used its launches), instead of holding the wave open until the timeout. 0 disables.
 stall_seconds=${NVIS_P2P_ROLLOUT_STALL_SECONDS:-600}
+# Each node's download enforces this limit itself (launch-catalog-image-node.sh passes it on).
+download_timeout=${NVIS_P2P_DOWNLOAD_TIMEOUT_SECONDS:-3600}
 
 [[ $parallelism =~ ^[1-9][0-9]*$ && $parallelism -le 128 ]] || {
   echo "ROLLOUT_BAD_PARALLELISM value=$parallelism expected=1..128" >&2; exit 64;
 }
-for value in "$poll_seconds" "$max_launches" "$max_unreachable" "$timeout_seconds"; do
+for value in "$poll_seconds" "$max_launches" "$max_unreachable" "$timeout_seconds" "$download_timeout"; do
   [[ $value =~ ^[1-9][0-9]*$ ]] || { echo "ROLLOUT_BAD_LIMIT value=$value" >&2; exit 64; }
 done
 [[ $stall_seconds =~ ^[0-9]+$ ]] || { echo "ROLLOUT_BAD_LIMIT value=$stall_seconds" >&2; exit 64; }
@@ -82,8 +84,10 @@ while :; do
   mv "$run_dir/tracking.next" "$run_dir/tracking.tsv"
 
   # Progress per ACTIVE download: when its written bytes last changed. A node is stalled once that is
-  # stall_seconds ago -- unless nothing can be measured yet (written=-1) or every byte is already
-  # there (it is checksumming, which takes minutes on a large image and is not a stall).
+  # stall_seconds ago, unless nothing can be measured yet (written=-1). A download with every byte
+  # written may be checksumming, which takes a few minutes on a large image, so it gets twice the
+  # window -- but not forever: on NC a dfget hung with its partial fully allocated for ten hours, and
+  # an unlimited exemption let it hold two waves to their timeouts.
   now_epoch=$(date +%s)
   : > "$run_dir/stalled.nodes"
   awk -F '\t' -v OFS='\t' -v now="$now_epoch" -v stall="$stall_seconds" -v full="$expected_bytes" \
@@ -94,7 +98,8 @@ while :; do
        w=-1; if (match($3, /written=-?[0-9]+/)) w=substr($3, RSTART+8, RLENGTH-8)+0
        s=(($1 in prev) && prev[$1]==w) ? since[$1] : now
        print $1, w, s
-       if (stall>0 && w>=0 && w<full+0 && now-s>=stall) print $1 > stalled
+       limit=(w>=full+0) ? 2*stall : stall
+       if (stall>0 && w>=0 && now-s>=limit) print $1 > stalled
      }' "$run_dir/progress.tsv" "$run_dir/check-$iteration.tsv" > "$run_dir/progress.next"
   mv "$run_dir/progress.next" "$run_dir/progress.tsv"
 
@@ -159,7 +164,7 @@ while :; do
   if (( relaunches > 0 )); then
     set +e
     xargs -r -P "$parallelism" -I{} "$root/scripts/launch-catalog-image-node.sh" \
-      "{}" "$filename" < "$run_dir/relaunch.nodes" > "$run_dir/launch-$iteration.log" 2>&1
+      "{}" "$filename" "$download_timeout" < "$run_dir/relaunch.nodes" > "$run_dir/launch-$iteration.log" 2>&1
     launch_rc=$?
     set -e
     awk -F '\t' -v OFS='\t' 'NR==FNR {retry[$1]=1; next}
@@ -181,9 +186,21 @@ while :; do
     { awk 'NR>1 {print $1}' "$run_dir/ready.tsv"; awk 'NR>1 {print $1}' "$run_dir/deferred.tsv"; } \
       > "$run_dir/done.nodes"
     awk 'FILENAME==ARGV[1] {done[$1]=1; next} !($1 in done) {print $1}' \
-      "$run_dir/done.nodes" "$nodes" | while read -r node; do
-        printf '%s\ttimeout_after_%ss\t%s\n' "$node" "$elapsed" "$(date -u +%FT%TZ)" >> "$run_dir/deferred.tsv"
-      done
+      "$run_dir/done.nodes" "$nodes" > "$run_dir/timedout.nodes"
+    while read -r node; do
+      printf '%s\ttimeout_after_%ss\t%s\n' "$node" "$elapsed" "$(date -u +%FT%TZ)" >> "$run_dir/deferred.tsv"
+    done < "$run_dir/timedout.nodes"
+    # Deferred has to mean stopped: a download left running past the wave keeps the node busy and is
+    # re-adopted by the next launch. Stop whatever the timed-out nodes are still running.
+    awk -F '\t' 'NR==FNR {out[$1]=1; next} ($1 in out) && $4=="ACTIVE" {print $1}' \
+      "$run_dir/timedout.nodes" "$run_dir/tracking.tsv" > "$run_dir/stop.nodes"
+    if [[ -s $run_dir/stop.nodes ]]; then
+      set +e
+      xargs -r -P "$parallelism" -I{} "$root/scripts/stop-catalog-image-node.sh" \
+        "{}" "$filename" < "$run_dir/stop.nodes" > "$run_dir/stop-timeout.log" 2>&1
+      set -e
+      echo "ROLLOUT_TIMEOUT_STOPPED nodes=$(wc -l < "$run_dir/stop.nodes")"
+    fi
     break
   fi
   sleep "$poll_seconds"

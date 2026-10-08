@@ -59,6 +59,7 @@ const campaign: CampaignEdit = {
   timeout_seconds: 0,
   fill_wave_size: 0,
   stall_seconds: 0,
+  download_timeout_seconds: 0,
   strategy: "",
   stages: [],
 };

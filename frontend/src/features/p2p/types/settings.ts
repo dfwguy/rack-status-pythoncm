@@ -52,6 +52,8 @@ export interface P2pSettingsDoc {
   rollout_fill_wave_size: number;
   /** Seconds a download may go without writing a byte before it is stopped and relaunched; 0 = off. */
   rollout_stall_seconds: number;
+  /** Hard limit on one node's download of one image, enforced on the node (default 3600). */
+  rollout_download_timeout_seconds: number;
 }
 
 /** GET /api/p2p/settings and PUT response. */

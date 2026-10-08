@@ -409,6 +409,19 @@ class TestRolloutWavePlanSettings:
         assert any("rollout_stall_seconds" in p
                    for p in models.P2pSettings(cluster_id="c1", rollout_stall_seconds=-1).validate())
 
+    def test_the_download_limit_defaults_to_an_hour_and_has_a_floor(self):
+        assert models.P2pSettings(cluster_id="c1").rollout_download_timeout_seconds == 3600
+        s = models.P2pSettings.from_dict({"cluster_id": "c1", "rollout_download_timeout_seconds": 1800})
+        assert models.P2pSettings.from_dict(s.to_dict()).rollout_download_timeout_seconds == 1800
+        assert any("rollout_download_timeout_seconds must be at least 60" in p
+                   for p in models.P2pSettings(cluster_id="c1", rollout_download_timeout_seconds=30).validate())
+        camp = models.P2pCampaigns.from_dict({"cluster_id": "c1", "campaigns": [
+            {"name": "ok", "image": "a.sqsh", "download_timeout_seconds": 1800},
+            {"name": "short", "image": "a.sqsh", "download_timeout_seconds": 10}]})
+        assert camp.get("ok").pacing_overrides() == {"download_timeout_seconds": 1800}
+        assert [p for p in camp.validate() if "download_timeout_seconds" in p] == [
+            "short: download_timeout_seconds override must be at least 60 (or 0 to inherit)"]
+
     def test_settings_validation(self):
         bad = models.P2pSettings(cluster_id="c1", rollout_strategy="random", rollout_stages=["1"],
                                  rollout_fill_wave_size=-1)
@@ -677,6 +690,7 @@ class TestP2pCampaignsApi:
         assert req["request"]["rollout"]["stages"] == ["1", "50%", "100%"]
         assert req["request"]["rollout"]["fill_wave_size"] == 0
         assert req["request"]["rollout"]["stall_seconds"] == 600
+        assert req["request"]["rollout"]["download_timeout_seconds"] == 3600
 
     def _launch(self, client, tmp_path, monkeypatch, pacing, **settings):
         import p2p_operations

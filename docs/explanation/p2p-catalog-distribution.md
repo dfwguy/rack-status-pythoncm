@@ -156,6 +156,12 @@ system working and mysteriously not.
   deferred once it has used its launches. What remains is the stall window itself, which must be
   long enough to cover a slow transfer that is still moving. Re-run with `deferred.tsv` as the next
   roster to pick up what was deferred.
+- **Giving up on a node has to stop the node.** The same NC download outlived its wave by ten hours:
+  the rollout recorded the node as deferred and moved on, dfget ignored its own six-hour timeout, and
+  every later launch found the process alive and re-adopted it. Each layer now enforces its own end —
+  the node kills a transfer at its download limit (an hour by default), a launch replaces a download
+  older than that limit, and a wave that times out stops what it is giving up on — so no single
+  layer's failure leaves a node stuck.
 
 ## Idempotency: why re-running is cheap and correct
 

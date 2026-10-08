@@ -98,6 +98,7 @@ Environment variables read by `rollout-catalog-image-fleet.sh`:
 | `NVIS_P2P_ROLLOUT_MAX_UNREACHABLE` | `3` | Failed reachability checks before a node is deferred. |
 | `NVIS_P2P_ROLLOUT_TIMEOUT_SECONDS` | — | Overall campaign timeout. |
 | `NVIS_P2P_ROLLOUT_STALL_SECONDS` | `600` | Stop and relaunch a download whose written bytes have not moved for this long; `0` disables. |
+| `NVIS_P2P_DOWNLOAD_TIMEOUT_SECONDS` | `3600` | Hard limit on one node's download of one image, passed to every launch and enforced on the node. |
 | `NVIS_P2P_ROOT` | `/opt/nvis-p2p` | Install root; set to `/opt/nvis-p2p/current` for the live release. |
 
 Invocation: `rollout-catalog-image-fleet.sh <image-filename> <roster-file> [<label>]`.
@@ -116,6 +117,7 @@ per wave, in order. Cluster defaults live in **Dragonfly Settings**; a campaign 
 | `rollout_fill_wave_size` | `fill_wave_size` | `0` | `rack-staged` only: nodes per wave in every later stage. `0` = the wave size. |
 | `rollout_stages` | `stages` | `1, 50%, 100%` | `rack-staged` only: the stage ladder. |
 | `rollout_stall_seconds` | `stall_seconds` | `600` | Becomes `NVIS_P2P_ROLLOUT_STALL_SECONDS`; `0` (cluster only) disables. |
+| `rollout_download_timeout_seconds` | `download_timeout_seconds` | `3600` | Becomes `NVIS_P2P_DOWNLOAD_TIMEOUT_SECONDS`; at least `60`. |
 
 **Stage ladder.** Each rung is a cumulative per-rack target: a node count (`1`, `2`) or a share of
 the rack, rounded up (`50%`). Counts must rise, shares must rise, and the last rung must be `100%`.
@@ -179,10 +181,21 @@ Run-directory artifacts (under `$NVIS_P2P_ROOT/state/rollout-<label>-<image>-<st
 `ACTIVE  pid=<pid> written=<bytes>`, where `written` is the bytes allocated to the node's staging
 partial (dfget preallocates its length, so only the allocated blocks move; `-1` until a partial
 exists). A download whose `written` has not changed for `NVIS_P2P_ROLLOUT_STALL_SECONDS` is stalled,
-unless `written` already equals the image size (it is checksumming). A stalled node is stopped with
-`stop-catalog-image-node.sh` and relaunched; once it has used `NVIS_P2P_ROLLOUT_MAX_LAUNCHES` it is
-stopped and deferred as `stalled_<S>s_after_<N>_launches`. The peer keeps the pieces it already
-holds, so a relaunch resumes rather than restarts.
+and a download whose `written` has reached the image size (it may be checksumming) gets twice that
+window. A stalled node is stopped with `stop-catalog-image-node.sh` and relaunched; once it has used
+`NVIS_P2P_ROLLOUT_MAX_LAUNCHES` it is stopped and deferred as `stalled_<S>s_after_<N>_launches`. The
+peer keeps the pieces it already holds, so a relaunch resumes rather than restarts. A node still
+downloading when the wave reaches `NVIS_P2P_ROLLOUT_TIMEOUT_SECONDS` is deferred **and stopped**
+(`ROLLOUT_TIMEOUT_STOPPED`), so a deferred node never keeps a transfer running.
+
+**Download limit on the node.** `launch-catalog-image-node.sh NODE FILENAME [SECONDS]` passes the
+limit to `download-catalog-image.sh`, which runs dfget under `timeout --kill-after=60`: dfget is told
+the limit, and is killed when it passes even if it ignores it (the log ends with
+`CATALOG_DOWNLOAD_TIMEOUT`, exit 124). A launch that finds a "running" download older than the limit
+plus `NVIS_P2P_STALE_GRACE_SECONDS` (default `60`) replaces it (`replaced_stale_pid=` in
+`CATALOG_LAUNCH_STARTED`) instead of reporting it active. The download script takes the seed origin
+from the node's `catalog-refresh.env` (scheme, host and port of `NVIS_P2P_CATALOG_URL`) unless
+`NVIS_P2P_ORIGIN` is set, and refuses with `CATALOG_ORIGIN_UNKNOWN` when it has neither.
 
 ## Catalog manifest (`images.tsv`)
 

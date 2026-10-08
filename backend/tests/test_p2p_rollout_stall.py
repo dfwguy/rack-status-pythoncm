@@ -19,7 +19,7 @@ preallocates its length) and treats a download as stalled once that number has n
 pieces it has, and the scheduler picks new parents -- or deferred once it has used its launches.
 
 What is pinned: a stall is stopped and relaunched; a download that is moving, or that has every
-byte and is only checksumming, is never touched; a node that stalls through all its launches is
+byte and is checksumming, is left alone -- the latter for twice the window, then it too is a stall; a node that stalls through all its launches is
 deferred with a reason that says so; 0 turns the behaviour off. The check and stop scripts run end
 to end through a stand-in ``ssh`` that executes the remote half locally.
 """
@@ -58,12 +58,15 @@ case $mode in
   always-stall) printf '%s\tACTIVE\tpid=1 written=100\n' "$n" ;;
   progress)     if (( calls >= 7 )); then printf '%s\tREADY\treceipt_valid\n' "$n";
                 else printf '%s\tACTIVE\tpid=1 written=%s\n' "$n" "$((calls * 100))"; fi ;;
-  verifying)    if (( calls >= 7 )); then printf '%s\tREADY\treceipt_valid\n' "$n";
+  verifying)    if (( calls >= 4 )); then printf '%s\tREADY\treceipt_valid\n' "$n";
                 else printf '%s\tACTIVE\tpid=1 written=%s\n' "$n" "$FULL"; fi ;;
+  hung-full)    if [[ -e $d/stopped ]]; then printf '%s\tREADY\treceipt_valid\n' "$n";
+                else printf '%s\tACTIVE\tpid=1 written=%s\n' "$n" "$((FULL + 40960))"; fi ;;
 esac
 """
 _LAUNCH = r"""#!/usr/bin/env bash
 mkdir -p "$FAKE/state-$1"; touch "$FAKE/state-$1/launched"; echo "launch $1" >> "$FAKE/calls.log"
+echo "$3" > "$FAKE/limit-$1"
 echo "CATALOG_LAUNCH_STARTED node=$1"
 """
 _STOP = r"""#!/usr/bin/env bash
@@ -72,7 +75,8 @@ echo "CATALOG_STOPPED node=$1"
 """
 
 
-def _rollout(tmp_path: Path, modes: dict[str, str], stall: int, max_launches: int = 3, timeout: int = 60):
+def _rollout(tmp_path: Path, modes: dict[str, str], stall: int, max_launches: int = 3, timeout: int = 60,
+             **extra_env: str):
     root = tmp_path / "root"
     (root / "scripts").mkdir(parents=True)
     (root / "catalog").mkdir()
@@ -89,7 +93,8 @@ def _rollout(tmp_path: Path, modes: dict[str, str], stall: int, max_launches: in
     roster.write_text("\n".join(modes) + "\n")
     env = {**os.environ, "NVIS_P2P_ROOT": str(root), "FAKE": str(fake), "FULL": str(FULL),
            "NVIS_P2P_ROLLOUT_POLL_SECONDS": "1", "NVIS_P2P_ROLLOUT_STALL_SECONDS": str(stall),
-           "NVIS_P2P_ROLLOUT_MAX_LAUNCHES": str(max_launches), "NVIS_P2P_ROLLOUT_TIMEOUT_SECONDS": str(timeout)}
+           "NVIS_P2P_ROLLOUT_MAX_LAUNCHES": str(max_launches), "NVIS_P2P_ROLLOUT_TIMEOUT_SECONDS": str(timeout),
+           **extra_env}
     proc = subprocess.run(["bash", str(SCRIPTS / "rollout-catalog-image-fleet.sh"), IMAGE, str(roster), "t"],
                           env=env, capture_output=True, text=True, timeout=120, check=False)
     calls = (fake / "calls.log").read_text().splitlines() if (fake / "calls.log").exists() else []
@@ -117,6 +122,16 @@ class TestStallHandling:
         assert calls == ["launch a"]
         assert "ROLLOUT_STALLED" not in proc.stdout and deferred == {}
 
+    def test_a_complete_download_that_never_finishes_is_stopped_after_twice_the_window(self, tmp_path):
+        """Every byte allocated (even a little over: blocks round up) and no receipt for longer than a
+        checksum takes is a hung dfget, not a slow checksum -- on NC one sat like that for ten hours."""
+        start = time.monotonic()
+        proc, calls, deferred = _rollout(tmp_path, {"a": "hung-full"}, stall=2)
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert calls == ["launch a", "stop a", "launch a"]
+        assert deferred == {}
+        assert time.monotonic() - start >= 4          # not before twice the window
+
     def test_a_node_that_stalls_through_its_launches_is_deferred_and_stopped(self, tmp_path):
         proc, calls, deferred = _rollout(tmp_path, {"a": "always-stall", "b": "progress"}, stall=2, max_launches=2)
         assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -124,10 +139,21 @@ class TestStallHandling:
         assert deferred == {"a": "stalled_2s_after_2_launches"}
         assert "ROLLOUT_COMPLETE_WITH_DEFERRALS total=2 ready=1 deferred=1" in proc.stdout
 
-    def test_zero_turns_stall_handling_off(self, tmp_path):
-        _, calls, deferred = _rollout(tmp_path, {"a": "always-stall"}, stall=0, timeout=4)
-        assert calls == ["launch a"]
+    def test_zero_turns_stall_handling_off_and_a_timeout_still_stops_the_download(self, tmp_path):
+        """Deferred has to mean stopped: a download left running past its wave was re-adopted by the
+        next launch on NC, run after run."""
+        proc, calls, deferred = _rollout(tmp_path, {"a": "always-stall"}, stall=0, timeout=4)
+        assert calls == ["launch a", "stop a"]
         assert deferred["a"].startswith("timeout_after_")
+        assert "ROLLOUT_TIMEOUT_STOPPED nodes=1" in proc.stdout
+
+    def test_every_launch_carries_the_download_limit(self, tmp_path):
+        _rollout(tmp_path, {"a": "progress"}, stall=2, NVIS_P2P_DOWNLOAD_TIMEOUT_SECONDS="1234")
+        assert (tmp_path / "fake" / "limit-a").read_text().strip() == "1234"
+
+    def test_the_download_limit_defaults_to_an_hour(self, tmp_path):
+        _rollout(tmp_path, {"a": "progress"}, stall=2)
+        assert (tmp_path / "fake" / "limit-a").read_text().strip() == "3600"
 
     def test_a_malformed_stall_window_is_refused(self, tmp_path):
         proc, _, _ = _rollout_bad(tmp_path)
