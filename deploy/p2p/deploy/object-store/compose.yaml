@@ -28,8 +28,31 @@ services:
     cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
+    # Probe /minio/health/live with whatever the image has, over the scheme the site serves (HTTPS
+    # only when render-site-config placed certs). A bare curl probe assumed both: Nscale NC runs a
+    # locally built image with no curl and serves plain HTTP, so it failed forever and
+    # fleet-snapshot.py reported the store down. Without curl, fall back to openssl s_client for
+    # TLS or bash's /dev/tcp for HTTP; a TLS site with neither can only prove the port listens.
     healthcheck:
-      test: ["CMD", "curl", "-fk", "https://127.0.0.1:9000/minio/health/live"]
+      test:
+        - CMD
+        - bash
+        - -c
+        - |
+          scheme=http; [ -s /certs/public.crt ] && scheme=https
+          if command -v curl >/dev/null; then
+            exec curl -fsk -m 4 -o /dev/null "$$scheme://127.0.0.1:9000/minio/health/live"
+          fi
+          req=$$'GET /minio/health/live HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'
+          if [ "$$scheme" = https ] && command -v openssl >/dev/null; then
+            status=$$(printf '%s' "$$req" | timeout 4 openssl s_client -quiet -connect 127.0.0.1:9000 2>/dev/null | head -n1)
+          else
+            exec 3<>/dev/tcp/127.0.0.1/9000 || exit 1
+            [ "$$scheme" = https ] && exit 0
+            printf '%s' "$$req" >&3
+            IFS= read -r -t 4 status <&3
+          fi
+          [[ $$status == *" 200 "* ]]
       interval: 15s
       timeout: 5s
       retries: 8
