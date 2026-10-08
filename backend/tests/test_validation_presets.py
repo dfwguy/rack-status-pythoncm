@@ -401,9 +401,11 @@ def test_scripts_encode_runtime_and_result_gates():
     assert "lib.ncclGetVersion(ctypes.byref(version))" in llama
     assert "runtime_nccl=2.30.7" in llama
     # The runtime gate derives the expected ncclGetVersion from NVIS_NCCL_VERSION (X.Y.Z encoding),
-    # rather than hard-coding one release — so a workspace built at 2.30.7 (23007) validates.
-    assert "ncclGetVersion" in nccl and "requires=$_want" in nccl
-    assert '$1*10000+$2*100+$3' in nccl and "NVIS_NCCL_VERSION" in nccl
+    # rather than hard-coding one release — so a workspace built at 2.30.7 (23007) validates. The
+    # value is computed in the OUTER script (the srun '...' block forbids single quotes) and compared
+    # inside via the exported NVIS_NCCL_WANT_VER.
+    assert "ncclGetVersion" in nccl and "requires=$NVIS_NCCL_WANT_VER" in nccl
+    assert '$1*10000+$2*100+$3' in nccl and "NVIS_NCCL_WANT_VER" in nccl
     assert "if ! srun --kill-on-bad-exit=1" in nccl and "exit 15" in nccl
     assert "/dev/infiniband/rdma_cm" in nccl and "-type c" in nccl
     assert "NVIS_NCCL_RUNTIME_PREFLIGHT" in nccl_launcher

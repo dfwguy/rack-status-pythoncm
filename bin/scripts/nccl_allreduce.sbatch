@@ -101,7 +101,12 @@ export LD_LIBRARY_PATH="${NCCL_LIB}:${CUDA_LIB}:${LD_LIBRARY_PATH:-}"
 # Inspect the actual linked library and selected CUDA runtime on every allocated
 # node before MPI starts; setting version-looking env vars is not evidence.
 if [ "${NVIS_NCCL_RUNTIME_PREFLIGHT:-0}" = "1" ]; then
-  export NCCL_LIB CUDA_LIB NVIS_NCCL_VERSION
+  # Expected ncclGetVersion is DERIVED from the selected version, and computed HERE in the outer
+  # script because the srun '...' block below forbids single quotes (it uses only double quotes).
+  # X.Y.Z -> X*10000+Y*100+Z, NCCL's own encoding (2.30.7 -> 23007, 2.31.2 -> 23102); a non-numeric
+  # selection (system/default) yields empty and pins nothing.
+  NVIS_NCCL_WANT_VER="$(printf '%s' "${NVIS_NCCL_VERSION:-}" | awk -F. 'NF>=3{printf "%d",$1*10000+$2*100+$3}')"
+  export NCCL_LIB CUDA_LIB NVIS_NCCL_VERSION NVIS_NCCL_WANT_VER
   if ! srun --kill-on-bad-exit=1 --nodes="${SLURM_JOB_NUM_NODES}" \
     --ntasks="${SLURM_JOB_NUM_NODES}" --ntasks-per-node=1 bash -euo pipefail -c '
       min_cuda="${NVIS_NCCL_MIN_CUDA_VERSION:-13.3}"
@@ -121,11 +126,7 @@ assert lib.ncclGetVersion(ctypes.byref(v)) == 0
 print(v.value)
 PY
 )"
-      # Expected ncclGetVersion is DERIVED from the selected NVIS_NCCL_VERSION (X.Y.Z -> X*10000+Y*100+Z,
-      # NCCL's own encoding: 2.30.7 -> 23007, 2.31.2 -> 23102), never hard-coded to one release. A
-      # non-numeric selection (system|default) pins nothing and skips the check.
-      _want="$(printf '%s' "${NVIS_NCCL_VERSION:-}" | awk -F. 'NF>=3{printf "%d",$1*10000+$2*100+$3}')"
-      [[ -z "$_want" || "$version" == "$_want" ]] || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): ncclGetVersion=$version requires=$_want (NVIS_NCCL_VERSION=${NVIS_NCCL_VERSION:-})" >&2; exit 12; }
+      [[ -z "$NVIS_NCCL_WANT_VER" || "$version" == "$NVIS_NCCL_WANT_VER" ]] || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): ncclGetVersion=$version requires=$NVIS_NCCL_WANT_VER (NVIS_NCCL_VERSION=${NVIS_NCCL_VERSION:-})" >&2; exit 12; }
       test -d /sys/class/infiniband || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): no InfiniBand sysfs" >&2; exit 13; }
       test -e /dev/infiniband/rdma_cm || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): no rdma_cm" >&2; exit 13; }
       uverbs="$(find /dev/infiniband -maxdepth 1 -name "uverbs*" -type c 2>/dev/null | wc -l)"
