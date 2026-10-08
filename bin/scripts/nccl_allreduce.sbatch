@@ -114,6 +114,12 @@ if [ "${NVIS_NCCL_RUNTIME_PREFLIGHT:-0}" = "1" ]; then
       if [[ -z "$cuda" && -r "$CUDA_LIB/libcudart.so" ]]; then
         cuda="$(strings "$CUDA_LIB/libcudart.so" | sed -n "s/.*CUDA Runtime [vV]\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p" | head -1)"
       fi
+      # Last resort: the libcudart SONAME carries the version (libcudart.so -> libcudart.so.13.0.96).
+      # CUDA 13 toolkits install under <ws>/cuda<major> (no dot in the dir) and their libcudart no
+      # longer embeds a "CUDA Runtime X.Y" string, so the two probes above both come up empty here.
+      if [[ -z "$cuda" ]]; then
+        cuda="$(readlink -f "$CUDA_LIB/libcudart.so" 2>/dev/null | sed -n "s#.*libcudart\.so\.\([0-9][0-9]*\.[0-9][0-9]*\).*#\1#p")"
+      fi
       [[ -n "$cuda" ]] || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): selected CUDA_LIB version unavailable: $CUDA_LIB" >&2; exit 10; }
       awk -v got="$cuda" -v want="$min_cuda" "BEGIN {split(got,g,\".\"); split(want,w,\".\"); exit !((g[1]>w[1]) || (g[1]==w[1] && g[2]>=w[2]))}" || {
         echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): CUDA=$cuda requires>=$min_cuda" >&2; exit 11;
