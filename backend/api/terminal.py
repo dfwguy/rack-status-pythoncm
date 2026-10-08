@@ -265,14 +265,25 @@ class _WebSocketTerminalMiddleware:
                 _audit_terminal_refusal(refused, environ)
                 start_response("403 Forbidden", [("Content-Type", "text/plain; charset=utf-8")])
                 return [b"forbidden\n"]
+            under_gunicorn = "gunicorn.socket" in environ
             try:
                 self._handle_terminal(environ)
             finally:
-                try:
-                    start_response("200 OK", [])
-                except Exception:
-                    # Headers may already be set, or the peer already closed the socket.
-                    _logger.debug("__call__: ignoring error", exc_info=True)
+                if not under_gunicorn:
+                    try:
+                        start_response("200 OK", [])
+                    except Exception:
+                        # Headers may already be set, or the peer already closed the socket.
+                        _logger.debug("__call__: ignoring error", exc_info=True)
+            if under_gunicorn:
+                # The connection is finished: simple_websocket closes the socket from its own
+                # thread. Returning normally made gunicorn treat the upgrade as a keep-alive
+                # request and put that socket back in its poller; when it fired, gthread's main
+                # loop called setblocking() on the closed socket, got EBADF and took the whole
+                # worker down with every request in flight. StopIteration is gunicorn's "close
+                # this connection" signal (flask-sock uses it the same way), and it also keeps
+                # gunicorn from writing an HTTP status line onto the socket after the WebSocket.
+                raise StopIteration
             return []
         return self.wsgi_app(environ, start_response)
 
