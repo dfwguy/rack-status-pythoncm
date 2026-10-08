@@ -238,6 +238,10 @@ export function toCluster(draft: WizardDraft): Cluster {
       // The wizard does not ask for a log directory: blank falls back to remote_base_path/var/logs,
       // and a site whose logs live elsewhere sets it per cluster in the editor afterward.
       log_dir: "",
+      // Nor for image locations: blank uses the deployment defaults (/cluster/containers shared,
+      // /tmp/containers per node); a site that mounts them elsewhere sets them in the editor.
+      shared_container_dir: "",
+      node_container_dir: "",
     },
     // The wizard does not ask for an SU map: empty derives it from the platform's
     // racks_per_su, which is right for every cluster that is not ragged. A site with a

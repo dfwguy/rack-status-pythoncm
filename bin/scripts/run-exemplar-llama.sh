@@ -54,10 +54,10 @@ esac
 
 case "$image_profile" in
   nccl2.30.7)
-    run_image="${NVIS_EXEMPLAR_LLAMA_IMAGE_NCCL2307:-/tmp/containers/nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh}"
+    run_image="${NVIS_EXEMPLAR_LLAMA_IMAGE_NCCL2307:-${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}/nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh}"
     ;;
   stock)
-    run_image="${NVIS_EXEMPLAR_LLAMA_IMAGE_STOCK:-/tmp/containers/nvidia+nemo+26.04.01-arm.sqsh}"
+    run_image="${NVIS_EXEMPLAR_LLAMA_IMAGE_STOCK:-${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}/nvidia+nemo+26.04.01-arm.sqsh}"
     ;;
   *) echo "ERROR: --image must be nccl2.30.7 or stock" >&2; exit 2 ;;
 esac

@@ -162,12 +162,13 @@ if [[ ! "${_src_size}" =~ ^[1-9][0-9]*$ ]]; then
   exit 1
 fi
 
-# Bryan's bringup-agent/FileCopyTrigger keeps every image in the shared container directory
-# warm under /tmp/containers on each compute node. Prefer that copy directly: copying the same
-# 40+ GiB image from the head node at launch defeats the cache and creates a fleet-wide NFS
-# burst before Slurm even sees the job.
-_shared_cache_dir="${NVIS_NEMO_SHARED_CACHE_DIR:-/cluster/containers}"
-_node_cache_dir="${NVIS_NEMO_NODE_CACHE_DIR:-/tmp/containers}"
+# Bryan's bringup-agent/FileCopyTrigger (or a P2P campaign) keeps every image in the shared container
+# directory warm in each compute node's image cache -- the cluster's node_container_dir, exported as
+# NVIS_NODE_CONTAINER_DIR (/tmp/containers on TX, /opt/containers on NC). Prefer that copy
+# directly: copying the same 40+ GiB image from the head node at launch defeats the cache and
+# creates a fleet-wide NFS burst before Slurm even sees the job.
+_shared_cache_dir="${NVIS_NEMO_SHARED_CACHE_DIR:-${RACK_VALIDATION_CONTAINER_ROOT:-/cluster/containers}}"
+_node_cache_dir="${NVIS_NEMO_NODE_CACHE_DIR:-${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}}"
 _cache_b="${NVIS_NEMO_CACHE_BASENAME:-}"
 
 # build_containers.sh adds an architecture suffix, while the LLMB installer names the same

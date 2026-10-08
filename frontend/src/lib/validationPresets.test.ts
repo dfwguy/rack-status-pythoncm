@@ -10,7 +10,7 @@
  * its affiliates is strictly prohibited.
  */
 import { describe, expect, it } from "vitest";
-import { buildValidationPresetRequest, formatPresetRequirements } from "./validationPresets";
+import { buildValidationPresetRequest, formatPresetRequirements, presetLocalContainerDir } from "./validationPresets";
 
 describe("buildValidationPresetRequest", () => {
   it("deduplicates and naturally sorts exact nodes without inventing a host pattern", () => {
@@ -32,7 +32,6 @@ describe("buildValidationPresetRequest", () => {
       log_dir: "/cluster/logs",
       storage: "local",
       rsync_to_local: true,
-      local_container_dir: "/tmp/containers",
     });
   });
 
@@ -61,5 +60,21 @@ describe("formatPresetRequirements", () => {
       "requires infiniband",
       "cuda version: >=13.3",
     ]);
+  });
+});
+
+describe("presetLocalContainerDir", () => {
+  const base = { id: "nemo-26.04.01", label: "NeMo", description: "", kind: "nemo" };
+
+  it("reads the cluster's node image cache from the server-reported defaults", () => {
+    expect(presetLocalContainerDir({ ...base, defaults: { local_container_dir: " /opt/containers " } })).toBe(
+      "/opt/containers",
+    );
+  });
+
+  it("is undefined until the server says, rather than guessing a path", () => {
+    expect(presetLocalContainerDir(undefined)).toBeUndefined();
+    expect(presetLocalContainerDir(base)).toBeUndefined();
+    expect(presetLocalContainerDir({ ...base, defaults: { local_container_dir: "" } })).toBeUndefined();
   });
 });

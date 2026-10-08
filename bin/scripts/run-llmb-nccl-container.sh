@@ -15,7 +15,9 @@ usage() {
   echo "Usage: $0 --nodelist HOSTLIST [--storage local|nfs] [--rsync] [--log-dir PATH] [--dry-run]" >&2
 }
 nodelist=""; storage=local; rsync_enabled=1
-local_dir=/tmp/containers; log_dir="${RACK_STATUS_LOG_DIR:-$PWD}"; dry_run=0
+# P2P clusters fill the node cache through campaigns only; verify rather than copy by default.
+[[ "${NVIS_NODE_IMAGES_P2P:-0}" == 1 ]] && rsync_enabled=0
+local_dir="${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}"; local_dir="${local_dir%/}"; log_dir="${RACK_STATUS_LOG_DIR:-$PWD}"; dry_run=0
 while (($#)); do
   case "$1" in
     --nodelist) nodelist="${2:?}"; shift 2 ;;
@@ -35,12 +37,15 @@ while (($#)); do
 done
 [[ -n "$nodelist" ]] || { echo "ERROR: --nodelist is required" >&2; exit 2; }
 [[ "$storage" == local || "$storage" == nfs ]] || { echo "ERROR: storage must be local or nfs" >&2; exit 2; }
-[[ "$local_dir" == /tmp/containers ]] || { echo "ERROR: local container dir is fixed to /tmp/containers" >&2; exit 2; }
+_configured_local_dir="${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}"; _configured_local_dir="${_configured_local_dir%/}"
+[[ "${local_dir%/}" == "$_configured_local_dir" ]] || { echo "ERROR: local container dir is fixed to this cluster's node cache, ${_configured_local_dir}" >&2; exit 2; }
+local_dir="$_configured_local_dir"
 [[ "$storage" == local || "$rsync_enabled" == 0 ]] || { echo "ERROR: rsync requires local storage" >&2; exit 2; }
+[[ "${NVIS_NODE_IMAGES_P2P:-0}" != 1 || "$rsync_enabled" == 0 ]] || { echo "ERROR: --rsync is off on this cluster: NVIS-P2P distributes its images; run a P2P campaign instead" >&2; exit 2; }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source_image=/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh
-local_image=/tmp/containers/nvidia+nemo+26.04.01-arm.sqsh
+source_image="${RACK_VALIDATION_CONTAINER_ROOT:-/cluster/containers}"; source_image="${source_image%/}/nvidia+nemo+26.04.01-arm.sqsh"
+local_image="${local_dir}/nvidia+nemo+26.04.01-arm.sqsh"
 run_image="$source_image"; [[ "$storage" == local ]] && run_image="$local_image"
 expected_size=42245001216
 expected_sha=55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc

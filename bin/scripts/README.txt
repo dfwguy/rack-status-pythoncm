@@ -44,8 +44,9 @@ External programs the scripts expect:
 
 Cluster-specific before validation:
   - NEMO_SQSH_SRC (required by run_singlerack.sh): path on the head/login node to the nemo .sqsh
-    file; rsync copies it to /raid/data/<basename> on nodes. Align basename with CONT and
-    nemorun --container_image paths inside nemo-nemotron5h_56b-mbridge-fp8.sh or edit that script.
+    file. It is staged into each node's image cache, <NVIS_NODE_CONTAINER_DIR>/<basename> (the
+    cluster's connection.node_container_dir; default /tmp/containers, /opt/containers on Nscale NC),
+    skipped where the node already holds a same-size copy, and passed to the job as NVIS_NEMO_CONT.
   - HC_CHECKER_SCRIPT (optional): executable checker run on nodes after the job; if unset, skipped.
   - NEMORUN_HOME, network interface names, partition names, and model flags inside the nemo job
     script are site-specific — review the whole file on a new cluster.

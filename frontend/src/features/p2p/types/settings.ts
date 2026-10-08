@@ -61,6 +61,8 @@ export interface P2pSettingsResponse extends P2pSettingsDoc {
   ok: boolean;
   /** What is still missing before the reconcile can run (empty = ready to provision). */
   provisioning_blockers: string[];
+  /** Image directories the cluster record dictates (Projects → cluster); shown read-only here. */
+  image_dirs_from_cluster?: { container_path: boolean; peer_root: boolean };
 }
 
 /** POST /api/p2p/provision (202) response. */

@@ -11,9 +11,9 @@ Every environment variable the backend reads, found by scanning the source rathe
 importing it — a variable read inside a function body is never reached by an import, so only
 the source knows the whole set.
 
-**356 settings.** 17 are *declared* in
+**358 settings.** 19 are *declared* in
 `backend/config_registry.py`, which is the set `rackstatus.toml` can carry, the required-
-setting preflight can demand, and `rackstatus.toml.example` lists. 172 are named in
+setting preflight can demand, and `rackstatus.toml.example` lists. 173 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
 whether that document mentions the setting at all. It is not in this site yet; see
 `docs/README.md` for why the migration is page-at-a-time.
@@ -74,6 +74,7 @@ them. `UI` marks the ones the dashboard Settings screen may override.
 | `NEMO_SQSH_SRC` | validation | string | no |  | `/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh` | Squashed NeMo container image used by the NeMo validation launchers. |
 | `NVIS_FORCE_SETUP_WIZARD` | general | boolean | no |  | `false` | Re-open the first-run setup wizard even though a project is already configured. What `cli.py serve --setup-wizard` sets; normally left unset, since the wizard offers itself when no operator-created project exists. |
 | `NVIS_LOG_LEVEL` | general | string | no |  | `INFO` | Log level. Settable here because the config file is read before logging is configured, which is the reason the loader's own records appear slightly late. |
+| `NVIS_NODE_CONTAINER_DIR` | validation | string | no |  | `/opt/containers` | Fallback for where each compute node caches container images (the cluster's connection.node_container_dir wins). Staging copies images here and jobs run them from here. Default /tmp/containers. |
 | `RACK_BUG_REPORT_REMOTE_DIR` | connection | string | no |  | `/home/cmods/bringup-data/reports` | Base directory the bug-report and NVLMapper outputs are written to on each node (pdsh) and read from on the dashboard host (the Reports page). Point it at the project's own prefix -- a directory the service account can create and the dashboard host can see over the shared mount. Default /home/cmsupport/reports exists on only one appliance, so most deployments set this. NVLMapper's base (RACK_NVLMAPPER_REPORTS_BASE) defaults to it, so one value moves both. |
 | `RACK_EXEC_MODE` | connection | string | no |  | `ssh` | How commands reach the cluster: 'ssh' or 'local'. Deprecated in favour of the topology-based transport config, and 'ssh' is the default; kept because deployed sites still set it. |
 | `RACK_PLATFORM` | cluster | string | no |  | `bcm` | Cluster manager provider: 'bcm' (Base Command Manager) or 'maas'. |
@@ -86,6 +87,7 @@ them. `UI` marks the ones the dashboard Settings screen may override.
 | `RACK_SSH_USER` | connection | string | no |  | `root` | Account for the SSH control connection to the head node. |
 | `RACK_STATUS_DEMO` | general | boolean | no |  | `false` | Synthetic data, no cluster contact. True on a developer laptop, and it also exempts the connection settings from the required-setting preflight. |
 | `RACK_STATUS_LOG_DIR` | connection | string | no |  | `/home/cmsupport/aihpc_val-main/validation/nemo` | Deprecated. The directory Rack Status ingests node logs from. This is one global value for every cluster at once, so a multi-tenant deployment would read a project's logs from a cluster it may not operate; set the log directory per cluster instead (the cluster's connection.log_dir). Kept only as a fallback for deployments still migrating, and it warns when used. |
+| `RACK_VALIDATION_CONTAINER_ROOT` | validation | string | no |  | `/cluster/containers` | Fallback for the cluster's shared container image store (the cluster's connection.shared_container_dir wins). Default /cluster/containers. |
 | `RACK_WEB_OIDC_ISSUER` | auth | string | no |  | `https://rackstatus.example.com` | This deployment's own base URL, used as the OIDC `iss` claim. Required when the OIDC provider is enabled. Cannot be derived from the request: OIDC Discovery 1.0 §4.3 requires it to be the URL discovery is served from, and a Host header is attacker-controlled. http is accepted only for localhost, which is how an operator reaches a tunnelled deployment. |
 | `RACK_WEB_TLS_KEY` | tls | string | no |  | `/app/config/tls/server.key` | Private key for the TLS certificate. Required whenever RACK_WEB_TLS_CERT is set: a cert with no key downgrades one path silently and crashes the other. |
 
@@ -129,6 +131,8 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-nvis-log-basename-mode"></a>`NVIS_LOG_BASENAME_MODE` | environment |  | `open` (default) accepts any plausible result-log name; `strict` accepts only the legacy marker allowlist. | `backend/nvis_id_templates.py` |
 | <a id="s-nvis-log-dir"></a>`NVIS_LOG_DIR` | environment |  | — | `backend/paths.py` |
 | <a id="s-nvis-log-level"></a>`NVIS_LOG_LEVEL` | indirect |  | Log level. Settable here because the config file is read before logging is configured, which is the reason the loader's own records appear slightly late. |  |
+| <a id="s-nvis-node-container-dir"></a>`NVIS_NODE_CONTAINER_DIR` | ladder |  | Fallback for where each compute node caches container images (the cluster's connection.node_container_dir wins). Staging copies images here and jobs run them from here. Default /tmp/containers. | `backend/validation_presets.py` |
+| <a id="s-nvis-node-images-p2p"></a>`NVIS_NODE_IMAGES_P2P` | ladder |  | Set to 1 by the cluster overlay when NVIS-P2P is enabled on the cluster; not an operator knob. Launchers then only verify an image is in the node cache and never rsync it from the head -- a missing image is a P2P campaign to run, and preset/LLMB `--rsync` is refused. | `backend/validation_presets.py` |
 | <a id="s-nvis-npi-catalog-dir"></a>`NVIS_NPI_CATALOG_DIR` | environment |  | Directory of NPI tool catalog files to import. | `backend/catalog/npi_import.py` |
 | <a id="s-nvis-nvsw-id"></a>`NVIS_NVSW_ID` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` |
 | <a id="s-nvis-platform-id"></a>`NVIS_PLATFORM_ID` | ladder |  | Active platform id. Selects the platform layer of the script tree. | `backend/script_tree.py` |
@@ -417,7 +421,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-validation-activities-refresh-disabled"></a>`RACK_VALIDATION_ACTIVITIES_REFRESH_DISABLED` | ladder |  | Stop the background reconciliation of stored activities against Slurm. | `backend/api/activities.py`, `backend/app.py` |
 | <a id="s-rack-validation-activities-refresh-lock-file"></a>`RACK_VALIDATION_ACTIVITIES_REFRESH_LOCK_FILE` | ladder |  | Lock file that keeps two processes from reconciling activities at once. | `backend/app.py` |
 | <a id="s-rack-validation-collect-grace-sec"></a>`RACK_VALIDATION_COLLECT_GRACE_SEC` | environment | `900` | — | `backend/activity_hydration.py` |
-| <a id="s-rack-validation-container-root"></a>`RACK_VALIDATION_CONTAINER_ROOT` | ladder |  | Where this site mounts shared validation container images. Default `/cluster/containers`. Only the directory is configurable -- the image basename and its SHA256 stay code-owned, so a site can point at its own mirror of a reviewed image but cannot substitute a different one. | `backend/validation_presets.py` |
+| <a id="s-rack-validation-container-root"></a>`RACK_VALIDATION_CONTAINER_ROOT` | ladder |  | Fallback for the cluster's shared container image store (the cluster's connection.shared_container_dir wins). Default /cluster/containers. | `backend/validation_presets.py` |
 | <a id="s-rack-validation-ct-range"></a>`RACK_VALIDATION_CT_RANGE` | ladder | `01-18` | See `docs/ENVIRONMENT.md` | `backend/node_targets.py`, `backend/workflow_engine.py` |
 | <a id="s-rack-validation-disabled"></a>`RACK_VALIDATION_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/validation_runs.py` |
 | <a id="s-rack-validation-excluded-nodes"></a>`RACK_VALIDATION_EXCLUDED_NODES` | ladder |  | Comma-list of nodes never eligible for a validation launch, whatever the selection. | `backend/validation_launch.py` |

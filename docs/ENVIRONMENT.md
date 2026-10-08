@@ -130,7 +130,8 @@ Used by **`bin/scripts/launch-grafana-bright-prometheus.sh`** (not by Flask). Af
 
 | Variable | Where | Role |
 |----------|-------|------|
-| **`NEMO_SQSH_SRC`** | **`run_singlerack.sh`**, **`run-nemo-xrack.sh`**, **`run-llama.sh`** | Required: path on head/login to `.sqsh`; rsync’d to nodes under `/raid/data/`. |
+| **`NEMO_SQSH_SRC`** | **`run_singlerack.sh`**, **`run-nemo-xrack.sh`**, **`run-llama.sh`** | Required: path on head/login to `.sqsh`; staged into each node's image cache (`NVIS_NODE_CONTAINER_DIR`) unless a same-size copy is already there. |
+| **`NVIS_NODE_CONTAINER_DIR`** | every container launcher (`lib/node_images.inc.sh`) | Where compute nodes cache container images. Set per cluster as `connection.node_container_dir` (Projects → cluster → *Node image cache*); default `/tmp/containers`, `/opt/containers` on Nscale NC. On a P2P cluster (`NVIS_NODE_IMAGES_P2P=1`) launchers verify the image there and never copy it from the head. |
 | **`HC_CHECKER_SCRIPT`** | **`nemo-nemotron5h_56b-mbridge-fp8.sh`** | Optional post-job checker on nodes. |
 | **`NEMORUN_HOME`**, **`CONT`**, **`MAX_STEPS`**, **`PYTHONPATH`** | Inside Slurm job scripts | Job layout and training length — site-specific. |
 | **`SLURM_SUBMIT_DIR`**, **`SLURM_JOB_NODELIST`**, **`SLURM_NNODES`**, **`SLURM_JOB_SCRIPT`**, … | Slurm | Standard job environment when scripts run under **`sbatch`**. |

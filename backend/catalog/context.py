@@ -35,6 +35,7 @@ from typing import Any
 
 from . import models
 from .store import (
+    TABLE_P2P_SETTINGS,
     TABLE_PLATFORMS,
     TABLE_PROJECTS,
     TABLE_TOOLS,
@@ -172,6 +173,20 @@ def _put(d: dict[str, str], key: str, value: str | None) -> None:
         d[key] = str(value).strip()
 
 
+def _p2p_settings(cluster: models.Cluster, repo: Repo | None) -> models.P2pSettings | None:
+    """The cluster's stored P2P settings, only when P2P is enabled on it."""
+    if not cluster.p2p_enabled:
+        return None
+    try:
+        raw = (repo or get_repo()).get(TABLE_P2P_SETTINGS, cluster.id)
+    except Exception:  # an unreadable P2P document must not take the whole overlay down
+        _logger.debug("high_overlay: P2P settings unreadable for %s", cluster.id, exc_info=True)
+        raw = None
+    if raw is None:
+        return None
+    return models.P2pSettings.from_dict({**raw, "cluster_id": cluster.id})
+
+
 def high_overlay(
     project: models.Project | None = None,
     cluster: models.Cluster | None = None,
@@ -210,6 +225,16 @@ def high_overlay(
     # global RACK_STATUS_LOG_DIR) so the active cluster's own directory is authoritative and
     # switching clusters switches the log location with it. Read by paths._default_log_dir().
     _put(out, "NVIS_LOG_DIR", c.log_dir)
+    # Where this cluster's container images live: the shared store the launch host reads, and
+    # the per-node cache the jobs run from. Both are mount points, so both are per-cluster; the
+    # launchers read them from the environment (NVIS_/RACK_ prefixes forward over SSH). A P2P
+    # cluster that has not stated them inherits its P2P instance's paths (models.node_image_dirs).
+    shared_dir, node_dir = models.node_image_dirs(cluster, _p2p_settings(cluster, repo))
+    _put(out, "RACK_VALIDATION_CONTAINER_ROOT", shared_dir)
+    _put(out, "NVIS_NODE_CONTAINER_DIR", node_dir)
+    # P2P owns the node cache: launchers verify the image is there and never copy it from the head
+    # (lib/node_images.inc.sh). A missing image is a campaign to run, not a 40 GiB NFS fan-out.
+    _put(out, "NVIS_NODE_IMAGES_P2P", "1" if cluster.p2p_enabled else "")
     _put(out, "RACK_CLUSTER_NAME", cluster.name)
     # The active ids, so `script_tree` can pick a project's own copy of a script without
     # importing the catalog. Every other per-cluster value already reaches its consumer this

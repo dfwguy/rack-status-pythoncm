@@ -47,7 +47,7 @@ const catalog: ValidationPresetsResponse = {
       label: "NVIDIA DGXC v26.06.01 system_info",
       description: "Validate system inventory.",
       kind: "exemplar_sysinfo",
-      defaults: { storage: "local", rsync: false },
+      defaults: { storage: "local", rsync: false, local_container_dir: "/opt/containers" },
       requirements: { scopes: ["node", "rack", "multirack"] },
     },
   ],
@@ -183,8 +183,38 @@ describe("ValidationPresetDialog", () => {
       racks: ["d01", "d02"],
       storage: "local",
       rsync_to_local: true,
-      local_container_dir: "/tmp/containers",
     });
+    // The node cache is the cluster's, reported by the server: shown, never sent back.
+    expect(request).not.toHaveProperty("local_container_dir");
+    expect(screen.getByText(/rsync only missing\/stale content into \/opt\/containers/i)).toBeInTheDocument();
+  });
+
+  it("verifies instead of offering rsync when P2P distributes the cluster's images", async () => {
+    const p2pCatalog: ValidationPresetsResponse = {
+      ok: true,
+      presets: [{
+        id: "exemplar-system-info",
+        label: "NVIDIA DGXC v26.06.01 system_info",
+        description: "Validate system inventory.",
+        kind: "exemplar_sysinfo",
+        defaults: { storage: "local", rsync: false, local_container_dir: "/opt/containers", p2p_managed: true },
+        requirements: { scopes: ["node", "rack", "multirack"] },
+      }],
+    };
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => jsonResponse(p2pCatalog));
+    render(
+      <ValidationPresetDialog
+        open
+        onClose={() => undefined}
+        presetId="exemplar-system-info"
+        scope="multirack"
+        racks={["d01"]}
+        onLaunch={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText(/NVIS-P2P distributes images on this cluster/i)).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /Rsync container/i })).not.toBeInTheDocument();
   });
 
   it("blocks prepare when the server catalog does not support the selected scope", async () => {

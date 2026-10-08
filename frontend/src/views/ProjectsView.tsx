@@ -60,7 +60,16 @@ function emptyCluster(): Cluster {
     site_prefix: "",
     naming: { rack_id_template: "", ct_id_template: "", nvsw_id_template: "", ct_joiner: "-ct", slurm_hostlist: "" },
     geometry: { pods: 1, rows_per_pod: 0, racks_per_row: 0, trays_per_rack: 0 },
-    connection: { exec_mode: "", ssh_host: "", ssh_user: "", ssh_key: "", remote_base_path: "", log_dir: "" },
+    connection: {
+      exec_mode: "",
+      ssh_host: "",
+      ssh_user: "",
+      ssh_key: "",
+      remote_base_path: "",
+      log_dir: "",
+      shared_container_dir: "",
+      node_container_dir: "",
+    },
     // Empty means "derive SUs from the platform's racks_per_su", which is what a new
     // cluster wants. A site with a ragged SU map states it explicitly instead.
     scalable_units: [],
@@ -580,6 +589,20 @@ export function ProjectsView() {
                 />
               </FormField>
             </Box>
+            <FormField name="cl-sharedimages" slotLabel="Shared image store">
+              <TextInput
+                value={clusterDraft?.cluster.connection.shared_container_dir || ""}
+                onValueChange={(v) => setConn({ shared_container_dir: v })}
+                placeholder="Container images as the launch host sees them (blank = /cluster/containers)"
+              />
+            </FormField>
+            <FormField name="cl-nodeimages" slotLabel="Node image cache">
+              <TextInput
+                value={clusterDraft?.cluster.connection.node_container_dir || ""}
+                onValueChange={(v) => setConn({ node_container_dir: v })}
+                placeholder="Where each compute node caches images (blank = /tmp/containers)"
+              />
+            </FormField>
           </Box>
 
           <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>Site geometry</Text>

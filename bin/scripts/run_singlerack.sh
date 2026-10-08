@@ -82,6 +82,8 @@ export single_rack=1
 
 # Same directory as parser.sh / rack_status.sh. Manual runs use the same shared default.
 _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/node_images.inc.sh
+source "${_SCRIPT_DIR}/lib/node_images.inc.sh"
 JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 mkdir -p "${JOB_LOG_DIR}" || { echo "run_singlerack: cannot create log directory: ${JOB_LOG_DIR}" >&2; exit 2; }
 cd "${JOB_LOG_DIR}" || exit 2
@@ -94,20 +96,12 @@ do
  rack="${2:-}"
  [[ -z "$rack" ]] && rack=$(echo "$r" | sed -E 's/(p[0-9]+-r[0-9]+)-ct.*/\1/')
  hosts=($(scontrol show hostname $r))
- : "${NEMO_SQSH_SRC:?set NEMO_SQSH_SRC to the head-node path of the nemo .sqsh image to copy under /raid/data/ on compute nodes}"
- _sqsh_b=$(basename "$NEMO_SQSH_SRC")
+ : "${NEMO_SQSH_SRC:?set NEMO_SQSH_SRC to the head-node path of the nemo .sqsh image to stage into the node image cache}"
  _wl=$(echo "${hosts[*]}" | tr ' ' ',')
- # /raid is root-owned on the compute trays, so the staging runs as root ON EACH COMPUTE NODE.
- # If RACK_SUDO_PASSWORD is set, elevate with sudo -S (cmods password, kept OUT of the repo — set via
- # env or the server secret store). Otherwise use sudo -n (works when passwordless sudo is baked into
- # the compute IMAGE by AIC, and also when the script already runs as root). NOTE: a passwordless
- # visudo edit only on the slogin does NOT help here — this sudo runs on the compute trays.
- if [[ -n "${RACK_SUDO_PASSWORD:-}" ]]; then
-   _sudo="printf '%s\n' $(printf %q "$RACK_SUDO_PASSWORD") | sudo -S -p '' "
- else
-   _sudo="sudo -n "
- fi
- pdsh -R ssh -w "$_wl" "${_sudo}mkdir -p /raid/data && ${_sudo}rsync -ah $NEMO_SQSH_SRC /raid/data/$_sqsh_b"
+ # Into the cluster's node image cache (NVIS_NODE_CONTAINER_DIR; lib/node_images.inc.sh), never a
+ # baked-in /raid/data: NC's nodes have no /raid. A warm cache is reused as-is; the helper exports
+ # NVIS_NEMO_CONT and refuses to submit unless every node positively confirms the image.
+ nvis_stage_node_image run_singlerack "$_wl" "$NEMO_SQSH_SRC" || exit 1
 
  n=${#hosts[@]}
  (( n > 0 )) || { echo "run_singlerack: target resolved to no hosts: $r" >&2; exit 2; }
@@ -117,13 +111,10 @@ do
  gpus_per_node="${GPUS_PER_NODE:-4}"
  cpus_per_task="${NVIS_NEMO_CPUS_PER_TASK:-36}"
 
-# NVIS_NEMO_CONT MUST be exported: the batch script defaults to
-# CONT="${NVIS_NEMO_CONT:-/raid/data/nemo-25.11.01.sqsh}", but staging above copies
-# /raid/data/$_sqsh_b -- the basename of NEMO_SQSH_SRC. Without this, pyxis looks for the
-# hardcoded 25.11.01 name, fails with "No such file or directory: /raid/data/nemo-25.11.01.sqsh",
-# and the job dies in ~12s at task_init (spank_pyxis.so). run-nemo-xrack.sh already exports it;
-# this single-rack wrapper did not, so single-rack NEMO only ever worked if the image happened to
-# be named exactly nemo-25.11.01.sqsh.
+# NVIS_NEMO_CONT MUST be exported: the batch script's own default names a fixed image, but staging
+# above placed <node cache>/<basename of NEMO_SQSH_SRC>. Without it pyxis looks for the default
+# name, fails with "No such file or directory", and the job dies in ~12s at task_init
+# (spank_pyxis.so). NVIS_NODE_CONTAINER_DIR rides along so the batch script's fallback agrees.
 # NVIS_SCRIPTS_DIR likewise: without it the batch script cannot find lib/fabric.inc.sh and falls
 # back to a hardcoded mlx5_0..3 list, which "may mix IB/RoCE".
 # NOTE: these comments must stay ABOVE the sbatch line -- a comment between backslash-continued
@@ -137,7 +128,7 @@ sbatch \
  -t 03:00:00 \
  --job-name=NEMO-1R \
  --output="${JOB_LOG_DIR%/}/${USER}-NEMO-1Rack-${rack}-${n}N-%j.txt" \
- --export=ALL,single_rack,NVIS_SCRIPTS_DIR=${_SCRIPT_DIR},NVIS_VAR_DIR=${NVIS_VAR_DIR:-},NVIS_NEMO_CONT=/raid/data/${_sqsh_b},NVIS_NCCL_DEBUG=${NVIS_NCCL_DEBUG:-} \
+ --export=ALL,single_rack,NVIS_SCRIPTS_DIR=${_SCRIPT_DIR},NVIS_VAR_DIR=${NVIS_VAR_DIR:-},NVIS_NEMO_CONT=${NVIS_NEMO_CONT},NVIS_NODE_CONTAINER_DIR=$(nvis_node_container_dir),NVIS_NCCL_DEBUG=${NVIS_NCCL_DEBUG:-} \
  "$_SCRIPT_DIR/nemo-nemotron5h_56b-mbridge-fp8.sh"
 
 done

@@ -28,10 +28,11 @@ import {
 } from "@nvidia/foundations-react-core";
 import { ClipboardCheck, Database, ShieldCheck } from "lucide-react";
 import {
-  LOCAL_CONTAINER_DIR,
   VALIDATION_PRESET_LABELS,
   buildValidationPresetRequest,
   formatPresetRequirements,
+  presetLocalContainerDir,
+  presetNodeImagesP2pManaged,
   type ValidationPreset,
   type ValidationPresetPlan,
   type ValidationPresetPrepareResponse,
@@ -108,6 +109,10 @@ export function ValidationPresetDialog({
     description: "Validated cluster recipe. Server defaults and requirements load from the active cluster.",
     kind: presetId,
   };
+  // The active cluster's node image cache, as the server reports it. Until the catalog loads,
+  // name it generically rather than guess a path that may not exist on this cluster.
+  const localDir = presetLocalContainerDir(preset) ?? "the cluster's node image cache";
+  const p2pManaged = presetNodeImagesP2pManaged(preset);
 
   const request = useMemo(
     () =>
@@ -300,10 +305,16 @@ export function ValidationPresetDialog({
                   aria-label="Container storage mode"
                 />
                 <Text kind="body/regular/sm" style={{ display: "block", color: "var(--text-color-secondary)", marginTop: 6 }}>
-                  Shared NFS runs the image from the configured store. Node-local uses {LOCAL_CONTAINER_DIR} on every selected HGX/DGX node.
+                  Shared NFS runs the image from the configured store. Node-local uses {localDir} on every selected HGX/DGX node.
                 </Text>
               </div>
 
+              {p2pManaged ? (
+                <Text kind="body/regular/sm" style={{ display: "block", color: "var(--text-color-secondary)" }}>
+                  NVIS-P2P distributes images on this cluster, so node-local runs verify the image in {localDir} and
+                  never copy it from the head. Run a P2P campaign first if a node does not have it.
+                </Text>
+              ) : (
               <Checkbox
                 checked={rsyncToLocal}
                 onCheckedChange={(checked) => {
@@ -315,11 +326,12 @@ export function ValidationPresetDialog({
                   <div>
                     <Text kind="body/bold/sm" style={{ display: "block" }}>Rsync container before validation</Text>
                     <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-                      Check the image locally, then rsync only missing/stale content into {LOCAL_CONTAINER_DIR} to avoid cold starts.
+                      Check the image locally, then rsync only missing/stale content into {localDir} to avoid cold starts.
                     </Text>
                   </div>
                 }
               />
+              )}
             </>
           ) : null}
 

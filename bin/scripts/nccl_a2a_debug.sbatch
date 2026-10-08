@@ -19,7 +19,7 @@
 #
 # RUN: sbatch -N<cross-rack pair> -w <nodelist> \
 #        --export=ALL,NVIS_SCRIPTS_DIR=/home/cmods/nvis-rack-status/bin/scripts,\
-#                 NVIS_NEMO_CONT=/raid/data/nemo-nccl2.30.7.sqsh \
+#                 NVIS_NEMO_CONT=<node image cache>/nemo-nccl2.30.7.sqsh \
 #        --output=/home/cmods/workspace/nccl_a2a_debug-%j.log nccl_a2a_debug.sbatch
 #SBATCH --job-name=nccl-a2a-dbg
 #SBATCH --exclusive
@@ -29,7 +29,7 @@
 #SBATCH --time=00:15:00
 set -uo pipefail
 
-CONT="${NVIS_NEMO_CONT:-/raid/data/nemo-nccl2.30.7.sqsh}"
+CONT="${NVIS_NEMO_CONT:-${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}/nemo-nccl2.30.7.sqsh}"
 SCR="${NVIS_SCRIPTS_DIR:-/home/cmods/nvis-rack-status/bin/scripts}"
 SIZES="${NVIS_A2A_SIZES:--b 8 -e 1M -f 2 -g 1 --iters 2}"   # tiny: bug hits at init, before real xfer
 

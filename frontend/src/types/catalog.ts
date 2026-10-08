@@ -196,6 +196,10 @@ export interface ClusterConnection {
   // Where this cluster's nodes write the logs Rack Status ingests. Per-cluster so each project
   // reads its own cluster's logs; supersedes the deprecated global RACK_STATUS_LOG_DIR env var.
   log_dir: string;
+  // Where this cluster keeps its container images: the shared store the launch host reads, and
+  // the per-node cache jobs run from. Mount points, so per-cluster; blank = deployment default.
+  shared_container_dir: string;
+  node_container_dir: string;
 }
 
 export interface Cluster {

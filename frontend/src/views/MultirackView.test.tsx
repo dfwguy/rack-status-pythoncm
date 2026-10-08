@@ -430,7 +430,6 @@ describe("MultirackView rack filters", () => {
       log_dir: "/logs",
       storage: "local",
       rsync_to_local: true,
-      local_container_dir: "/tmp/containers",
     });
   });
 

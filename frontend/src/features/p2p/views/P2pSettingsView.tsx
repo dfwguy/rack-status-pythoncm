@@ -102,15 +102,20 @@ export default function P2pSettingsView() {
   const blockers = doc?.provisioning_blockers ?? [];
   const ready = blockers.length === 0;
 
-  const text = (label: string, key: Key, help?: string, placeholder?: string) => (
+  const text = (label: string, key: Key, help?: string, placeholder?: string, locked = false) => (
     <FormField name={`p2p-${key}`} slotLabel={label} slotHelp={help}>
       <TextInput
         value={String(draft?.[key] ?? "")}
         placeholder={placeholder}
+        disabled={locked}
         onValueChange={(v) => set({ [key]: v } as Partial<P2pSettingsDoc>)}
       />
     </FormField>
   );
+  // Where images live is the cluster's to say (its Shared image store / Node image cache); P2P
+  // derives these two from it. When the cluster states one, the field here is display-only.
+  const fromCluster = doc?.image_dirs_from_cluster;
+  const clusterNote = "Set on the cluster (Projects → cluster → Shared image store / Node image cache).";
 
   const num = (label: string, key: Key, help?: string) => (
     <FormField name={`p2p-${key}`} slotLabel={label} slotHelp={help}>
@@ -222,9 +227,23 @@ export default function P2pSettingsView() {
           {section("Paths & storage", (
             <>
               {text("Install root", "install_root", "Where the P2P instance is installed on the app server.")}
-              {text("Container path", "container_path", "The images directory on the app server.")}
+              {text(
+                "Container path",
+                "container_path",
+                fromCluster?.container_path ? `From the cluster's Shared image store. ${clusterNote}` : "The images directory on the app server.",
+                undefined,
+                Boolean(fromCluster?.container_path),
+              )}
               {text("Catalog path", "catalog_path", "Must name a .json file (not the images directory).")}
-              {text("Peer root", "peer_root", "Per-node peer working root on compute nodes.")}
+              {text(
+                "Peer root",
+                "peer_root",
+                fromCluster?.peer_root
+                  ? `<Node image cache>/.nvis-p2p, from the cluster. ${clusterNote}`
+                  : "Per-node peer working root on compute nodes; images publish to its parent directory.",
+                undefined,
+                Boolean(fromCluster?.peer_root),
+              )}
               {text("Object store data", "object_store_data_path", "dfstore data directory.")}
               {text("Seed cache", "seed_cache_path", "Seed peer cache directory.")}
               {text("systemd dir", "systemd_dir", "Where the peer/service units are installed.")}

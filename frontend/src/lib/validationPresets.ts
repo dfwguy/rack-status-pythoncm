@@ -54,7 +54,6 @@ export interface ValidationPresetRequest extends Record<string, unknown> {
   log_dir?: string;
   storage: ValidationStorage;
   rsync_to_local: boolean;
-  local_container_dir: "/tmp/containers";
   campaign?: string;
   campaign_version?: string;
   /** Opaque digest returned by prepare; launch uses it to reject reviewed-target drift. */
@@ -99,7 +98,20 @@ export const VALIDATION_PRESET_LABELS: Record<string, string> = {
   "mnubergemm-26.03-v1.17": "MNUberGEMM 26.03-v1.17",
 };
 
-export const LOCAL_CONTAINER_DIR = "/tmp/containers" as const;
+/**
+ * The node-local image cache a preset stages into. It is the active cluster's
+ * `connection.node_container_dir`, which the server reports in each preset's defaults, so the UI
+ * never sends one: the server owns it and refuses a request that names a different directory.
+ */
+/** NVIS-P2P fills this cluster's node cache; launches verify the image and never rsync it. */
+export function presetNodeImagesP2pManaged(preset: ValidationPreset | undefined): boolean {
+  return preset?.defaults?.p2p_managed === true;
+}
+
+export function presetLocalContainerDir(preset: ValidationPreset | undefined): string | undefined {
+  const dir = preset?.defaults?.local_container_dir;
+  return typeof dir === "string" && dir.trim() ? dir.trim() : undefined;
+}
 
 export function buildValidationPresetRequest(args: {
   presetId: string;
@@ -126,7 +138,6 @@ export function buildValidationPresetRequest(args: {
     scope: args.scope,
     storage: args.storage,
     rsync_to_local: args.rsyncToLocal,
-    local_container_dir: LOCAL_CONTAINER_DIR,
   };
   if (nodes.length > 0) request.nodes = nodes;
   if (racks.length > 0) request.racks = racks;

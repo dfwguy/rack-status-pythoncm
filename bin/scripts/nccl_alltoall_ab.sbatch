@@ -28,7 +28,7 @@
 #SBATCH --time=00:40:00
 set -uo pipefail
 
-CONT="${NVIS_NEMO_CONT:-/raid/data/nemo-25.11.01.sqsh}"
+CONT="${NVIS_NEMO_CONT:-${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}/nemo-25.11.01.sqsh}"
 SCR="${NVIS_SCRIPTS_DIR:-/home/cmods/nvis-rack-status/bin/scripts}"
 PRELOAD_SRC="${NVIS_NCCL_PRELOAD_SRC:-/home/cmods/workspace/nccl/bins}"
 PRELOAD_LIB="$(ls "${PRELOAD_SRC}"/libnccl.so.2.* 2>/dev/null | sort -V | tail -1 | xargs -r basename)"

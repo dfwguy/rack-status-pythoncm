@@ -20,10 +20,11 @@
 
 
 #CONT=/home/cmsupport/workspace/nemo-25.11.01.sqsh
-# Container to run. run-nemo-xrack.sh stages NEMO_SQSH_SRC to /raid/data and passes the staged
-# path via NVIS_NEMO_CONT, so pointing NEMO_SQSH_SRC at the vetted image actually switches the
-# container here. Falls back to the stock image for direct/manual runs.
-CONT="${NVIS_NEMO_CONT:-/raid/data/nemo-25.11.01.sqsh}"
+# Container to run. run-nemo-xrack.sh / run_singlerack.sh place NEMO_SQSH_SRC in the cluster's
+# node image cache (NVIS_NODE_CONTAINER_DIR) and pass the path via NVIS_NEMO_CONT, so pointing
+# NEMO_SQSH_SRC at the vetted image actually switches the container here. Falls back to the stock
+# image in that cache for direct/manual runs.
+CONT="${NVIS_NEMO_CONT:-${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}/nemo-25.11.01.sqsh}"
 SYSINFO_SH=${SLURM_SUBMIT_DIR}/sysinfo.sh
 GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
 

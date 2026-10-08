@@ -18,8 +18,9 @@
 #SBATCH --time=00:30:00
 #SBATCH -N 1
 
-#CONT=/home/cmsupport/workspace/nemo-25.11.01.sqsh
-CONT=/raid/data/nemo-25.11.01.sqsh
+# run-llama.sh stages the image into the node cache and exports its path (sbatch's default
+# --export=ALL carries it here); the fallback names the stock image in the same cache.
+CONT="${NVIS_NEMO_CONT:-${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}/nemo-25.11.01.sqsh}"
 single_rack=1
 
 module load slurm

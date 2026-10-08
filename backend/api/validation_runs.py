@@ -400,7 +400,7 @@ def api_run_validation():
     timeout = int(prep["timeout"])
     try:
         with _track_sync_op(rk, "validation", _operator_from_request()):
-            # Privileged "script" target (root@slogin): pdsh-rsync to root-owned /raid/data
+            # Privileged "script" target (root@slogin): pdsh-rsync into the node image cache
             # + sbatch. Routes via host_exec so SSH mode runs on the cluster, not locally.
             proc = host_exec.run_on_host(
                 cmd,
@@ -1228,12 +1228,18 @@ def _prepare_run_llmb_nccl_container(body: dict) -> tuple[dict | None, tuple[obj
     storage = str(body.get("storage") or "local").strip().lower()
     if storage not in ("local", "nfs"):
         return None, (jsonify({"ok": False, "error": "storage must be local or nfs"}), 400)
-    rsync = body.get("rsync_to_local", body.get("rsync", storage == "local")) is True
+    p2p_managed = validation_presets.node_images_p2p_managed()
+    rsync = body.get("rsync_to_local", body.get("rsync", storage == "local" and not p2p_managed)) is True
+    if rsync and p2p_managed:
+        return None, (jsonify({"ok": False, "error": (
+            "rsync staging is off on this cluster: NVIS-P2P distributes its images; "
+            "run a P2P campaign for the image instead")}), 400)
     if rsync and storage != "local":
         return None, (jsonify({"ok": False, "error": "rsync requires storage=local"}), 400)
-    local_dir = str(body.get("local_container_dir") or "/tmp/containers").rstrip("/")
-    if local_dir != "/tmp/containers":
-        return None, (jsonify({"ok": False, "error": "local_container_dir is fixed to /tmp/containers"}), 400)
+    try:
+        local_dir = validation_presets.check_local_container_dir(body.get("local_container_dir"))
+    except ValueError as exc:
+        return None, (jsonify({"ok": False, "error": str(exc)}), 400)
 
     nodes_raw = body.get("nodes")
     racks_raw = body.get("racks")

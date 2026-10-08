@@ -117,6 +117,15 @@
 # Squashed NeMo container image used by the NeMo validation launchers.
 # NEMO_SQSH_SRC = "/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh"
 
+# Fallback for where each compute node caches container images (the cluster's
+# connection.node_container_dir wins). Staging copies images here and jobs run them from here.
+# Default /tmp/containers.
+# NVIS_NODE_CONTAINER_DIR = "/opt/containers"
+
+# Fallback for the cluster's shared container image store (the cluster's
+# connection.shared_container_dir wins). Default /cluster/containers.
+# RACK_VALIDATION_CONTAINER_ROOT = "/cluster/containers"
+
 
 [nvftp]
 # NVFTP project folder name. Not a credential, despite matching the sensitive-name pattern on

@@ -27,13 +27,13 @@ fi
 usage() {
   cat <<'EOF'
 Usage: run-validation-preset.sh --preset ID --nodelist HOSTLIST
-       [--storage nfs|local] [--rsync] [--local-container-dir /tmp/containers]
+       [--storage nfs|local] [--rsync] [--local-container-dir NODE_CACHE]
        [--log-dir PATH] [--group-nodelist HOSTLIST ...] [--dry-run]
 EOF
 }
 
 preset=""; nodelist=""; storage="nfs"; rsync_enabled=0
-local_container_dir="/tmp/containers"; log_dir="${RACK_STATUS_LOG_DIR:-$PWD}"; dry_run=0
+local_container_dir="${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}"; local_container_dir="${local_container_dir%/}"; log_dir="${RACK_STATUS_LOG_DIR:-$PWD}"; dry_run=0
 # Where this site mounts shared container images. A mount point is a site fact, and it was
 # hard-coded into five image paths here, so a preset could not run anywhere but Nscale. Only
 # the directory is configurable: the basenames below are the reviewed artifacts and the
@@ -65,8 +65,16 @@ done
 [[ -n "$preset" ]] || { echo "ERROR: --preset is required" >&2; exit 2; }
 [[ -n "$nodelist" ]] || { echo "ERROR: --nodelist is required" >&2; exit 2; }
 [[ "$storage" == nfs || "$storage" == local ]] || { echo "ERROR: storage must be nfs or local" >&2; exit 2; }
-[[ "$local_container_dir" == /tmp/containers ]] || { echo "ERROR: local container directory is fixed to /tmp/containers" >&2; exit 2; }
+# The node cache is the cluster's (connection.node_container_dir -> NVIS_NODE_CONTAINER_DIR), not the
+# caller's: staging writes into it on every selected node, so --local-container-dir may restate it
+# but never move it.
+_configured_local_dir="${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}"; _configured_local_dir="${_configured_local_dir%/}"
+[[ "${local_container_dir%/}" == "$_configured_local_dir" ]] || { echo "ERROR: local container directory is fixed to this cluster's node cache, ${_configured_local_dir}" >&2; exit 2; }
+local_container_dir="$_configured_local_dir"
 [[ "$storage" == local || "$rsync_enabled" == 0 ]] || { echo "ERROR: --rsync requires --storage local" >&2; exit 2; }
+# On a P2P cluster the node cache is filled only by P2P campaigns; staging here would fan the image
+# out from the head and write into a directory P2P manages. Local storage still verifies the image.
+[[ "${NVIS_NODE_IMAGES_P2P:-0}" != 1 || "$rsync_enabled" == 0 ]] || { echo "ERROR: --rsync is off on this cluster: NVIS-P2P distributes its images; run a P2P campaign instead" >&2; exit 2; }
 
 # Hand our resolved log directory to every child launcher. The sbatch jobs below take it as an
 # explicit --output under "$log_dir", but the chained host launchers (run_nccl_mpi.sh,

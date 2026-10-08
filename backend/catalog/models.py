@@ -22,7 +22,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -136,6 +136,47 @@ _SCRIPT_RE = re.compile(r"^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$")
 
 # An env var name, because ``env_key`` is looked up in the process environment.
 _ENV_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+#: A cluster data directory (image store, node cache). Launchers interpolate it into remote
+#: ``pdsh``/``rsync`` command lines and Slurm ``--export`` lists, so it must be an absolute path
+#: of plain path characters: no whitespace, quotes, ``$``, ``,`` (the ``--export`` separator) or
+#: ``..`` segments.
+_DATA_DIR_RE = re.compile(r"^/[A-Za-z0-9._+-]+(?:/[A-Za-z0-9._+-]+)*/?$")
+
+
+def valid_data_dir(path: str) -> bool:
+    """Is *path* safe to hand a launcher as a cluster data directory?"""
+    return bool(_DATA_DIR_RE.fullmatch(path)) and ".." not in path.split("/")
+
+
+#: Where NVIS-P2P publishes distributed images on every compute node. Its node scripts
+#: (``deploy/p2p/scripts/*-node.sh``) write ``/opt/containers/<filename>`` literally; only the peer
+#: working root under it is configurable. So on a P2P cluster the node image cache IS this directory,
+#: and a different ``node_container_dir`` would send launchers looking where P2P never writes.
+P2P_NODE_CONTAINER_DIR = "/opt/containers"
+
+
+def _parent_dir(path: str) -> str:
+    path = path.rstrip("/")
+    return path.rsplit("/", 1)[0] if "/" in path.lstrip("/") else ""
+
+
+def node_image_dirs(cluster: Cluster, p2p: P2pSettings | None = None) -> tuple[str, str]:
+    """``(shared, node)`` image directories for *cluster*; ``""`` = not stated, use the default.
+
+    The cluster's connection fields are the one source of truth. A P2P cluster that has not stated
+    them yet inherits what its P2P instance already uses -- the origin ``container_path`` and the
+    parent of ``peer_root`` -- so a deployment that predates the fields keeps working unchanged,
+    and P2P never disagrees with the launchers about where an image lives.
+    """
+    conn = cluster.connection
+    shared = conn.shared_container_dir.rstrip("/") if conn.shared_container_dir else ""
+    node = conn.node_container_dir.rstrip("/") if conn.node_container_dir else ""
+    if cluster.p2p_enabled:
+        p2p = p2p or P2pSettings(cluster_id=cluster.id)
+        shared = shared or p2p.container_path.rstrip("/")
+        node = node or _parent_dir(p2p.peer_root) or P2P_NODE_CONTAINER_DIR
+    return shared, node
 
 
 def safe_script_ref(script: str) -> bool:
@@ -969,6 +1010,18 @@ class ClusterConnection:
     #: ``RACK_STATUS_LOG_DIR`` env var this supersedes). Blank falls back to that deprecated env var,
     #: then to ``remote_base_path/var/logs``.
     log_dir: str = ""
+    #: Where this cluster keeps its shared container images, as the launch host sees the mount.
+    #: A mount point is a site fact (Nscale mounts ``/cluster/containers``; other sites differ),
+    #: so it lives on the cluster rather than in a script. Only the directory is configurable --
+    #: preset image basenames and digests stay code-owned. Blank falls back to the
+    #: ``RACK_VALIDATION_CONTAINER_ROOT`` setting and then its default.
+    shared_container_dir: str = ""
+    #: Where each compute node keeps its local copy of those images (the node cache that staging
+    #: copies into and that pyxis/enroot read from). Launchers used to hard-code ``/raid/data`` or
+    #: ``/tmp/containers``; neither exists on every cluster -- NC's nodes cache under
+    #: ``/opt/containers`` and have no ``/raid`` at all. Blank falls back to the
+    #: ``NVIS_NODE_CONTAINER_DIR`` setting and then its default.
+    node_container_dir: str = ""
     endpoints: list[Endpoint] = field(default_factory=list)
     roles: list[ConnectionRole] = field(default_factory=list)
 
@@ -982,6 +1035,8 @@ class ClusterConnection:
             ssh_key=_as_str(d.get("ssh_key")),
             remote_base_path=_as_str(d.get("remote_base_path")),
             log_dir=_as_str(d.get("log_dir")),
+            shared_container_dir=_as_str(d.get("shared_container_dir")),
+            node_container_dir=_as_str(d.get("node_container_dir")),
             endpoints=[Endpoint.from_dict(x) for x in _as_dict_list(d.get("endpoints"))],
             roles=[ConnectionRole.from_dict(x) for x in _as_dict_list(d.get("roles"))],
         )
@@ -1023,6 +1078,10 @@ class ClusterConnection:
                 problems.append(f"role {r.id!r}: unknown endpoint {r.endpoint!r}")
         if self.endpoints and "control" not in role_ids:
             problems.append("a 'control' role is required once endpoints are declared")
+        for name in ("shared_container_dir", "node_container_dir"):
+            value = getattr(self, name)
+            if value and not valid_data_dir(value):
+                problems.append(f"{name} must be an absolute path of plain path characters: {value!r}")
         return problems
 
     def _cycle_problems(self) -> list[str]:
@@ -1135,6 +1194,12 @@ class Cluster:
                 "rack_mapping_mode 'pool' has no placement, so scalable_units must be empty"
             )
         problems.extend(self.connection.validate())
+        node_dir = self.connection.node_container_dir.rstrip("/")
+        if self.p2p_enabled and node_dir and node_dir != P2P_NODE_CONTAINER_DIR:
+            problems.append(
+                f"node_container_dir {node_dir!r} disagrees with P2P, which publishes images to "
+                f"{P2P_NODE_CONTAINER_DIR} on every node; leave it blank or set {P2P_NODE_CONTAINER_DIR}"
+            )
         problems.extend(self._validate_scalable_units())
         problems.extend(self._validate_campaigns())
         return problems
@@ -1446,6 +1511,22 @@ class P2pSettings:
             "user": self.appserver_ssh_user.strip() or "root",
             "key": self.appserver_ssh_key.strip(),
         }
+
+    def aligned_to(self, cluster: Cluster) -> P2pSettings:
+        """These settings with the image directories taken from *cluster* where it states them.
+
+        The cluster's ``shared_container_dir`` / ``node_container_dir`` are the source of truth for
+        where images live; P2P derives its origin directory and peer root from them, so the two
+        can never point at different places. Fields the cluster leaves blank keep P2P's own value.
+        """
+        conn = cluster.connection
+        shared = conn.shared_container_dir.rstrip("/")
+        node = conn.node_container_dir.rstrip("/")
+        return replace(
+            self,
+            container_path=shared or self.container_path,
+            peer_root=f"{node}/.nvis-p2p" if node else self.peer_root,
+        )
 
     def to_render_env(self) -> dict[str, str]:
         """The ``NVIS_*`` environment ``render-site-config.py`` consumes.

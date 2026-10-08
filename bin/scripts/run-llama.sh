@@ -25,6 +25,8 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Non-login control-plane shells do not have a reliable Slurm PATH. Use the same
 # pinned site version and config source as every other rack-status launcher.
 source "${SCRIPT_DIR}/slurm-init.inc.sh"
+# shellcheck source=lib/node_images.inc.sh
+source "${SCRIPT_DIR}/lib/node_images.inc.sh"
 JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 LLAMA_LOG_DIR="${JOB_LOG_DIR%/}/sn-llama"
 mkdir -p "${LLAMA_LOG_DIR}" || { echo "run-llama: cannot create log directory: ${LLAMA_LOG_DIR}" >&2; exit 2; }
@@ -48,8 +50,12 @@ if ((${#hosts[@]} == 0)); then
 fi
 
 : "${NEMO_SQSH_SRC:?set NEMO_SQSH_SRC to the head-node path of the nemo .sqsh image (same as validation)}"
-_sqsh_b=$(basename "$NEMO_SQSH_SRC")
-pdsh -R ssh -w "$(echo "${hosts[@]}" | tr ' ' ',')" "mkdir -p /raid/data; rsync -ah --progress $NEMO_SQSH_SRC /raid/data/$_sqsh_b"
+# Into the cluster's node image cache (lib/node_images.inc.sh), never a baked-in /raid/data.
+# Exports NVIS_NEMO_CONT, which nemo-llma3_8b.sh runs; the old script staged one name and ran a
+# hardcoded other, so any image not named nemo-25.11.01.sqsh failed at pyxis task_init.
+nvis_stage_node_image run-llama "$(echo "${hosts[@]}" | tr ' ' ',')" "$NEMO_SQSH_SRC" || exit 1
+export NVIS_NODE_CONTAINER_DIR
+NVIS_NODE_CONTAINER_DIR="$(nvis_node_container_dir)"
 
 for i in "${hosts[@]}"; do
   [[ -z "$i" ]] && continue

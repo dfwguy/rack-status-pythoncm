@@ -176,7 +176,8 @@ def test_scripts_pin_image_and_truthful_lifecycle():
     shim = (SCRIPTS / "lib/sbatch_pin.inc.sh").read_text(encoding="utf-8")
     assert "42245001216" in dispatcher
     assert "55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc" in dispatcher
-    assert "/tmp/containers/nvidia+nemo+26.04.01-arm.sqsh" in dispatcher
+    # The basename is pinned; the directory is the cluster's node image cache.
+    assert 'local_image="${local_dir}/nvidia+nemo+26.04.01-arm.sqsh"' in dispatcher
     assert dispatcher.count("--wait") >= 2
     assert "LLMB_NCCL_CONTAINER_PASS" in dispatcher
     assert "NVIS_FABRIC_SKIP=1" in dispatcher

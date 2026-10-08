@@ -535,6 +535,44 @@ register(
     )
 )
 
+
+def _data_dir_problem(value: str) -> str | None:
+    from catalog.models import valid_data_dir
+
+    if not value.strip() or valid_data_dir(value.strip()):
+        return None
+    return "must be an absolute path of plain path characters (no spaces, quotes, $, commas or '..')"
+
+
+register(
+    Setting(
+        name="RACK_VALIDATION_CONTAINER_ROOT",
+        secret=False,
+        validate=_data_dir_problem,
+        example="/cluster/containers",
+        section="validation",
+        description=(
+            "Fallback for the cluster's shared container image store (the cluster's "
+            "connection.shared_container_dir wins). Default /cluster/containers."
+        ),
+    )
+)
+
+register(
+    Setting(
+        name="NVIS_NODE_CONTAINER_DIR",
+        secret=False,
+        validate=_data_dir_problem,
+        example="/opt/containers",
+        section="validation",
+        description=(
+            "Fallback for where each compute node caches container images (the cluster's "
+            "connection.node_container_dir wins). Staging copies images here and jobs run them "
+            "from here. Default /tmp/containers."
+        ),
+    )
+)
+
 register(
     Setting(
         name="NEMO_SQSH_SRC",

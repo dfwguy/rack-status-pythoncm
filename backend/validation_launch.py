@@ -137,7 +137,7 @@ def _validation_worker(
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
         # NeMo/validation launchers run on the privileged "script" target (root@slogin):
-        # they pdsh-rsync the .sqsh into root-owned /raid/data on compute nodes and submit
+        # they pdsh-rsync the .sqsh into the cluster's node image cache and submit
         # via sbatch — neither possible as the unprivileged control-plane user on the head.
         hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(env_updates),
                                      profile="script", env_extra=env_updates)
@@ -297,7 +297,7 @@ def _xrack_worker(
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
         # NeMo/validation launchers run on the privileged "script" target (root@slogin):
-        # they pdsh-rsync the .sqsh into root-owned /raid/data on compute nodes and submit
+        # they pdsh-rsync the .sqsh into the cluster's node image cache and submit
         # via sbatch — neither possible as the unprivileged control-plane user on the head.
         hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(env_updates),
                                      profile="script", env_extra=env_updates)
@@ -364,7 +364,7 @@ def _llama_worker(job_id: str, cmd: list[str], cwd: str, timeout: int, display_c
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
         # NeMo/validation launchers run on the privileged "script" target (root@slogin):
-        # they pdsh-rsync the .sqsh into root-owned /raid/data on compute nodes and submit
+        # they pdsh-rsync the .sqsh into the cluster's node image cache and submit
         # via sbatch — neither possible as the unprivileged control-plane user on the head.
         hp = host_exec.popen_on_host(cmd, cwd=cwd, env=_subprocess_env(), profile="script")
         try:
@@ -880,7 +880,8 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
     # the reviewed artifact, and the size and SHA256 gates below still have to pass, so a
     # site can point at its own mirror and cannot substitute a different image.
     shared_image = validation_presets.resolve_shared_image(preset.shared_image)
-    image_path = preset.local_image if options["storage"] == "local" else shared_image
+    local_image = validation_presets.resolve_local_image(preset.local_image)
+    image_path = local_image if options["storage"] == "local" else shared_image
     checks = ["exact Slurm node identity", "scheduler eligibility at allocation time"]
     if preset.shared_image:
         checks += ["allowlisted image byte size", "allowlisted image SHA256"]

@@ -424,6 +424,12 @@ def p2p_get_settings():
     body = settings.to_dict()
     body["ok"] = True
     body["provisioning_blockers"] = settings.provisioning_blockers()
+    # Which image directories the cluster record dictates: the Settings view shows those read-only
+    # and points at the cluster editor, since an edit here would be overridden on the next read.
+    body["image_dirs_from_cluster"] = {
+        "container_path": bool(cluster.connection.shared_container_dir),
+        "peer_root": bool(cluster.connection.node_container_dir),
+    }
     return jsonify(body)
 
 

@@ -31,13 +31,13 @@
 # disk. Submit via sbatch (clean prolog) or run directly as the cmods user. GPUs NOT required.
 #
 # Usage: build_vetted_nemo_image.sh [BASE_SQSH] [OUT_SQSH] [VETTED_NCCL_LIB]
-#   BASE_SQSH        stock image           (env NVIS_NEMO_BASE_SQSH;  default /raid/data/nemo-25.11.01.sqsh)
+#   BASE_SQSH        stock image           (env NVIS_NEMO_BASE_SQSH;  default $NVIS_NODE_CONTAINER_DIR/nemo-25.11.01.sqsh)
 #   OUT_SQSH         vetted image out (NFS) (env NVIS_NEMO_VETTED_SQSH; default /home/cmods/workspace/images/nemo-vetted-nccl2.28.9.sqsh)
 #   VETTED_NCCL_LIB  libnccl to bake in     (env NVIS_VETTED_NCCL_LIB;  default /home/cmods/workspace/nccl/bins/libnccl.so.2.28.9)
 #   NVIS_CONTAINER_LIBDIR  in-image lib dir (default /usr/lib/aarch64-linux-gnu)
 set -euo pipefail
 
-BASE_SQSH="${1:-${NVIS_NEMO_BASE_SQSH:-/raid/data/nemo-25.11.01.sqsh}}"
+BASE_SQSH="${1:-${NVIS_NEMO_BASE_SQSH:-${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}/nemo-25.11.01.sqsh}}"
 OUT_SQSH="${2:-${NVIS_NEMO_VETTED_SQSH:-/home/cmods/workspace/images/nemo-vetted-nccl2.28.9.sqsh}}"
 VETTED_NCCL_LIB="${3:-${NVIS_VETTED_NCCL_LIB:-/home/cmods/workspace/nccl/bins/libnccl.so.2.28.9}}"
 ARCH_LIBDIR="${NVIS_CONTAINER_LIBDIR:-/usr/lib/aarch64-linux-gnu}"

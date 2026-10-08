@@ -128,7 +128,7 @@ fi
 # the NVSwitch fabric, making this a real data-path test rather than a link-state
 # read.  The nested step stays inside this node's existing four-GPU allocation.
 if [[ "$data_path" == skipped ]]; then
-  nvbandwidth_image="${RACK_AUDIT_NVBANDWIDTH_IMAGE:-/tmp/containers/nvbandwidth-v0.9-arm.sqsh}"
+  nvbandwidth_image="${RACK_AUDIT_NVBANDWIDTH_IMAGE:-${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}/nvbandwidth-v0.9-arm.sqsh}"
   srun_bin="${RACK_AUDIT_SRUN:-/cm/local/apps/slurm/current/bin/srun}"
   [[ -x "$srun_bin" ]] || srun_bin=$(command -v srun 2>/dev/null || true)
   if [[ -n "$srun_bin" && -f "$nvbandwidth_image" && -n "${SLURM_JOB_ID:-}" ]]; then

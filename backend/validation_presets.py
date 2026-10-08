@@ -19,6 +19,10 @@ import re
 from dataclasses import asdict, dataclass
 from typing import Any
 
+#: Default node-local image cache. Like the shared root below it is a site fact, configured per
+#: cluster (``connection.node_container_dir`` -> ``NVIS_NODE_CONTAINER_DIR``); see
+#: :func:`node_container_dir`. The preset ``local_image`` paths are spelled against this default
+#: and re-rooted per call by :func:`resolve_local_image`.
 LOCAL_CONTAINER_DIR = "/tmp/containers"
 CUDA_REQUIRED = "13.0+"
 NCCL_REQUIRED = "2.30.7"
@@ -63,6 +67,45 @@ def resolve_shared_image(path: str | None) -> str | None:
     return f"{root}/{path.rsplit('/', 1)[-1]}"
 
 
+def node_container_dir() -> str:
+    """The node-local image cache for the active cluster.
+
+    Fixed per cluster rather than per request: staging writes into it on every selected node,
+    so a launch body may restate it but never choose it.
+    """
+    from config_env import _eget
+
+    return ((_eget("NVIS_NODE_CONTAINER_DIR", "") or "").strip() or LOCAL_CONTAINER_DIR).rstrip("/")
+
+
+def node_images_p2p_managed() -> bool:
+    """Does NVIS-P2P own this cluster's node image cache?
+
+    Then images reach nodes only through P2P campaigns: a launch verifies the image is present and
+    never rsyncs it from the head -- that fan-out duplicates the distribution P2P already did,
+    writes into a directory P2P manages, and puts a 40+ GiB NFS burst on the head.
+    """
+    from config_env import _eget
+
+    return (_eget("NVIS_NODE_IMAGES_P2P", "") or "").strip() == "1"
+
+
+def resolve_local_image(path: str | None) -> str | None:
+    """Re-root a preset's node-local image at this cluster's node cache, keeping the basename."""
+    if not path:
+        return path
+    return f"{node_container_dir()}/{path.rsplit('/', 1)[-1]}"
+
+
+def check_local_container_dir(supplied: object) -> str:
+    """The configured node cache, after rejecting a request that names a different one."""
+    configured = node_container_dir()
+    local_dir = str(supplied or configured).rstrip("/")
+    if local_dir != configured:
+        raise ValueError(f"local_container_dir is fixed to this cluster's node cache, {configured}")
+    return configured
+
+
 @dataclass(frozen=True)
 class Preset:
     id: str
@@ -87,8 +130,9 @@ class Preset:
         row = asdict(self)
         row["defaults"] = {
             "storage": "local" if self.local_image else "nfs",
-            "rsync": bool(self.local_image),
-            "local_container_dir": LOCAL_CONTAINER_DIR,
+            "rsync": bool(self.local_image) and not node_images_p2p_managed(),
+            "local_container_dir": node_container_dir(),
+            "p2p_managed": node_images_p2p_managed(),
             "container_profile": self.container_profile,
             "cuda_version": self.cuda_version,
             "nccl_version": self.nccl_version,
@@ -237,12 +281,17 @@ def normalize_options(body: dict[str, Any], preset: Preset) -> dict[str, Any]:
     storage = str(body.get("storage") or ("local" if preset.local_image else "nfs")).strip().lower()
     if storage not in ("nfs", "local"):
         raise ValueError("storage must be nfs or local")
-    rsync = body.get("rsync_to_local", body.get("rsync", storage == "local" and bool(preset.local_image))) is True
+    p2p_managed = node_images_p2p_managed()
+    rsync_default = storage == "local" and bool(preset.local_image) and not p2p_managed
+    rsync = body.get("rsync_to_local", body.get("rsync", rsync_default)) is True
+    if rsync and p2p_managed:
+        raise ValueError(
+            "rsync staging is off on this cluster: NVIS-P2P distributes its images. "
+            "Run a P2P campaign for the image instead, then launch with node-local storage."
+        )
     if rsync and storage != "local":
         raise ValueError("rsync requires storage=local")
-    local_dir = str(body.get("local_container_dir") or LOCAL_CONTAINER_DIR).rstrip("/")
-    if local_dir != LOCAL_CONTAINER_DIR:
-        raise ValueError(f"local_container_dir is fixed to {LOCAL_CONTAINER_DIR}")
+    local_dir = check_local_container_dir(body.get("local_container_dir"))
 
     supplied_steps = body.get("max_steps")
     if supplied_steps is not None and preset.max_steps is not None:
@@ -287,7 +336,7 @@ def normalize_options(body: dict[str, Any], preset: Preset) -> dict[str, Any]:
         "scope": scope,
         "storage": storage,
         "rsync_to_local": rsync,
-        "local_container_dir": LOCAL_CONTAINER_DIR,
+        "local_container_dir": local_dir,
         "container_profile": preset.container_profile,
         "cuda_version": cuda or None,
         "nccl_version": nccl or None,
@@ -295,5 +344,5 @@ def normalize_options(body: dict[str, Any], preset: Preset) -> dict[str, Any]:
         "max_runtime_minutes": preset.max_runtime_minutes,
         "requires_infiniband": preset.requires_infiniband,
         "shared_image": preset.shared_image,
-        "local_image": preset.local_image,
+        "local_image": resolve_local_image(preset.local_image),
     }

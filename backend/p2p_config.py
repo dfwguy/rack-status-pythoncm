@@ -23,18 +23,33 @@ precisely which addresses are still missing rather than "no settings".
 from __future__ import annotations
 
 from catalog import models
-from catalog.store import TABLE_P2P_SETTINGS, Repo, get_repo
+from catalog.store import TABLE_P2P_SETTINGS, TABLE_PROJECTS, Repo, get_repo
+
+
+def _cluster(cluster_id: str, repo: Repo) -> models.Cluster | None:
+    for raw in repo.list(TABLE_PROJECTS):
+        cluster = models.Project.from_dict(raw).get_cluster(cluster_id)
+        if cluster is not None:
+            return cluster
+    return None
 
 
 def get_settings(cluster_id: str, repo: Repo | None = None) -> models.P2pSettings:
-    """This cluster's P2P settings, or the defaults if none are stored yet."""
+    """This cluster's P2P settings, or the defaults if none are stored yet.
+
+    The image directories come from the cluster record where it states them
+    (``P2pSettings.aligned_to``): the cluster is the one source of truth for where images live, so
+    the reconcile, the operations worker and the launchers can never disagree about it.
+    """
     repo = repo or get_repo()
     raw = repo.get(TABLE_P2P_SETTINGS, cluster_id)
     if raw is None:
-        return models.P2pSettings(cluster_id=cluster_id)
-    # Force the id: a stored document must describe the cluster it is keyed under, never another.
-    raw = {**raw, "cluster_id": cluster_id}
-    return models.P2pSettings.from_dict(raw)
+        settings = models.P2pSettings(cluster_id=cluster_id)
+    else:
+        # Force the id: a stored document must describe the cluster it is keyed under, never another.
+        settings = models.P2pSettings.from_dict({**raw, "cluster_id": cluster_id})
+    cluster = _cluster(cluster_id, repo)
+    return settings.aligned_to(cluster) if cluster is not None else settings
 
 
 def save_settings(settings: models.P2pSettings, repo: Repo | None = None) -> models.P2pSettings:
