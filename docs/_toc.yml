@@ -75,6 +75,8 @@ subtrees:
         title: Why authorization is default-deny
       - file: explanation/how-a-script-path-is-chosen
         title: How a script path is chosen
+      - file: explanation/the-cluster-home-directory
+        title: The cluster home directory
       - file: explanation/geometry-and-hostnames
         title: Geometry and hostnames
       - file: explanation/which-storage-engine

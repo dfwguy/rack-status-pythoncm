@@ -1,6 +1,6 @@
 # Rack Status — roadmap
 
-**Living document.** Last updated **2026-10-02**. Horizons and statuses below are *inferred* from
+**Living document.** Last updated **2026-10-08**. Horizons and statuses below are *inferred* from
 open MRs, active branches, and the plan docs as of that date — **owners should correct priorities
 and dates.** This is the one place to see every workstream at once; the per-feature detail lives in
 the linked plan docs.
@@ -79,6 +79,18 @@ The auth programme. See [auth/AUTH_PROGRAMME_SCOPE.md](auth/AUTH_PROGRAMME_SCOPE
   (`fix/nvswitch-hardcoded-credential`).
 - **Nscale NC (air-gapped x86_64)** — *In flight.* Offline image, `--no-build`, render-site-config
   contract. See clusters/ + deploy notes.
+- **Consolidate a cluster's on-host paths under one home** — *Planned.* A cluster's scripts
+  (`RACK_REMOTE_BASE_PATH`), logs (`connection.log_dir`), readable roots
+  (`RACK_STATUS_ALLOWED_PREFIXES`), bug-report drop (`RACK_BUG_REPORT_REMOTE_DIR`) and build
+  workspace (`NVIS_WORKSPACE_DIR`) are six independent settings with six independent defaults, today
+  spread across three `/home` users on NscaleTX-NC (`rkoike`, `cmods`, `cmsupport`) — and the
+  workspace, unset, falls through to a ghost `/home/cmsupport/workspace` that silently breaks the
+  host-NCCL sweep. Model a single per-cluster **cluster home** (e.g. `/home/cmods`) that the others
+  derive from by default, each still overridable, and surface the resolved set (exists? writable?) on
+  one screen as the single source of truth. Design:
+  [explanation/the-cluster-home-directory.md](explanation/the-cluster-home-directory.md). First
+  NscaleTX-NC step: set `NVIS_WORKSPACE_DIR=/home/cmods/workspace` and pull the scattered paths onto
+  `/home/cmods`.
 - **Site validation campaigns** — *Ongoing.* mel01 (`mel01-validation`), Nscale 16K harvest
   (`harvest/nscale-16k`).
 
