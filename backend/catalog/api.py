@@ -28,6 +28,7 @@ re-materializes the active overlay.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from audit.actions import action
@@ -144,6 +145,52 @@ def delete_platform(doc_id: str):
 # ---------------------------------------------------------------------------
 
 
+# A P2P catalog image encodes the libnccl build it carries as a `-nccl<MAJOR.MINOR.PATCH>.sqsh`
+# filename suffix (e.g. `nvidia+nemo+26.04.01-arm-nccl2.32.3.sqsh`). The direct-NCCL
+# microbenchmark can load any of those builds, so the launch dialog's version list is derived
+# from the catalog the operator curated rather than a string hard-coded in a component that
+# drifts the moment a new image is staged.
+_NCCL_IMAGE_RE = re.compile(r"-nccl(\d+\.\d+\.\d+)\.sqsh$")
+
+
+def _nccl_versions_from_images(images: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Derive the NCCL-version dropdown from P2P catalog images, newest (lowest ``order``) first.
+
+    Each entry is ``{"value": <x.y.z>, "label": <image name or version>, "order": <int>}``.
+    ``order`` is the operator's catalog position, so the latest build is the one they gave the
+    lowest ``order`` -- sorting ascending puts it first. Images whose filename carries no libnccl
+    suffix (plain containers, benchmarks) are skipped, and a version seen on more than one image
+    keeps its lowest-``order`` entry so the dropdown never lists the same build twice. Returns
+    ``[]`` when nothing matches, the frontend's signal to fall back to its shipped default list.
+    """
+    by_version: dict[str, dict[str, Any]] = {}
+    for img in images or []:
+        if not isinstance(img, dict):
+            continue
+        match = _NCCL_IMAGE_RE.search(str(img.get("filename", "")))
+        if not match:
+            continue
+        version = match.group(1)
+        entry = {"value": version, "label": img.get("name") or version, "order": img.get("order", 0)}
+        prior = by_version.get(version)
+        if prior is None or entry["order"] < prior["order"]:
+            by_version[version] = entry
+    return sorted(by_version.values(), key=lambda e: (e["order"], e["value"]))
+
+
+def _catalog_nccl_versions(cluster_id: str) -> list[dict[str, Any]]:
+    """NCCL versions offered by a cluster's *served* P2P catalog (authored → file → shipped).
+
+    Reads the same manifest the P2P fleet view serves, so the dialog offers exactly the builds a
+    cluster has staged. The import is function-local on purpose: ``api.p2p_fleet`` is a sibling
+    blueprint, and importing it at module load would couple catalog registration to it.
+    """
+    from api.p2p_fleet import _load_catalog  # lazy: avoid a cross-blueprint import cycle
+
+    catalog = _load_catalog(cluster_id=cluster_id)
+    return _nccl_versions_from_images(catalog.get("images", []))
+
+
 @action(get="catalog.tool:list")
 @catalog_bp.get("/tools")
 @action(get="catalog.tool:list")
@@ -152,6 +199,15 @@ def list_tools():
     surface = (request.args.get("surface") or "").strip() or None
     if cluster:
         items = context.tools_for_cluster(cluster_id=cluster, surface=surface)
+        # Inject the catalog-derived NCCL version list into every opted-in tool. Derived once;
+        # only applied when non-empty so the frontend keeps its shipped fallback otherwise.
+        nccl_versions = _catalog_nccl_versions(cluster)
+        if nccl_versions:
+            for item in items:
+                launch = item.get("launch")
+                body = launch.get("body") if isinstance(launch, dict) else None
+                if isinstance(body, dict) and body.get("show_nccl_version"):
+                    body["nccl_versions"] = nccl_versions
         return jsonify({"ok": True, "items": items})
     return _crud_list(TABLE_TOOLS, models.Tool)
 

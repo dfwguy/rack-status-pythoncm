@@ -14,7 +14,7 @@
 // widget board with catalog documents. The *properties* being pinned are unchanged, because
 // they are operational rather than cosmetic — GPT-OSS stays single-node on this surface, and
 // the cross-rack Llama profile stays discoverable from here even though it runs elsewhere.
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ValidationTab } from "./ValidationTab";
 import type { Tool } from "../../types/catalog";
@@ -170,6 +170,45 @@ describe("ValidationTab pinned recipes", () => {
     renderTab(["d01-01", "d01-02"]);
     expect(screen.getByRole("button", { name: "Plan GPT-OSS" })).toBeDisabled();
     expect(screen.getByText(/exactly 1 node/i)).toBeInTheDocument();
+  });
+
+  it("forwards catalog NCCL versions from the launch body into the options dialog", () => {
+    // The backend injects `nccl_versions` into the tool's launch body (derived from the P2P
+    // catalog); the tab must carry it through PendingLaunch into the dialog, whose default is then
+    // the first (newest) catalog build rather than the component's hard-coded 2.30.7.
+    const nccl = preset("llmb-nccl", {
+      name: "LLMB NCCL",
+      button_label: "Run NCCL",
+      launch: {
+        ...preset("x").launch,
+        kind: "async-job",
+        endpoint: "/api/run-llmb-nccl-async",
+        preset_id: "",
+        dialog: "launch-options",
+        scopes: ["rack"],
+        body: {
+          show_nccl_version: true,
+          nccl_versions: [
+            { value: "2.32.3", label: "2.32.3 (latest)", order: 1 },
+            { value: "2.30.7", label: "2.30.7 (validated)", order: 2 },
+          ],
+        },
+      },
+    });
+    boardActionsMock.mockReturnValue({
+      actions: [fromTool(nccl)],
+      loading: false,
+      error: null,
+      workflowError: null,
+      reload: vi.fn(),
+    });
+    renderTab(["d01-01"]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Run NCCL" }));
+
+    expect(screen.getByRole("combobox", { name: /NCCL version/i })).toHaveTextContent(
+      "2.32.3 (latest)",
+    );
   });
 
   it("reports a catalog it could not load instead of showing an empty tab", () => {

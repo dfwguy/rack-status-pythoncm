@@ -15,7 +15,7 @@ import { Banner, Text, Divider } from "@nvidia/foundations-react-core";
 import { ActionCard } from "./ActionCard";
 import { ActionCardGrid } from "../widgets/ActionCardGrid";
 import { NvlinkPreflightPanel } from "./NvlinkPreflightPanel";
-import { LaunchOptionsDialog } from "./LaunchOptionsDialog";
+import { LaunchOptionsDialog, type NcclVersionOption } from "./LaunchOptionsDialog";
 import { ValidationActivitiesTable } from "./ValidationActivitiesTable";
 import { FileSearch, XCircle, ArrowDownToLine, ArrowUpFromLine } from "lucide-react";
 import { useRackCommands } from "../../context/RackCommandContext";
@@ -63,6 +63,12 @@ interface PendingLaunch {
    * LD_LIBRARY_PATH. Container/NEMO launches ignore it.
    */
   showNcclVersion?: boolean;
+  /**
+   * Catalog-derived NCCL builds for the version selector, forwarded from the tool's launch body
+   * (`nccl_versions`, injected by the backend from the P2P catalog). Undefined falls back to the
+   * dialog's shipped list.
+   */
+  ncclVersions?: NcclVersionOption[];
   /** Show the iterations (sweep-rounds) stepper — direct NCCL paths only. */
   showIters?: boolean;
 }
@@ -160,6 +166,9 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
             title: `Launch ${tool.name}`,
             family,
             showNcclVersion: plan.body.show_nccl_version === true,
+            ncclVersions: Array.isArray(plan.body.nccl_versions)
+              ? (plan.body.nccl_versions as NcclVersionOption[])
+              : undefined,
             showIters: plan.body.show_iters === true,
           });
           return;
@@ -327,6 +336,7 @@ export function ValidationTab({ rack, logDir, naming, selectedNodes, disabled, j
         subtitle={`${nodeCount} selected node(s)${rack ? ` in ${rack}` : ""}`}
         confirmLabel="Launch"
         showNcclVersion={pendingLaunch?.showNcclVersion ?? false}
+        ncclVersions={pendingLaunch?.ncclVersions}
         showIters={pendingLaunch?.showIters ?? false}
       />
 

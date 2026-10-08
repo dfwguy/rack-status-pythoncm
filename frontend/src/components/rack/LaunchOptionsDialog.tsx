@@ -40,12 +40,26 @@ const NCCL_DEBUG_LEVELS = [
 
 // NCCL library versions selectable for the direct NCCL microbenchmark. The sbatch loads
 // the matching libnccl from the NFS workspace via LD_LIBRARY_PATH (nccl-tests links
-// libnccl.so.2, so one binary runs any 2.x lib). Add new vetted builds here as they land.
+// libnccl.so.2, so one binary runs any 2.x lib). This hard-coded list is the FALLBACK only:
+// when the backend derives a catalog-driven list from the P2P images a cluster has staged
+// (see `ncclVersions`), that list is used instead, so shipping a new build is a catalog edit
+// rather than a frontend change.
 const NCCL_VERSIONS = [
   { value: "2.30.7", label: "2.30.7 (vetted, default)" },
   { value: "system", label: "System default (2.28.9)" },
 ] as const;
 const DEFAULT_NCCL_VERSION = "2.30.7";
+
+// "system" is the host libnccl (2.28.9), not a catalog image, so it stays available regardless
+// of what the catalog ships and is appended after the catalog-derived builds.
+const NCCL_SYSTEM_OPTION = { value: "system", label: "System default (2.28.9)" } as const;
+
+/** One NCCL build offered in the dialog. `order` is the operator's catalog position (lower = newer). */
+export interface NcclVersionOption {
+  value: string;
+  label: string;
+  order?: number;
+}
 
 // NEMO training length. 50 is the short perf benchmark (what the LLMB recipe runs by
 // default); 2010 is the Stage-2 soak. The value drives NVIS_NEMO_MAX_STEPS *and*
@@ -90,6 +104,13 @@ interface LaunchOptionsDialogProps {
   confirmLabel?: string;
   /** Show the NCCL library-version selector (direct NCCL test only; ignored by NEMO/container). */
   showNcclVersion?: boolean;
+  /**
+   * Catalog-derived NCCL builds, from the P2P images the cluster has staged. When provided and
+   * non-empty these replace the hard-coded {@link NCCL_VERSIONS} fallback (the host "system"
+   * option is always appended), and the first entry becomes the default selection. Absent/empty
+   * keeps the shipped list, so an older frontend or an empty catalog still works.
+   */
+  ncclVersions?: NcclVersionOption[];
   /** Show the iterations (sweep-rounds) stepper (direct NCCL test only; ignored by NEMO/container). */
   showIters?: boolean;
   /** Show the NEMO training-steps selector. NEMO launches only. */
@@ -112,12 +133,33 @@ export function LaunchOptionsDialog({
   subtitle,
   confirmLabel = "Launch",
   showNcclVersion = false,
+  ncclVersions,
   showIters = false,
   showMaxSteps = false,
   showLlamaExemplar = false,
 }: LaunchOptionsDialogProps) {
+  // The catalog-derived list when the backend supplied one, else the shipped fallback. A catalog
+  // list is sorted by `order` (stable) and the host "system" option is appended; its first entry
+  // is the default selection. An absent/empty list keeps the hard-coded options and default.
+  const { ncclOptions, defaultNcclVersion } = useMemo(() => {
+    if (ncclVersions && ncclVersions.length > 0) {
+      const sorted = [...ncclVersions].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      return {
+        ncclOptions: [
+          ...sorted.map((o) => ({ value: o.value, label: o.label })),
+          NCCL_SYSTEM_OPTION,
+        ],
+        defaultNcclVersion: sorted[0].value,
+      };
+    }
+    return {
+      ncclOptions: NCCL_VERSIONS.map((o) => ({ value: o.value, label: o.label })),
+      defaultNcclVersion: DEFAULT_NCCL_VERSION,
+    };
+  }, [ncclVersions]);
+
   const [ncclDebug, setNcclDebug] = useState("off");
-  const [ncclVersion, setNcclVersion] = useState(DEFAULT_NCCL_VERSION);
+  const [ncclVersion, setNcclVersion] = useState(defaultNcclVersion);
   const [iters, setIters] = useState(DEFAULT_ITERS);
   const [maxSteps, setMaxSteps] = useState(DEFAULT_MAX_STEPS);
   const [llamaDtype, setLlamaDtype] = useState<"fp8" | "nvfp4">("nvfp4");
@@ -145,7 +187,7 @@ export function LaunchOptionsDialog({
   useEffect(() => {
     if (open) {
       setNcclDebug("off");
-      setNcclVersion(DEFAULT_NCCL_VERSION);
+      setNcclVersion(defaultNcclVersion);
       setIters(DEFAULT_ITERS);
       setMaxSteps(DEFAULT_MAX_STEPS);
       setLlamaDtype("nvfp4");
@@ -153,7 +195,7 @@ export function LaunchOptionsDialog({
       setLlamaTuning("baseline");
       setEnvText("");
     }
-  }, [open]);
+  }, [open, defaultNcclVersion]);
 
   // Live preview of the parsed env map (invalid lines are silently dropped).
   const parsedEnv = useMemo(() => parseEnvVars(envText), [envText]);
@@ -236,7 +278,7 @@ export function LaunchOptionsDialog({
                 value={ncclVersion}
                 onChange={(e) => setNcclVersion(String(e.target.value))}
               >
-                {NCCL_VERSIONS.map((o) => (
+                {ncclOptions.map((o) => (
                   <MenuItem key={o.value} value={o.value}>
                     {o.label}
                   </MenuItem>
