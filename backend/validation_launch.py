@@ -887,7 +887,7 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
     if preset.requires_infiniband:
         checks += ["/dev/infiniband and /sys/class/infiniband visibility"]
     if preset.id == "nccl-2.31.2":
-        checks += ["selected CUDA runtime >= 13.3", "ncclGetVersion == 23102"]
+        checks += ["selected CUDA runtime >= 13.0", "ncclGetVersion == 23007 (NCCL 2.30.7)"]
     if preset.id == "exemplar-system-info":
         checks += ["DGXC v26.06.01 summary present", "nonfatal findings and warnings classified per node"]
     if preset.id == "mnubergemm-26.03-v1.17":

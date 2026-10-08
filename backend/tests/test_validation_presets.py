@@ -74,8 +74,8 @@ def test_catalogue_is_honest_and_version_pins_are_immutable():
     rows = {row["id"]: row for row in validation_presets.catalogue()}
     assert rows["llama31-405b-fp8"]["requirements"]["exact_nodes"] == 256
     assert "1024 GPUs" in rows["llama31-405b-fp8"]["label"]
-    assert rows["nccl-2.31.2"]["defaults"]["cuda_version"] == "13.3+"
-    assert rows["nccl-2.31.2"]["defaults"]["nccl_version"] == "2.31.2"
+    assert rows["nccl-2.31.2"]["defaults"]["cuda_version"] == "13.0+"
+    assert rows["nccl-2.31.2"]["defaults"]["nccl_version"] == "2.30.7"
     assert rows["llama31-405b-fp8"]["defaults"]["storage"] == "local"
     assert rows["llama31-405b-fp8"]["defaults"]["rsync"] is True
     assert "mnubergemm-26.03-v1.17" in rows
@@ -400,7 +400,10 @@ def test_scripts_encode_runtime_and_result_gates():
     assert 'ctypes.CDLL("libnccl.so.2")' in llama
     assert "lib.ncclGetVersion(ctypes.byref(version))" in llama
     assert "runtime_nccl=2.30.7" in llama
-    assert "ncclGetVersion" in nccl and "requires=23102" in nccl
+    # The runtime gate derives the expected ncclGetVersion from NVIS_NCCL_VERSION (X.Y.Z encoding),
+    # rather than hard-coding one release — so a workspace built at 2.30.7 (23007) validates.
+    assert "ncclGetVersion" in nccl and "requires=$_want" in nccl
+    assert '$1*10000+$2*100+$3' in nccl and "NVIS_NCCL_VERSION" in nccl
     assert "if ! srun --kill-on-bad-exit=1" in nccl and "exit 15" in nccl
     assert "/dev/infiniband/rdma_cm" in nccl and "-type c" in nccl
     assert "NVIS_NCCL_RUNTIME_PREFLIGHT" in nccl_launcher

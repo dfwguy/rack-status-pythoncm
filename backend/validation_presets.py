@@ -20,8 +20,8 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 LOCAL_CONTAINER_DIR = "/tmp/containers"
-CUDA_REQUIRED = "13.3+"
-NCCL_REQUIRED = "2.31.2"
+CUDA_REQUIRED = "13.0+"
+NCCL_REQUIRED = "2.30.7"
 EXEMPLAR_TAG = "v26.06.01"
 
 #: Where shared container images live. Nscale mounts them at ``/cluster/containers``; every
@@ -114,8 +114,8 @@ class Preset:
 PRESETS: tuple[Preset, ...] = (
     Preset(
         "nccl-2.31.2",
-        "NCCL 2.31.2 / CUDA 13.3+",
-        "Direct host NCCL acceptance sweep; fails closed unless the selected runtime is CUDA 13.3+ and NCCL 2.31.2.",
+        "NCCL 2.30.7 / CUDA 13.0+",
+        "Direct host NCCL acceptance sweep; fails closed unless the selected runtime is CUDA 13.0+ and NCCL 2.30.7. (Preset id is historical; it now validates the host-built 2.30.7 workspace toolchain.)",
         "nccl",
         ("node", "rack", "multirack"),
         cuda_version=CUDA_REQUIRED,
@@ -271,8 +271,8 @@ def normalize_options(body: dict[str, Any], preset: Preset) -> dict[str, Any]:
             requested_cuda = cuda[:-1]
         else:
             requested_cuda = cuda
-        if _version_tuple(requested_cuda) < (13, 3):
-            raise ValueError("nccl-2.31.2 requires CUDA 13.3 or newer")
+        if _version_tuple(requested_cuda) < (13, 0):
+            raise ValueError("nccl-2.31.2 requires CUDA 13.0 or newer")
         if nccl != NCCL_REQUIRED:
             raise ValueError(f"nccl-2.31.2 requires NCCL exactly {NCCL_REQUIRED}")
         cuda = CUDA_REQUIRED

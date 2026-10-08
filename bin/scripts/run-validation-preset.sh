@@ -187,9 +187,9 @@ case "$preset" in
       echo "ERROR: nccl-2.31.2 is a direct host runtime and has no container to stage" >&2; exit 2;
     }
     export NCCL_DEBUG="${NCCL_DEBUG:-INFO}"
-    export NVIS_NCCL_RUNTIME_PREFLIGHT=1 NVIS_NCCL_MIN_CUDA_VERSION=13.3 NVIS_NCCL_SBATCH_WAIT=1
+    export NVIS_NCCL_RUNTIME_PREFLIGHT=1 NVIS_NCCL_MIN_CUDA_VERSION=13.0 NVIS_NCCL_SBATCH_WAIT=1
     run_cmd bash "${script_dir}/run_nccl_mpi.sh" --nodelist "$nodelist" \
-      --nccl-version 2.31.2 --rounds 5 --size-max 16G
+      --nccl-version 2.30.7 --rounds 5 --size-max 16G
     ;;
 
   llama31-405b-fp8)

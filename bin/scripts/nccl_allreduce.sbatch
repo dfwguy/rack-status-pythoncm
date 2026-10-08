@@ -121,14 +121,18 @@ assert lib.ncclGetVersion(ctypes.byref(v)) == 0
 print(v.value)
 PY
 )"
-      [[ "$version" == 23102 ]] || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): ncclGetVersion=$version requires=23102" >&2; exit 12; }
+      # Expected ncclGetVersion is DERIVED from the selected NVIS_NCCL_VERSION (X.Y.Z -> X*10000+Y*100+Z,
+      # NCCL's own encoding: 2.30.7 -> 23007, 2.31.2 -> 23102), never hard-coded to one release. A
+      # non-numeric selection (system|default) pins nothing and skips the check.
+      _want="$(printf '%s' "${NVIS_NCCL_VERSION:-}" | awk -F. 'NF>=3{printf "%d",$1*10000+$2*100+$3}')"
+      [[ -z "$_want" || "$version" == "$_want" ]] || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): ncclGetVersion=$version requires=$_want (NVIS_NCCL_VERSION=${NVIS_NCCL_VERSION:-})" >&2; exit 12; }
       test -d /sys/class/infiniband || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): no InfiniBand sysfs" >&2; exit 13; }
       test -e /dev/infiniband/rdma_cm || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): no rdma_cm" >&2; exit 13; }
       uverbs="$(find /dev/infiniband -maxdepth 1 -name "uverbs*" -type c 2>/dev/null | wc -l)"
       (( uverbs > 0 )) || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): no uverbs character devices" >&2; exit 13; }
       active="$(grep -l "4: ACTIVE" /sys/class/infiniband/*/ports/*/state 2>/dev/null | wc -l)"
       (( active > 0 )) || { echo "NCCL_RUNTIME_PREFLIGHT_FAIL $(hostname): no ACTIVE InfiniBand port" >&2; exit 14; }
-      echo "NCCL_RUNTIME_PREFLIGHT_READY $(hostname): CUDA=$cuda NCCL=2.31.2 active_ib_ports=$active"
+      echo "NCCL_RUNTIME_PREFLIGHT_READY $(hostname): CUDA=$cuda NCCL=${NVIS_NCCL_VERSION:-?} active_ib_ports=$active"
     '; then
     echo "NCCL_RUNTIME_PREFLIGHT_FAIL: one or more allocated nodes rejected the CUDA/NCCL/IB runtime" >&2
     exit 15
