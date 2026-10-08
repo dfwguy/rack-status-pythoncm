@@ -20,8 +20,10 @@ import argparse
 import datetime
 import fcntl
 import json
+import math
 import os
 import pathlib
+import re
 import subprocess
 import tempfile
 
@@ -60,23 +62,163 @@ def _rollout_env(base: dict, rollout: dict, root: str) -> dict:
     return env
 
 
+def _natural(text: str) -> list:
+    """Sort key that orders ``U7`` before ``U19`` and ``su9`` before ``su19``."""
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", text)]
+
+
+def _load_topology(path: pathlib.Path) -> dict[str, tuple[str, str]]:
+    """``node -> (su, rack)`` from the topology inventory ``lib-topology.sh`` reads.
+
+    One row per compute node, tab-separated ``<hostname> <su> <rack>``, captured from the cluster
+    manager's placement by ``build-topology-inventory.sh``. It is the same file every peer's
+    scheduler labels (``idc`` = SU, ``location`` = rack) were rendered from, so a plan built on it
+    groups nodes exactly the way the scheduler prefers parents. Rows missing a field are skipped.
+    """
+    topology: dict[str, tuple[str, str]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = [p.strip() for p in line.split("\t")]
+        if len(parts) >= 3 and all(parts[:3]):
+            topology[parts[0]] = (parts[1], parts[2])
+    return topology
+
+
+def _rung(token: str, size: int) -> int:
+    """How many of a ``size``-node rack a ladder rung asks for: a count, or a share rounded up."""
+    if token.endswith("%"):
+        return math.ceil(size * int(token[:-1]) / 100)
+    return int(token)
+
+
+def _stage_cuts(size: int, stages: list[str]) -> list[int]:
+    """Cumulative per-stage targets for one rack: never falling, never past the rack, ending full."""
+    cuts, held = [], 0
+    for token in stages:
+        held = max(held, min(size, _rung(token, size)))
+        cuts.append(held)
+    cuts[-1] = size
+    return cuts
+
+
+def _pack(slices: list[list[str]], cap: int) -> list[list[str]]:
+    """Pack per-rack slices into waves of at most ``cap`` nodes, keeping a rack's slice together.
+
+    A slice larger than a whole wave is split; otherwise a slice never straddles two waves, so a
+    rack advances one rung in one wave and its new holders are all ready before the next stage.
+    """
+    waves: list[list[str]] = []
+    current: list[str] = []
+    for part in slices:
+        for start in range(0, len(part), cap):
+            chunk = part[start:start + cap]
+            if current and len(current) + len(chunk) > cap:
+                waves.append(current)
+                current = []
+            current.extend(chunk)
+    if current:
+        waves.append(current)
+    return waves
+
+
+def rack_staged_waves(nodes: list[str], topology: dict[str, tuple[str, str]], stages: list[str],
+                      seed_wave: int, fill_wave: int) -> tuple[list[tuple[str, list[str]]], dict]:
+    """Plan a roster as ``[(stage, wave_nodes), ...]`` that fills racks by the stage ladder.
+
+    Stage one gives every rack its first holder, paced at ``seed_wave`` -- these are the only pulls
+    that reach the app server's seeds. Each later stage grows every rack to its next rung, paced at
+    ``fill_wave``: the new nodes find holders in their own rack (the scheduler ranks same-rack
+    parents first), and because the ladder rises gradually no single holder feeds a whole rack.
+
+    Racks are visited round-robin across SUs, so a wave spreads over the fabric instead of loading
+    one SU's uplinks. Roster nodes missing from the topology go last, paced like seeds: they have no
+    known rack-mates and will draw on the seeds or their SU. Returns the waves and a summary.
+    """
+    racks: dict[tuple[str, str], list[str]] = {}
+    unplaced: list[str] = []
+    for node in nodes:
+        where = topology.get(node)
+        if where is None:
+            unplaced.append(node)
+        else:
+            racks.setdefault(where, []).append(node)
+    for members in racks.values():
+        members.sort(key=_natural)
+    by_su: dict[str, list[tuple[str, str]]] = {}
+    for key in sorted(racks, key=lambda k: (_natural(k[0]), _natural(k[1]))):
+        by_su.setdefault(key[0], []).append(key)
+    order: list[tuple[str, str]] = []
+    queues = list(by_su.values())
+    while any(queues):
+        for queue in queues:
+            if queue:
+                order.append(queue.pop(0))
+
+    cuts = {key: _stage_cuts(len(racks[key]), stages) for key in order}
+    waves: list[tuple[str, list[str]]] = []
+    per_stage: list[dict] = []
+    previous = {key: 0 for key in order}
+    for index, token in enumerate(stages):
+        slices = [racks[key][previous[key]:cuts[key][index]] for key in order]
+        slices = [part for part in slices if part]
+        stage_waves = _pack(slices, seed_wave if index == 0 else fill_wave)
+        waves.extend((token, wave) for wave in stage_waves)
+        per_stage.append({"stage": token, "nodes": sum(len(p) for p in slices),
+                          "racks": len(slices), "waves": len(stage_waves)})
+        previous = {key: cuts[key][index] for key in order}
+    if unplaced:
+        unplaced_waves = _pack([sorted(unplaced, key=_natural)], seed_wave)
+        waves.extend(("unplaced", wave) for wave in unplaced_waves)
+        per_stage.append({"stage": "unplaced", "nodes": len(unplaced), "racks": 0, "waves": len(unplaced_waves)})
+    summary = {"racks": len(order), "sus": len(by_su), "unplaced": len(unplaced), "stages": per_stage}
+    return waves, summary
+
+
+def _plan_waves(nodes: list[str], rollout: dict, env: dict, log: pathlib.Path) -> list[tuple[str, list[str]]]:
+    """The roster as waves, by the request's strategy. Rack-staged falls back to sequential, loudly,
+    when there is no usable topology -- the image still reaches every node, just without the plan."""
+    wave_size = max(1, int(rollout.get("wave_size", 50)))
+    if rollout.get("strategy") == "rack-staged":
+        path = pathlib.Path(env.get("NVIS_TOPOLOGY_FILE") or f"{env['NVIS_P2P_ROOT']}/inventory/topology.tsv")
+        try:
+            topology = _load_topology(path)
+        except OSError as exc:
+            topology = {}
+            _append(log, f"[worker] rack-staged: topology inventory unreadable ({exc})")
+        if topology:
+            fill = int(rollout.get("fill_wave_size") or 0) or wave_size
+            stages = list(rollout.get("stages") or ["1", "50%", "100%"])
+            waves, summary = rack_staged_waves(nodes, topology, stages, wave_size, max(1, fill))
+            _append(log, f"[worker] rack-staged plan from {path}: {summary['racks']} racks in "
+                         f"{summary['sus']} SUs, ladder {' → '.join(stages)}, seed waves {wave_size}, fill waves {fill}")
+            for row in summary["stages"]:
+                _append(log, f"[worker]   stage {row['stage']}: {row['nodes']} nodes over {row['racks']} racks "
+                             f"in {row['waves']} waves")
+            return waves
+        _append(log, f"[worker] rack-staged: no placed nodes in {path}; falling back to sequential waves")
+    return [("sequential", nodes[i:i + wave_size]) for i in range(0, len(nodes), wave_size)]
+
+
 def _staged_campaign(image: str, roster: pathlib.Path, rollout: dict, scripts: str,
                      env: dict, log: pathlib.Path, label: str) -> int:
-    """Preheat the seeds, then roll the image out in waves of ``wave_size`` so each seeds the next."""
+    """Preheat the seeds, then roll the image out wave by wave so each wave seeds the next.
+
+    The waves are the roster in order (``sequential``) or a placement plan (``rack-staged``, see
+    :func:`rack_staged_waves`); either way they run one after another through the same rollout
+    script, so a wave's holders are complete before the next wave asks for the image.
+    """
     rc = _run(["bash", f"{scripts}/preheat-catalog-image.sh", image], log, env, 1200)
     if rc != 0:
         _append(log, f"[worker] preheat failed ({rc}); aborting campaign")
         return rc
     nodes = [n.strip() for n in roster.read_text(encoding="utf-8").splitlines() if n.strip()]
-    wave_size = max(1, int(rollout.get("wave_size", 50)))
     worst = 0
-    for i in range(0, len(nodes), wave_size):
-        wave = nodes[i:i + wave_size]
-        wave_file = roster.parent / f".{label}-wave{i // wave_size:02d}.nodes"
+    for index, (stage, wave) in enumerate(_plan_waves(nodes, rollout, env, log)):
+        wave_file = roster.parent / f".{label}-wave{index:02d}.nodes"
         wave_file.write_text("\n".join(wave) + "\n", encoding="utf-8")
-        _append(log, f"[worker] wave {i // wave_size} — {len(wave)} nodes")
+        tag = "" if stage == "sequential" else f" (stage {stage})"
+        _append(log, f"[worker] wave {index} — {len(wave)} nodes{tag}")
         rc = _run(["bash", f"{scripts}/rollout-catalog-image-fleet.sh", image, str(wave_file),
-                   f"{label}-w{i // wave_size}"], log, env, int(rollout.get("timeout_seconds", 1800)) + 300)
+                   f"{label}-w{index}"], log, env, int(rollout.get("timeout_seconds", 1800)) + 300)
         wave_file.unlink(missing_ok=True)
         worst = worst or rc
     return worst

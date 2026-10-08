@@ -10,7 +10,10 @@ not overwhelmed. For the model behind these steps see
 [How catalog images reach every node](../explanation/p2p-catalog-distribution.md).
 
 In Rack Status the same thing is one action: pin the image under **Artifact Distribution →
-Catalog**, then launch a campaign under **Campaigns**. The operations worker runs steps 3–4 for you,
+Catalog**, then launch a campaign under **Campaigns**. For a large image, set the campaign's wave
+plan to **Rack-staged**: it gives every rack one copy before growing each rack, so most nodes pull
+from rack-mates instead of the seeds (see
+[Wave plan](../reference/p2p-catalog-distribution.md#wave-plan-operations-worker)). The operations worker runs steps 3–4 for you,
 and before it preheats it checks that the cluster's manifest pins the image as the catalog does —
 syncing first when it does not. Use the steps below when you need to drive a rollout by hand.
 

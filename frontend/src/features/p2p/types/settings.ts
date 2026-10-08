@@ -44,6 +44,12 @@ export interface P2pSettingsDoc {
   rollout_max_launches: number;
   rollout_max_unreachable: number;
   rollout_timeout_seconds: number;
+  /** How a distribute turns the roster into waves. */
+  rollout_strategy: "sequential" | "rack-staged";
+  /** Rack-staged ladder: cumulative per-rack targets, counts or shares, ending at "100%". */
+  rollout_stages: string[];
+  /** Nodes per wave after the first (seed-loading) stage; 0 = the same as rollout_wave_size. */
+  rollout_fill_wave_size: number;
 }
 
 /** GET /api/p2p/settings and PUT response. */

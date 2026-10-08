@@ -101,6 +101,53 @@ Environment variables read by `rollout-catalog-image-fleet.sh`:
 
 Invocation: `rollout-catalog-image-fleet.sh <image-filename> <roster-file> [<label>]`.
 
+### Wave plan (operations worker)
+
+A distribute launched from Rack Status is split into waves by the operations worker
+(`deploy/p2p/scripts/operations-worker.py`), which then runs `rollout-catalog-image-fleet.sh` once
+per wave, in order. Cluster defaults live in **Dragonfly Settings**; a campaign overrides them
+(0 or blank inherits).
+
+| Setting (cluster) | Campaign override | Default | Meaning |
+|---|---|---|---|
+| `rollout_strategy` | `strategy` | `sequential` | `sequential` slices the roster in order. `rack-staged` plans by placement — see below. |
+| `rollout_wave_size` | `wave_size` | `50` | Nodes per wave; under `rack-staged`, the size of the first-stage (seed-loading) waves. |
+| `rollout_fill_wave_size` | `fill_wave_size` | `0` | `rack-staged` only: nodes per wave in every later stage. `0` = the wave size. |
+| `rollout_stages` | `stages` | `1, 50%, 100%` | `rack-staged` only: the stage ladder. |
+
+**Stage ladder.** Each rung is a cumulative per-rack target: a node count (`1`, `2`) or a share of
+the rack, rounded up (`50%`). Counts must rise, shares must rise, and the last rung must be `100%`.
+Counts and shares may be mixed (`1, 2, 4, 50%, 100%`); a rack smaller than a count reaches that rung
+early and skips it. For a 17-node rack the default ladder gives cuts of 1, 9 and 17 nodes.
+
+**How `rack-staged` plans.**
+
+1. Stage one takes one node from every rack, paced at `wave_size`. These are the only pulls with no
+   holder in their rack, so the only stage that loads the seeds.
+2. Each later stage takes every rack from its previous rung to its next, paced at
+   `fill_wave_size`. A rack's slice of a stage is never split across two waves unless it is larger
+   than a whole wave.
+3. Racks are visited round-robin across SUs (natural order: `U7` before `U19`), so each wave spreads
+   over the fabric.
+4. Roster nodes missing from the topology go last, paced at `wave_size`.
+
+**Topology contract.** The plan reads `$NVIS_TOPOLOGY_FILE`, default
+`<install_root>/current/inventory/topology.tsv`: one row per compute node,
+`<hostname>\t<su>\t<rack>`, captured from the cluster manager's placement. It is the file the peers'
+scheduler labels (`idc` = SU, `location` = rack) are rendered from, so the plan and the scheduler
+agree on what a rack is. If the file is missing or has no placed node, the worker logs
+`falling back to sequential waves` and runs `sequential`.
+
+The worker logs the plan before the first wave, for example:
+
+```text
+[worker] rack-staged plan from /opt/nvis-p2p/current/inventory/topology.tsv: 93 racks in 15 SUs, ladder 1 → 50% → 100%, seed waves 25, fill waves 72
+[worker]   stage 1: 93 nodes over 93 racks in 4 waves
+[worker]   stage 50%: 647 nodes over 93 racks in 10 waves
+[worker]   stage 100%: 707 nodes over 93 racks in 11 waves
+[worker] wave 0 — 25 nodes (stage 1)
+```
+
 Run-directory artifacts (under `$NVIS_P2P_ROOT/state/rollout-<label>-<image>-<stamp>/`):
 
 | File | Contents |

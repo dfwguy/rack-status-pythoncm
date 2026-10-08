@@ -16,10 +16,11 @@
 // named and provisioning gated until they are filled in.
 import { useCallback, useEffect, useState } from "react";
 import Box from "@mui/material/Box";
-import { Banner, Button, Card, Flex, FormField, Text, TextInput } from "@nvidia/foundations-react-core";
+import { Banner, Button, Card, Flex, FormField, SegmentedControl, Text, TextInput } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../../../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../../../components/layout/contentWidth";
 import { useActiveCluster } from "../../../context/ActiveClusterContext";
+import { StageLadderInput } from "../components/StageLadderInput";
 import { ApiError } from "../lib/apiFetch";
 import { getSettings, provision, saveSettings } from "../services/settingsService";
 import type { P2pSettingsDoc, P2pSettingsResponse } from "../types/settings";
@@ -193,6 +194,26 @@ export default function P2pSettingsView() {
               {num("Max launches", "rollout_max_launches", "Re-launch attempts before a node is deferred.")}
               {num("Max unreachable", "rollout_max_unreachable", "Failed reachability checks before a node is deferred.")}
               {num("Timeout (s)", "rollout_timeout_seconds", "Overall campaign timeout before it gives up.")}
+              <FormField name="p2p-rollout_strategy" slotLabel="Wave plan"
+                slotHelp="Sequential slices the roster in order. Rack-staged gives every rack one copy first (the only waves that load the seeds), then grows every rack up the stage ladder.">
+                <SegmentedControl
+                  size="small"
+                  aria-label="Wave plan"
+                  items={[
+                    { value: "sequential", children: "Sequential" },
+                    { value: "rack-staged", children: "Rack-staged" },
+                  ]}
+                  value={draft?.rollout_strategy ?? "sequential"}
+                  onValueChange={(v: string) => set({ rollout_strategy: v === "rack-staged" ? "rack-staged" : "sequential" })}
+                />
+              </FormField>
+              {num("Fill wave size", "rollout_fill_wave_size", "Rack-staged: nodes per wave after the first stage, which pull inside racks and can run wider. 0 = the wave size.")}
+              <StageLadderInput
+                label="Stages"
+                value={draft?.rollout_stages ?? []}
+                help="Rack-staged: cumulative per-rack targets — a count or a share — ending at 100%. E.g. 1, 50%, 100% or 1, 2, 4, 8, 100%."
+                onChange={(stages) => set({ rollout_stages: stages })}
+              />
             </>
           ))}
 

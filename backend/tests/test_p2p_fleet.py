@@ -367,6 +367,49 @@ class TestP2pSettingsModel:
         assert any("rollout_poll_seconds" in p for p in probs)
 
 
+class TestRolloutWavePlanSettings:
+    """How a distribute plans its waves: a strategy, a stage ladder and a fill pace, per cluster."""
+
+    def test_defaults_keep_existing_clusters_sequential_with_the_half_then_full_ladder_ready(self):
+        s = models.P2pSettings(cluster_id="c1")
+        assert s.rollout_strategy == "sequential"
+        assert s.rollout_stages == ["1", "50%", "100%"]
+        assert s.rollout_fill_wave_size == 0 and s.validate() == []
+
+    def test_round_trip_and_a_comma_separated_ladder(self):
+        s = models.P2pSettings.from_dict({"cluster_id": "c1", "rollout_strategy": "Rack-Staged",
+                                          "rollout_stages": " 1, 2, 4 ,50%,100% ", "rollout_fill_wave_size": 72})
+        assert s.rollout_strategy == "rack-staged"
+        assert s.rollout_stages == ["1", "2", "4", "50%", "100%"]
+        back = models.P2pSettings.from_dict(s.to_dict())
+        assert (back.rollout_strategy, back.rollout_stages, back.rollout_fill_wave_size) == (
+            "rack-staged", ["1", "2", "4", "50%", "100%"], 72)
+        assert not any("ROLLOUT" in k for k in s.to_render_env())
+
+    @pytest.mark.parametrize(("stages", "fragment"), [
+        (["1", "50%"], "must be 100%"),
+        (["50%", "25%", "100%"], "must rise"),
+        (["4", "2", "100%"], "must rise"),
+        (["1", "150%", "100%"], "more than 100%"),
+        (["half", "100%"], "not a node count"),
+        (["0", "100%"], "not a node count"),
+        ([], "at least one stage"),
+    ])
+    def test_a_ladder_that_cannot_reach_every_node_is_refused(self, stages, fragment):
+        assert any(fragment in p for p in models.validate_rollout_stages(stages))
+
+    def test_counts_and_shares_may_mix(self):
+        assert models.validate_rollout_stages(["1", "2", "4", "50%", "100%"]) == []
+
+    def test_settings_validation(self):
+        bad = models.P2pSettings(cluster_id="c1", rollout_strategy="random", rollout_stages=["1"],
+                                 rollout_fill_wave_size=-1)
+        probs = bad.validate()
+        assert any("rollout_strategy" in p for p in probs)
+        assert any("must be 100%" in p for p in probs)
+        assert any("rollout_fill_wave_size" in p for p in probs)
+
+
 class TestP2pSnapshot:
     def _fresh(self, **extra):
         import datetime
@@ -528,6 +571,27 @@ class TestP2pCampaignsModel:
         assert c.pacing_overrides() == {"wave_size": 10, "timeout_seconds": 600}
         assert models.P2pCampaign(name="n", image="n.sqsh").pacing_overrides() == {}
 
+    def test_wave_plan_overrides_inherit_when_blank(self):
+        c = models.P2pCampaign.from_dict({"name": "n", "image": "n.sqsh", "strategy": "rack-staged",
+                                          "stages": ["1", "50%", "100%"], "fill_wave_size": 72})
+        assert c.pacing_overrides() == {"fill_wave_size": 72, "strategy": "rack-staged",
+                                        "stages": ["1", "50%", "100%"]}
+        back = models.P2pCampaign.from_dict(models.P2pCampaigns(cluster_id="c1", campaigns=[c]).to_dict()["campaigns"][0])
+        assert (back.strategy, back.stages, back.fill_wave_size) == ("rack-staged", ["1", "50%", "100%"], 72)
+        # Saved before these fields existed: nothing overridden, the cluster decides.
+        old = models.P2pCampaign.from_dict({"name": "n", "image": "n.sqsh", "wave_size": 25})
+        assert old.pacing_overrides() == {"wave_size": 25}
+
+    def test_wave_plan_validation(self):
+        bad = models.P2pCampaigns.from_dict({"cluster_id": "c1", "campaigns": [
+            {"name": "s", "image": "a.sqsh", "strategy": "shuffle"},
+            {"name": "l", "image": "a.sqsh", "stages": "1, 50%"},
+            {"name": "f", "image": "a.sqsh", "fill_wave_size": -5}]})
+        probs = bad.validate()
+        assert any(p.startswith("s: strategy must be one of") for p in probs)
+        assert any(p.startswith("l: stages") and "100%" in p for p in probs)
+        assert any(p.startswith("f: fill_wave_size") for p in probs)
+
     def test_validation(self):
         bad = models.P2pCampaigns.from_dict({"cluster_id": "c1", "campaigns": [
             {"name": "", "image": "a.sqsh"},
@@ -597,6 +661,49 @@ class TestP2pCampaignsApi:
         assert req["request"]["rollout"]["wave_size"] == 25
         assert req["request"]["rollout"]["parallelism"] == 128
         assert req["request"]["rollout"]["poll_seconds"] == 60
+        # The wave plan travels too, from the cluster default when the launch does not name one.
+        assert req["request"]["rollout"]["strategy"] == "sequential"
+        assert req["request"]["rollout"]["stages"] == ["1", "50%", "100%"]
+        assert req["request"]["rollout"]["fill_wave_size"] == 0
+
+    def _launch(self, client, tmp_path, monkeypatch, pacing, **settings):
+        import p2p_operations
+
+        _set_active_p2p(True)
+        _configure_active_p2p(manager_ip="10.0.0.1", appserver_ip="10.0.0.2", inventory_pattern="n[01-09]",
+                              **settings)
+        monkeypatch.setattr(p2p_operations, "_OPS_DIR", tmp_path / "ops")
+        return client.post("/api/p2p/operations", json={"action": "distribute", "images": ["nemo.sqsh"],
+                                                       "campaign": "c", "pacing": pacing})
+
+    def _rollout(self, tmp_path):
+        import json as _json
+
+        cluster_id = get_active(get_repo())["cluster"]
+        return _json.loads(next((tmp_path / "ops" / cluster_id).glob("distribute-*.json")).read_text())["request"]["rollout"]
+
+    def test_a_campaign_can_stage_by_rack_on_a_sequential_cluster(self, client, tmp_path, monkeypatch):
+        resp = self._launch(client, tmp_path, monkeypatch,
+                            {"strategy": "rack-staged", "stages": ["1", "2", "4", "8", "100%"], "fill_wave_size": 72})
+        assert resp.status_code == 202
+        rollout = self._rollout(tmp_path)
+        assert rollout["strategy"] == "rack-staged" and rollout["stages"] == ["1", "2", "4", "8", "100%"]
+        assert rollout["fill_wave_size"] == 72
+
+    def test_the_cluster_default_plan_applies_when_the_campaign_names_none(self, client, tmp_path, monkeypatch):
+        resp = self._launch(client, tmp_path, monkeypatch, {"wave_size": 25},
+                            rollout_strategy="rack-staged", rollout_fill_wave_size=96)
+        assert resp.status_code == 202
+        rollout = self._rollout(tmp_path)
+        assert (rollout["strategy"], rollout["wave_size"], rollout["fill_wave_size"]) == ("rack-staged", 25, 96)
+
+    @pytest.mark.parametrize(("pacing", "fragment"), [
+        ({"strategy": "shuffle"}, "unknown rollout strategy"),
+        ({"stages": ["1", "50%"]}, "must be 100%"),
+    ])
+    def test_a_plan_the_worker_cannot_follow_is_refused_at_launch(self, client, tmp_path, monkeypatch, pacing, fragment):
+        resp = self._launch(client, tmp_path, monkeypatch, pacing)
+        assert resp.status_code == 400 and fragment in resp.get_json()["message"]
 
 
 class TestP2pProvisionWorkflow:

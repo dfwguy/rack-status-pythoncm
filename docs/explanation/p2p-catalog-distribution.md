@@ -107,6 +107,25 @@ Even the cold first wave offloaded 16×, because the 50 nodes in it shared piece
 Once the mesh was warm, waves 2–5 delivered ~1.9 TB with the seeds serving **zero bytes**. The seeds
 carried under 2% of the total; the peer mesh carried the rest. That is the entire thesis, measured.
 
+### Staging by rack, not by name
+
+Bounded waves warm the mesh, but *which* nodes share a wave decides where the pieces come from.
+Every peer is labelled with its SU and rack, and the scheduler ranks a parent in the same rack
+first, then the same SU, then the seeds. A roster sliced in hostname order ignores that: on NC,
+where the rack is not in the hostname, alphabetical waves of 25 touched only 7–14 racks each, and
+the last of 93 racks received its first copy in wave 53 of 58. Until then, every node in a rack
+without a holder pulled across racks or from the seeds.
+
+The `rack-staged` wave plan follows the scheduler instead. It first puts one copy in every rack —
+the only waves that need the seeds — and then grows every rack in steps. The steps matter as much
+as the seeding: if a rack's single first holder fed its 16 rack-mates at once, that one node would
+become the rack's bottleneck. The default ladder fills every rack to half first, so the first holder
+feeds about as many nodes as remain, and the last half pulls from half a rack of holders. A finer
+ladder (`1, 2, 4, 8, 100%`) doubles the holders at each step, so no holder ever feeds more than one
+new node per step, at the cost of more waves. Because later stages pull inside racks, they can run
+wider waves than the seed stage without adding seed load — which is why the two are paced
+separately.
+
 ## The sharp edges, and where they come from
 
 None of these are bugs; they follow from the design, and knowing them is the difference between the

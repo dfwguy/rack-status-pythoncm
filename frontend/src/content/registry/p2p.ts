@@ -87,7 +87,7 @@ export const p2pContent: HelpContent[] = [
     summary:
       "Per-cluster NVIS-P2P instance configuration — addresses, the app-server connection, inventory, paths — and the button that provisions or reconciles the control plane.",
     description:
-      "Dragonfly Settings holds everything the reconcile needs to stand up this cluster's P2P instance: the Manager and app-server addresses, how the reconcile reaches the app server over SSH (a host in its own right, not the cluster's control node), the compute-peer inventory pattern, and the install/storage paths. Secrets are generated on the app server and never stored here. Missing pieces are named, and Provision stays disabled until they are filled in; provisioning starts a reconcile run tracked under Workflows.",
+      "Dragonfly Settings holds everything the reconcile needs to stand up this cluster's P2P instance: the Manager and app-server addresses, how the reconcile reaches the app server over SSH (a host in its own right, not the cluster's control node), the compute-peer inventory pattern, the install/storage paths, and the campaign defaults -- wave size and pacing plus the wave plan (Sequential or Rack-staged, the stage ladder, and the fill wave size used once racks hold a copy). Secrets are generated on the app server and never stored here. Missing pieces are named, and Provision stays disabled until they are filled in; provisioning starts a reconcile run tracked under Workflows.",
     features: [
       "Manager / app-server addresses and the app-server SSH connection",
       "Compute-peer inventory pattern and source path",
@@ -114,7 +114,7 @@ export const p2pContent: HelpContent[] = [
       description: "Per-cluster NVIS-P2P instance configuration and provisioning.",
     },
     aiContext:
-      "Dragonfly Settings is the per-cluster NVIS-P2P instance configuration for the active cluster (backend P2pSettings). It edits the Manager/app-server addresses, the app-server SSH connection the reconcile runs over (the app server is its own host, not the cluster control node), the compute-peer inventory pattern and source path, and install/storage paths. Secrets are generated on the app server, never stored. It names provisioning blockers and exposes a gated Provision action that starts a reconcile workflow run.",
+      "Dragonfly Settings is the per-cluster NVIS-P2P instance configuration for the active cluster (backend P2pSettings). It edits the Manager/app-server addresses, the app-server SSH connection the reconcile runs over (the app server is its own host, not the cluster control node), the compute-peer inventory pattern and source path, install/storage paths, and the rollout defaults (rollout_wave_size, rollout_parallelism, rollout_poll_seconds, rollout_max_launches, rollout_max_unreachable, rollout_timeout_seconds, rollout_strategy sequential|rack-staged, rollout_stages ladder ending at 100%, rollout_fill_wave_size where 0 = the wave size). Secrets are generated on the app server, never stored. It names provisioning blockers and exposes a gated Provision action that starts a reconcile workflow run.",
   },
   {
     id: "p2pCatalog",
@@ -197,7 +197,7 @@ export const p2pContent: HelpContent[] = [
     summary:
       "Saved distributions — an image, a roster and optional pacing — that you name once and launch to the fleet on demand.",
     description:
-      "A campaign pairs one catalog image with a roster (or the whole fleet) and optional pacing overrides: wave size, parallelism, poll interval, launch and unreachable limits, and timeout. A pacing field left at 0 inherits the cluster's rollout default from Dragonfly Settings. Launching a campaign asks for confirmation, then queues a distribute operation tagged with the campaign's name; it preheats the seeds and rolls the image out wave by wave, and its progress and log appear in Artifact Fleet. Only one operation runs at a time, so a launch is refused while another is in flight. Re-launching is safe: nodes that already hold the pinned image are skipped.",
+      "A campaign pairs one catalog image with a roster (or the whole fleet) and optional pacing overrides: wave size, parallelism, poll interval, launch and unreachable limits, and timeout. A pacing field left at 0 inherits the cluster's rollout default from Dragonfly Settings. A campaign can also choose its wave plan: Sequential slices the roster in order, Rack-staged gives every rack one copy first and then grows every rack up a stage ladder (by default to half, then full) so new nodes pull from rack-mates rather than the app server's seeds; Cluster default uses the plan set in Dragonfly Settings. Launching a campaign asks for confirmation, then queues a distribute operation tagged with the campaign's name; it preheats the seeds and rolls the image out wave by wave, and its progress and log appear in Artifact Fleet. Only one operation runs at a time, so a launch is refused while another is in flight. Re-launching is safe: nodes that already hold the pinned image are skipped.",
     features: [
       "Image × roster × pacing, saved per cluster",
       "Confirm-before-launch, with a link to the launched operation's log",
@@ -217,14 +217,15 @@ export const p2pContent: HelpContent[] = [
     tips: [
       "A launch is refused while another operation is running; wait for it to finish.",
       "Nodes deferred as unreachable in one run are picked up by launching the same campaign again.",
+      "For big images, Rack-staged with a ladder like 1, 50%, 100% keeps most pulls inside racks; a finer ladder (1, 2, 4, 8, 100%) spreads the load further.",
     ],
-    keywords: ["p2p", "campaign", "launch", "distribute", "rollout", "wave", "pacing", "roster", "image"],
+    keywords: ["p2p", "campaign", "launch", "distribute", "rollout", "wave", "pacing", "roster", "image", "rack-staged", "stages", "topology"],
     related: ["p2pCatalog", "p2pRosters", "p2pArtifacts", "p2pSettings"],
     aria: {
       label: "Campaigns",
       description: "Saved image distributions that can be launched to a roster or the whole fleet.",
     },
     aiContext:
-      "Campaigns are saved distributions for the active cluster's NVIS-P2P instance (backend P2pCampaigns, GET/PUT /api/p2p/campaigns). A campaign names a catalog image, a roster (blank = whole fleet) and optional pacing overrides (wave_size, parallelism, poll_seconds, max_launches, max_unreachable, timeout_seconds; 0 inherits the cluster default). Launch is confirm-gated and enqueues an ordinary distribute operation through POST /api/p2p/operations tagged with the campaign name; the worker preheats the seeds then rolls out in waves. One operation runs at a time (409 otherwise). Re-launching is idempotent: nodes holding the pinned image are skipped by receipt.",
+      "Campaigns are saved distributions for the active cluster's NVIS-P2P instance (backend P2pCampaigns, GET/PUT /api/p2p/campaigns). A campaign names a catalog image, a roster (blank = whole fleet) and optional pacing overrides (wave_size, parallelism, poll_seconds, max_launches, max_unreachable, timeout_seconds, fill_wave_size; 0 inherits the cluster default) and an optional wave plan (strategy sequential|rack-staged, stages ladder such as 1, 50%, 100%; blank inherits). Rack-staged is planned by the worker from the installed topology inventory (<install_root>/current/inventory/topology.tsv, node/SU/rack -- the same file the peers' scheduler labels come from): stage one puts one node in every rack at wave_size (the only stage that loads the seeds), later stages grow every rack to the next rung at fill_wave_size, racks round-robin across SUs; with no topology it falls back to sequential and says so in the log. Launch is confirm-gated and enqueues an ordinary distribute operation through POST /api/p2p/operations tagged with the campaign name; the worker preheats the seeds then rolls out in waves. One operation runs at a time (409 otherwise). Re-launching is idempotent: nodes holding the pinned image are skipped by receipt.",
   },
 ];

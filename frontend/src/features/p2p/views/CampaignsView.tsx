@@ -17,21 +17,30 @@
 // Status, drawing its image choices from the catalog and its targets from the rosters.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Box from "@mui/material/Box";
-import { Banner, Button, Card, Flex, FormField, Text, TextInput } from "@nvidia/foundations-react-core";
+import { Banner, Button, Card, Flex, FormField, SegmentedControl, Text, TextInput } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../../../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../../../components/layout/contentWidth";
 import { useActiveCluster } from "../../../context/ActiveClusterContext";
 import { ApiError } from "../lib/apiFetch";
 import { OperationLogDialog } from "../components/OperationLogDialog";
+import { StageLadderInput } from "../components/StageLadderInput";
 import { getCampaigns, getCatalog, getRosters, launchCampaign, saveCampaigns } from "../services/fleetService";
-import type { CampaignEdit } from "../services/fleetService";
+import type { CampaignEdit, RolloutStrategy } from "../services/fleetService";
 import type { Operation } from "../types/fleet";
 
 /** A new campaign row: pacing zeroed so every knob inherits the cluster's rollout default. */
 const emptyCampaign = (): CampaignEdit => ({
   name: "", description: "", image: "", roster: "",
   wave_size: 0, parallelism: 0, poll_seconds: 0, max_launches: 0, max_unreachable: 0, timeout_seconds: 0,
+  fill_wave_size: 0, strategy: "", stages: [],
 });
+
+/** The wave plan a campaign can pick; "inherit" stands for the blank override (the cluster decides). */
+const STRATEGY_ITEMS = [
+  { value: "inherit", children: "Cluster default" },
+  { value: "sequential", children: "Sequential" },
+  { value: "rack-staged", children: "Rack-staged" },
+];
 
 /** The pacing overrides, with the cluster-default each inherits when left at 0, for the inputs. */
 const PACING_FIELDS: { key: keyof CampaignEdit; label: string; placeholder: string }[] = [
@@ -264,6 +273,47 @@ export default function CampaignsView() {
                   </FormField>
                 ))}
               </div>
+
+              <Text kind="body/regular/sm" style={{ marginTop: 12, marginBottom: 4, opacity: 0.8 }}>
+                Wave plan — rack-staged gives every rack one copy first, then grows every rack up the
+                stage ladder so new nodes pull from rack-mates instead of the seeds.
+              </Text>
+              <Flex direction="col" gap="2">
+                <SegmentedControl
+                  size="small"
+                  aria-label="Wave plan"
+                  items={STRATEGY_ITEMS}
+                  value={c.strategy || "inherit"}
+                  onValueChange={(v: string) =>
+                    update(idx, { strategy: v === "inherit" ? "" : (v as RolloutStrategy) })
+                  }
+                />
+                {c.strategy === "rack-staged" ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
+                    <StageLadderInput
+                      label="Stages"
+                      value={c.stages}
+                      inherits
+                      placeholder="cluster default (e.g. 1, 50%, 100%)"
+                      help="Per-rack targets, a count or a share, ending at 100%. Blank uses the cluster's ladder."
+                      onChange={(stages) => update(idx, { stages })}
+                    />
+                    <FormField slotLabel="Fill wave size" slotHelp="Nodes per wave after the first stage; 0 inherits.">
+                      <Box
+                        component="input"
+                        type="number"
+                        min={0}
+                        aria-label="Fill wave size"
+                        value={String(c.fill_wave_size)}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                          update(idx, { fill_wave_size: Math.max(0, Number(e.target.value) || 0) })
+                        }
+                        sx={{ width: "100%", p: 1, borderRadius: 1, border: "1px solid var(--color-border-subtle, #ccc)", fontSize: 14 }}
+                      />
+                    </FormField>
+                  </div>
+                ) : null}
+              </Flex>
             </Card>
           ))}
 

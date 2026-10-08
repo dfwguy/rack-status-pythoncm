@@ -31,7 +31,7 @@ import uuid
 
 import p2p_catalog
 import p2p_rosters
-from catalog.models import P2pSettings
+from catalog.models import ROLLOUT_STRATEGIES, P2pSettings, validate_rollout_stages
 
 #: An operation id is this shape (the enqueue builder); validated before it reaches the filesystem so
 #: a hand-typed id can never escape the operations directory.
@@ -65,7 +65,9 @@ def _ops_dir(cluster_id: str) -> pathlib.Path:
 
 #: The pacing keys an operation's ``rollout`` block carries, and the names a campaign override uses.
 _ROLLOUT_KEYS = ("wave_size", "parallelism", "poll_seconds", "max_launches", "max_unreachable",
-                 "timeout_seconds")
+                 "timeout_seconds", "fill_wave_size", "strategy", "stages")
+#: The numeric ones; an override of these must be a positive int to apply.
+_ROLLOUT_INT_KEYS = frozenset(_ROLLOUT_KEYS) - {"strategy", "stages"}
 
 
 def enqueue(cluster_id: str, settings: P2pSettings, action: str,
@@ -99,11 +101,24 @@ def enqueue(cluster_id: str, settings: P2pSettings, action: str,
     # The cluster's pacing, with any per-run override layered on top. Only the keys a campaign names
     # change; the rest stay on the cluster default the worker would otherwise read.
     rollout = {key: getattr(settings, f"rollout_{key}") for key in _ROLLOUT_KEYS}
+    rollout["stages"] = list(rollout["stages"])
     for key, value in (pacing or {}).items():
-        if key in rollout and isinstance(value, int) and value > 0:
+        if key in _ROLLOUT_INT_KEYS and isinstance(value, int) and not isinstance(value, bool) and value > 0:
             # Honour the rollout engine's 1..128 parallelism cap on every path, so a pacing override
             # (from a campaign or a direct call) can never pace past what the engine accepts.
             rollout[key] = min(value, 128) if key == "parallelism" else value
+        elif key == "strategy" and value:
+            # A wave plan the worker cannot follow is the operator's to fix now, not a silent fallback
+            # discovered in the log an hour into the run.
+            if value not in ROLLOUT_STRATEGIES:
+                raise OperationError(f"unknown rollout strategy: {value!r}")
+            rollout["strategy"] = value
+        elif key == "stages" and value:
+            stages = [str(t).replace(" ", "") for t in value] if isinstance(value, list) else []
+            problems = validate_rollout_stages(stages, where="stages")
+            if problems:
+                raise OperationError("; ".join(problems))
+            rollout["stages"] = stages
 
     op_id = f"{action}-{datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
     request = {

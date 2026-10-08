@@ -57,6 +57,9 @@ const campaign: CampaignEdit = {
   max_launches: 0,
   max_unreachable: 0,
   timeout_seconds: 0,
+  fill_wave_size: 0,
+  strategy: "",
+  stages: [],
 };
 const op = { id: "distribute-20261007T155927Z-1310d8", action: "distribute", sus: [], images: [NCCL], state: "running" };
 
@@ -146,6 +149,42 @@ describe("CampaignsView", () => {
     m.getCatalog.mockResolvedValue(catalogOf());
     await renderLoaded();
     expect(screen.getByText(/The catalog is empty/)).toBeInTheDocument();
+  });
+
+  it("hides the ladder until the campaign stages by rack, and saves the plan it is given", async () => {
+    m.saveCampaigns.mockImplementation(async (campaigns: CampaignEdit[]) => ({ ok: true, cluster_id: "default", campaigns }));
+    await renderLoaded();
+    expect(screen.getByRole("radio", { name: "Cluster default" })).toBeChecked();
+    expect(screen.queryByLabelText("Stages")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("radio", { name: "Rack-staged" }));
+    const stages = screen.getByLabelText("Stages");
+    // Blank inherits the cluster's ladder, so it is not an error here.
+    expect(screen.queryByText(/At least one stage/)).not.toBeInTheDocument();
+    fireEvent.change(stages, { target: { value: "1, 2, 4" } });
+    expect(screen.getByText(/last stage must be 100%/)).toBeInTheDocument();
+    fireEvent.change(stages, { target: { value: "1, 2, 4, 8, 100%" } });
+    expect(screen.queryByText(/last stage must be 100%/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Fill wave size"), { target: { value: "72" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(m.saveCampaigns).toHaveBeenCalledTimes(1));
+    expect(m.saveCampaigns.mock.calls[0][0]).toEqual([
+      { ...campaign, strategy: "rack-staged", stages: ["1", "2", "4", "8", "100%"], fill_wave_size: 72 },
+    ]);
+  });
+
+  it("going back to the cluster default clears the strategy override", async () => {
+    m.getCampaigns.mockResolvedValue({ ok: true, cluster_id: "default",
+      campaigns: [{ ...campaign, strategy: "rack-staged", stages: ["1", "50%", "100%"] }] });
+    m.saveCampaigns.mockImplementation(async (campaigns: CampaignEdit[]) => ({ ok: true, cluster_id: "default", campaigns }));
+    await renderLoaded();
+    expect(screen.getByLabelText("Stages")).toHaveValue("1, 50%, 100%");
+    fireEvent.click(screen.getByRole("radio", { name: "Cluster default" }));
+    expect(screen.queryByLabelText("Stages")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(m.saveCampaigns).toHaveBeenCalledTimes(1));
+    expect(m.saveCampaigns.mock.calls[0][0][0].strategy).toBe("");
   });
 
   it("saves the edited campaigns, with a pacing field never below zero", async () => {

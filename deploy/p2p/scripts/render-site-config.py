@@ -7,7 +7,6 @@ import argparse
 import hashlib
 import ipaddress
 import json
-import os
 import pathlib
 import re
 import shlex
@@ -15,6 +14,7 @@ import shutil
 import stat
 import sys
 import tempfile
+from typing import NoReturn
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 DEFAULT_ROOT = "/home/hlakshminara/NVIS-P2P"
@@ -33,7 +33,7 @@ REQUIRED = (
 )
 
 
-def die(message: str) -> "NoReturn":
+def die(message: str) -> NoReturn:
     raise ValueError(message)
 
 
@@ -217,8 +217,8 @@ def render(values: dict[str, str], output: pathlib.Path) -> None:
     console_unit = output / "systemd/nvis-p2p-console-api.service"
     if console_unit.exists():
         text = console_unit.read_text()
-        text = re.sub(r"^Environment=NVIS_P2P_ELIGIBLE_NODES=.*$", f"Environment=NVIS_P2P_ELIGIBLE_NODES={current}/site/inventory/eligible.nodes", text, flags=re.M)
-        text = re.sub(r"^Environment=NVIS_P2P_OBJECT_STORE_HEALTH_URL=.*$", f"Environment=NVIS_P2P_OBJECT_STORE_HEALTH_URL=https://{app_ip}:19000/minio/health/live", text, flags=re.M)
+        text = re.sub(r"^Environment=NVIS_P2P_ELIGIBLE_NODES=.*$", f"Environment=NVIS_P2P_ELIGIBLE_NODES={current}/site/inventory/eligible.nodes", text, flags=re.MULTILINE)
+        text = re.sub(r"^Environment=NVIS_P2P_OBJECT_STORE_HEALTH_URL=.*$", f"Environment=NVIS_P2P_OBJECT_STORE_HEALTH_URL=https://{app_ip}:19000/minio/health/live", text, flags=re.MULTILINE)
         write(console_unit, text, 0o644)
 
     compose_sources = {

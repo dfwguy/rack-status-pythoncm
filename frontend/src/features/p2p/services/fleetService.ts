@@ -83,6 +83,13 @@ export function saveRosters(rosters: RosterEdit[]): Promise<RostersDoc> {
   });
 }
 
+/**
+ * How a distribute turns its roster into waves. `sequential` slices the roster in order;
+ * `rack-staged` gives every rack one holder first, then grows every rack up the stage ladder so new
+ * nodes pull from rack-mates (see the worker's `rack_staged_waves`).
+ */
+export type RolloutStrategy = "sequential" | "rack-staged";
+
 /** One saved campaign: a task (catalog image) paired with a roster and optional pacing overrides. */
 export type CampaignEdit = {
   name: string;
@@ -98,6 +105,12 @@ export type CampaignEdit = {
   max_launches: number;
   max_unreachable: number;
   timeout_seconds: number;
+  /** Nodes per wave after the first stage of a rack-staged plan; 0 inherits. */
+  fill_wave_size: number;
+  /** Wave plan override; blank inherits the cluster's rollout strategy. */
+  strategy: "" | RolloutStrategy;
+  /** Stage ladder override (e.g. ["1", "50%", "100%"]); empty inherits the cluster's. */
+  stages: string[];
 };
 
 export type CampaignsDoc = {
@@ -122,6 +135,7 @@ export function saveCampaigns(campaigns: CampaignEdit[]): Promise<CampaignsDoc> 
 /** The campaign fields that override the cluster's rollout pacing. */
 const CAMPAIGN_PACING_KEYS = [
   "wave_size", "parallelism", "poll_seconds", "max_launches", "max_unreachable", "timeout_seconds",
+  "fill_wave_size",
 ] as const;
 
 /**
@@ -130,10 +144,13 @@ const CAMPAIGN_PACING_KEYS = [
  * operations enqueue (and its single-flight 409), so a campaign holds no run state of its own.
  */
 export function launchCampaign(campaign: CampaignEdit): Promise<Operation> {
-  const pacing: Record<string, number> = {};
+  const pacing: RolloutPacing = {};
   for (const key of CAMPAIGN_PACING_KEYS) {
     if (campaign[key] > 0) pacing[key] = campaign[key];
   }
+  // The wave plan rides along only when the campaign overrides it; otherwise the cluster's applies.
+  if (campaign.strategy) pacing.strategy = campaign.strategy;
+  if (campaign.stages?.length) pacing.stages = campaign.stages;
   return startOperation({
     action: "distribute",
     sus: [],
@@ -144,6 +161,13 @@ export function launchCampaign(campaign: CampaignEdit): Promise<Operation> {
   });
 }
 
+/** A run's pacing overrides: numeric knobs, plus the wave plan (strategy and stage ladder). */
+export type RolloutPacing = {
+  [key: string]: number | string | string[] | undefined;
+  strategy?: RolloutStrategy;
+  stages?: string[];
+};
+
 export type OperationRequest = {
   action: OperationAction;
   sus: number[];
@@ -152,7 +176,7 @@ export type OperationRequest = {
   /** A named roster to target; blank/absent targets the cluster's default inventory. */
   roster?: string;
   /** Per-run rollout pacing overrides; keys the cluster default inherits are omitted. */
-  pacing?: Record<string, number>;
+  pacing?: RolloutPacing;
   /** The campaign that launched this run, if any; tags the operation for history. */
   campaign?: string;
 };

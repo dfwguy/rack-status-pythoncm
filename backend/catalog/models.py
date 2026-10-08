@@ -1204,6 +1204,59 @@ class Cluster:
         return derive_scalable_units(racks, racks_per_su, label_prefix=label_prefix)
 
 
+#: How a distribute splits its roster into waves. ``sequential`` slices the roster in order, as it
+#: is listed. ``rack-staged`` plans by placement instead: the first stage puts one node in every rack
+#: (the only stage that draws on the app server's seeds), later stages grow every rack to the next
+#: rung of the stage ladder, so each new node pulls from rack-mates the scheduler already prefers.
+ROLLOUT_STRATEGIES = ("sequential", "rack-staged")
+#: The default ladder: one node per rack, then half of every rack, then the rest. Halving first means
+#: a rack's first copy feeds about as many nodes as there are rack-mates left to fill, and the last
+#: stage pulls from half a rack of holders -- no single node serves the whole rack.
+DEFAULT_ROLLOUT_STAGES = ("1", "50%", "100%")
+_STAGE_RE = re.compile(r"^([1-9][0-9]*)(%?)$")
+
+
+def _as_stages(v: Any) -> list[str]:
+    """A stage ladder from a list or a comma-separated string, tokens trimmed and spaces dropped."""
+    raw = v.split(",") if isinstance(v, str) else v
+    return [t.replace(" ", "") for t in _as_str_list(raw)]
+
+
+def validate_rollout_stages(stages: list[str], where: str = "rollout_stages") -> list[str]:
+    """Problems with a rack-staged ladder; empty means usable.
+
+    Each rung is a cumulative per-rack target: a node count (``"1"``, ``"2"``) or a share of the
+    rack (``"50%"``). Counts must rise, shares must rise, and the ladder must end at ``"100%"`` so
+    every node in every rack is reached. Counts and shares may be mixed (``1, 2, 4, 50%, 100%``): a
+    rack smaller than a count simply reaches that rung early, which the planner handles by
+    skipping the rungs it has already passed.
+    """
+    if not stages:
+        return [f"{where}: at least one stage is required"]
+    problems: list[str] = []
+    counts: list[int] = []
+    shares: list[int] = []
+    for token in stages:
+        m = _STAGE_RE.match(token)
+        if not m:
+            problems.append(f"{where}: {token!r} is not a node count (e.g. 1) or a share (e.g. 50%)")
+            continue
+        value = int(m.group(1))
+        if m.group(2):
+            if value > 100:
+                problems.append(f"{where}: {token!r} is more than 100%")
+            shares.append(value)
+        else:
+            counts.append(value)
+    if problems:
+        return problems
+    if counts != sorted(set(counts)) or shares != sorted(set(shares)):
+        problems.append(f"{where}: stages must rise ({', '.join(stages)})")
+    if stages[-1] != "100%":
+        problems.append(f"{where}: the last stage must be 100% so every node is reached")
+    return problems
+
+
 @dataclass
 class P2pSettings:
     """Per-cluster NVIS-P2P instance configuration.
@@ -1265,6 +1318,13 @@ class P2pSettings:
     rollout_max_launches: int = 3
     rollout_max_unreachable: int = 3
     rollout_timeout_seconds: int = 1800
+    #: How the roster becomes waves (``ROLLOUT_STRATEGIES``). Under ``rack-staged`` the waves follow
+    #: ``rollout_stages`` over the cluster's topology inventory: the first stage loads the seeds and
+    #: is paced by ``rollout_wave_size``; every later stage pulls inside racks and is paced by
+    #: ``rollout_fill_wave_size`` (0 = the same as ``rollout_wave_size``), so it can run wider.
+    rollout_strategy: str = "sequential"
+    rollout_stages: list[str] = field(default_factory=lambda: list(DEFAULT_ROLLOUT_STAGES))
+    rollout_fill_wave_size: int = 0
 
     @classmethod
     def from_dict(cls, d: Any) -> P2pSettings:
@@ -1297,6 +1357,9 @@ class P2pSettings:
             rollout_max_launches=_as_int(d.get("rollout_max_launches"), base.rollout_max_launches),
             rollout_max_unreachable=_as_int(d.get("rollout_max_unreachable"), base.rollout_max_unreachable),
             rollout_timeout_seconds=_as_int(d.get("rollout_timeout_seconds"), base.rollout_timeout_seconds),
+            rollout_strategy=_as_str(d.get("rollout_strategy")).lower() or base.rollout_strategy,
+            rollout_stages=_as_stages(d.get("rollout_stages")) or base.rollout_stages,
+            rollout_fill_wave_size=_as_int(d.get("rollout_fill_wave_size"), base.rollout_fill_wave_size),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1322,6 +1385,11 @@ class P2pSettings:
         ):
             if value < 1:
                 problems.append(f"{label} must be at least 1, got {value}")
+        if self.rollout_strategy not in ROLLOUT_STRATEGIES:
+            problems.append(f"rollout_strategy must be one of {', '.join(ROLLOUT_STRATEGIES)}, got {self.rollout_strategy!r}")
+        problems.extend(validate_rollout_stages(self.rollout_stages))
+        if self.rollout_fill_wave_size < 0:
+            problems.append(f"rollout_fill_wave_size must be 0 (same as the wave size) or more, got {self.rollout_fill_wave_size}")
         return problems
 
     def provisioning_blockers(self) -> list[str]:
@@ -1553,6 +1621,7 @@ _CAMPAIGN_PACING_FIELDS = (
     "max_launches",
     "max_unreachable",
     "timeout_seconds",
+    "fill_wave_size",
 )
 
 
@@ -1577,6 +1646,11 @@ class P2pCampaign:
     max_launches: int = 0
     max_unreachable: int = 0
     timeout_seconds: int = 0
+    fill_wave_size: int = 0
+    #: Wave planning overrides; blank / empty inherits the cluster's ``rollout_strategy`` and
+    #: ``rollout_stages``.
+    strategy: str = ""
+    stages: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: Any) -> P2pCampaign:
@@ -1592,15 +1666,24 @@ class P2pCampaign:
             max_launches=_as_int(d.get("max_launches"), 0),
             max_unreachable=_as_int(d.get("max_unreachable"), 0),
             timeout_seconds=_as_int(d.get("timeout_seconds"), 0),
+            fill_wave_size=_as_int(d.get("fill_wave_size"), 0),
+            strategy=_as_str(d.get("strategy")).lower(),
+            stages=_as_stages(d.get("stages")),
         )
 
-    def pacing_overrides(self) -> dict[str, int]:
-        """The non-zero pacing fields, keyed as the enqueue's ``rollout`` block expects.
+    def pacing_overrides(self) -> dict[str, Any]:
+        """The overridden pacing and planning fields, keyed as the enqueue's ``rollout`` block expects.
 
-        Only overridden fields appear, so the enqueue can layer them onto the cluster defaults and a
-        campaign that overrides nothing inherits the cluster's pacing entirely.
+        Only overridden fields appear -- a positive number, a named strategy, a non-empty ladder --
+        so the enqueue can layer them onto the cluster defaults and a campaign that overrides nothing
+        inherits the cluster's pacing entirely.
         """
-        return {f: v for f in _CAMPAIGN_PACING_FIELDS if (v := getattr(self, f)) > 0}
+        out: dict[str, Any] = {f: v for f in _CAMPAIGN_PACING_FIELDS if (v := getattr(self, f)) > 0}
+        if self.strategy:
+            out["strategy"] = self.strategy
+        if self.stages:
+            out["stages"] = list(self.stages)
+        return out
 
 
 @dataclass
@@ -1650,9 +1733,14 @@ class P2pCampaigns:
             # same bounds the settings document enforces, so a launch can't pace past the engine's cap.
             if c.parallelism and not 1 <= c.parallelism <= 128:
                 problems.append(f"{where}: parallelism override must be between 1 and 128, got {c.parallelism}")
-            for label in ("wave_size", "poll_seconds", "max_launches", "max_unreachable", "timeout_seconds"):
+            for label in ("wave_size", "poll_seconds", "max_launches", "max_unreachable", "timeout_seconds",
+                          "fill_wave_size"):
                 if getattr(c, label) < 0:
                     problems.append(f"{where}: {label} override must not be negative")
+            if c.strategy and c.strategy not in ROLLOUT_STRATEGIES:
+                problems.append(f"{where}: strategy must be one of {', '.join(ROLLOUT_STRATEGIES)} (or blank to inherit)")
+            if c.stages:
+                problems.extend(validate_rollout_stages(c.stages, where=f"{where}: stages"))
         return problems
 
 

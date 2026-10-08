@@ -43,6 +43,9 @@ const campaign = (patch: Partial<CampaignEdit> = {}): CampaignEdit => ({
   max_launches: 0,
   max_unreachable: 0,
   timeout_seconds: 0,
+  fill_wave_size: 0,
+  strategy: "",
+  stages: [],
   ...patch,
 });
 
@@ -86,6 +89,11 @@ describe("launchCampaign", () => {
   it("sends only the pacing fields the campaign overrides", async () => {
     await launchCampaign(campaign({ wave_size: 25, timeout_seconds: 3600 }));
     expect(lastCall().body?.pacing).toEqual({ wave_size: 25, timeout_seconds: 3600 });
+  });
+
+  it("sends the wave plan only when the campaign overrides it", async () => {
+    await launchCampaign(campaign({ strategy: "rack-staged", stages: ["1", "50%", "100%"], fill_wave_size: 72 }));
+    expect(lastCall().body?.pacing).toEqual({ strategy: "rack-staged", stages: ["1", "50%", "100%"], fill_wave_size: 72 });
   });
 
   it("sends no pacing at all when every field inherits the cluster default", async () => {
