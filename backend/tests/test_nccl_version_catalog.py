@@ -143,3 +143,47 @@ def test_list_tools_injects_nothing_when_the_catalog_has_no_nccl_images(client, 
     data = client.get("/api/catalog/tools?cluster=nc").get_json()
     by_id = {t["id"]: t for t in data["items"]}
     assert "nccl_versions" not in by_id["llmb-nccl"]["launch"]["body"]
+
+
+# --- the preset-card version subtitle, derived from the code-owned preset -------------------
+
+
+def _preset_tool_doc(tool_id: str, preset_id: str, subtitle: str) -> dict:
+    return models.Tool.from_dict(
+        {
+            "id": tool_id,
+            "name": tool_id,
+            "subtitle": subtitle,
+            "script": "run-validation-preset.sh",
+            "compatible": {"match": "all"},
+            "surfaces": ["rackDetail.validation"],
+            "launch": {"kind": "validation-preset", "preset_id": preset_id},
+        }
+    ).to_dict()
+
+
+def test_preset_version_subtitle_derives_from_the_code_owned_preset():
+    # The acceptance sweep pins BOTH a NCCL and a CUDA version -> a derived card subtitle.
+    assert catalog_api._preset_version_subtitle("nccl-2.31.2") == "NCCL 2.30.7 · CUDA 13.0+"
+    # Llama pins NCCL but not CUDA, so it keeps its prose subtitle (no version derivation).
+    assert catalog_api._preset_version_subtitle("llama31-405b-fp8") is None
+    assert catalog_api._preset_version_subtitle("not-a-preset") is None
+
+
+def test_list_tools_shows_the_running_version_on_the_preset_card(tmp_path, monkeypatch):
+    from api import p2p_fleet
+
+    monkeypatch.setattr(p2p_fleet, "_load_catalog", lambda *a, cluster_id="", **k: {"images": []})
+    repo = TinyDBRepo(tmp_path / "catalog.json")
+    set_repo(repo)
+    # A stored card carrying a STALE version string, exactly as the deployed store does.
+    repo.upsert(TABLE_TOOLS, _preset_tool_doc("preset-nccl", "nccl-2.31.2", "NCCL 2.31.2 · CUDA 13.3+"))
+    app.config["TESTING"] = True
+    try:
+        with app.test_client() as c:
+            items = c.get("/api/catalog/tools?cluster=nc").get_json()["items"]
+    finally:
+        set_repo(None)
+    by_id = {t["id"]: t for t in items}
+    # The stale stored subtitle is overridden by the version the preset will actually run.
+    assert by_id["preset-nccl"]["subtitle"] == "NCCL 2.30.7 · CUDA 13.0+"

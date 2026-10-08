@@ -736,9 +736,11 @@ SEED_TOOLS: list[dict[str, Any]] = [
     # hard-coded button row in each view. The recipe stays code-owned; the catalogue entry is
     # now a document, so adding one is an edit rather than a release.
     _preset_tool(
-        "preset-nccl", "NCCL Acceptance Sweep", "NCCL 2.31.2 · CUDA 13.3+",
+        # Subtitle is the seed default only; list_tools derives the live card from the code-owned
+        # preset version (_preset_version_subtitle), so this never drifts from what the launcher runs.
+        "preset-nccl", "NCCL Acceptance Sweep", "NCCL 2.30.7 · CUDA 13.0+",
         "Direct host NCCL acceptance sweep. Fails closed unless the selected runtime really "
-        "is CUDA 13.3+ with NCCL 2.31.2.",
+        "is CUDA 13.0+ with NCCL 2.30.7.",
         "nccl-2.31.2", ["rackDetail.validation", "multirack"], "rack", 15,
         capabilities=["nvlink"], scopes=["node", "rack", "multirack"],
     ),

@@ -191,6 +191,28 @@ def _catalog_nccl_versions(cluster_id: str) -> list[dict[str, Any]]:
     return _nccl_versions_from_images(catalog.get("images", []))
 
 
+def _preset_version_subtitle(preset_id: str) -> str | None:
+    """The ``NCCL X · CUDA Y`` subtitle for a validation-preset tool, read from the code-owned
+    preset the tool registers — so the card can never drift from what the launcher actually runs.
+
+    The version lives in ``validation_presets.py`` precisely because it must not be weakenable from
+    a browser; the catalog tool only registers the preset by id and *displays* it. Deriving the
+    subtitle here, on every read, is what closes the drift the seed warned about (a stored
+    ``NCCL 2.31.2`` card while the recipe moved to 2.30.7). Only a preset that pins BOTH a NCCL and
+    a CUDA version gets a derived subtitle — today just the acceptance sweep — so recipes whose
+    subtitle is prose (``NCCL + LLMB, all trays``) keep it. The import is function-local for the
+    same reason as above: catalog registration must not load the launch stack at module time.
+    """
+    try:
+        import validation_presets  # lazy: avoid a module-load cycle through the catalog
+        preset = validation_presets.resolve_preset(preset_id)
+    except Exception:  # noqa: BLE001 - an unknown/odd preset simply keeps its stored subtitle
+        return None
+    nccl = (getattr(preset, "nccl_version", "") or "").strip()
+    cuda = (getattr(preset, "cuda_version", "") or "").strip()
+    return f"NCCL {nccl} · CUDA {cuda}" if nccl and cuda else None
+
+
 @action(get="catalog.tool:list")
 @catalog_bp.get("/tools")
 @action(get="catalog.tool:list")
@@ -208,6 +230,15 @@ def list_tools():
                 body = launch.get("body") if isinstance(launch, dict) else None
                 if isinstance(body, dict) and body.get("show_nccl_version"):
                     body["nccl_versions"] = nccl_versions
+        # Show the version the code-owned preset will actually run on the card, derived from the
+        # registered preset so the catalog tool and the launcher can never disagree.
+        for item in items:
+            launch = item.get("launch")
+            if not isinstance(launch, dict) or launch.get("kind") != "validation-preset":
+                continue
+            subtitle = _preset_version_subtitle(str(launch.get("preset_id") or ""))
+            if subtitle:
+                item["subtitle"] = subtitle
         return jsonify({"ok": True, "items": items})
     return _crud_list(TABLE_TOOLS, models.Tool)
 
