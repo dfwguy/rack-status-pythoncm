@@ -37,69 +37,92 @@ nvis_node_images_p2p() {
 # nvis_stage_node_image <tag> <host,csv> <source .sqsh>
 #
 # Make <source> present on every listed node at $(nvis_node_container_dir)/<basename>, then export
-# NVIS_NEMO_CONT to that path. A node whose copy already has the source's byte size is left alone:
-# the cache is usually warm (bringup's file_copy filled it), and rsync -a would otherwise re-read
-# 40+ GiB per node because the mtimes differ. Only a missing or short copy is rsync'd from the head
-# -- and on a P2P cluster (nvis_node_images_p2p) not even that: the image must already be there,
-# and a node without it fails the launch with a pointer to a P2P campaign.
+# NVIS_NEMO_CONT to that path.
+#
+# On a P2P cluster (nvis_node_images_p2p) nothing is copied: the image must already be there, and
+# a node without it fails the launch with a pointer to a P2P campaign. The proof is P2P's own
+# receipt (<cache>/.nvis-p2p/receipts/<basename>.sha256, written only after a verified download),
+# not a size compared against the launch host's copy -- on NC the launch host is the BCM head,
+# which mounts only /home and cannot see the shared store at all. Every node's receipt must name
+# this path and all of them must carry the same SHA256; if the source is readable here its size
+# is checked too.
+#
+# Elsewhere a node whose copy already has the source's byte size is left alone (rsync -a would
+# re-read 40+ GiB per node because the mtimes differ), and only a missing or short copy is rsync'd
+# from the head. The copy runs as the launching user first and falls back to sudo where the cache
+# is root-owned (as /raid was): RACK_SUDO_PASSWORD -> sudo -S, otherwise sudo -n.
 #
 # Success is counted, not assumed: every node must answer STAGE_OK. A node pdsh could not reach
 # never runs the remote command, so "no node reported a failure" would pass a run where ssh failed
 # everywhere (run-nemo-xrack.sh learned this the hard way). Returns non-zero before anything is
 # submitted when any node falls short.
-#
-# The copy runs as the launching user first (NC's /opt/containers is group-writable by cmods) and
-# falls back to sudo where the cache is root-owned (as /raid was): RACK_SUDO_PASSWORD -> sudo -S,
-# otherwise sudo -n (passwordless sudo in the node image, or already root). A warm cache needs no
-# write at all.
 nvis_stage_node_image() {
   local tag="$1" hostcsv="$2" src="$3"
-  local dir base dest size nhosts sudo_pfx out ok
+  local dir base dest size nhosts out ok q_dir q_dest q_src
   dir="$(nvis_node_container_dir)"
   base="$(basename "$src")"
   dest="${dir}/${base}"
   size=$(stat -c%s "$src" 2>/dev/null || echo 0)
-  if [[ ! "$size" =~ ^[1-9][0-9]*$ ]]; then
-    echo "${tag}: ERROR: image is missing or empty on the launch host: ${src}" >&2
-    return 1
-  fi
+  [[ "$size" =~ ^[1-9][0-9]*$ ]] || size=0
   nhosts=$(tr ',' '\n' <<<"$hostcsv" | grep -c . || true)
   if [[ "${nhosts:-0}" -eq 0 ]]; then
     echo "${tag}: ERROR: no nodes to stage ${base} onto" >&2
     return 1
   fi
-  if [[ -n "${RACK_SUDO_PASSWORD:-}" ]]; then
-    sudo_pfx="printf '%s\n' $(printf %q "$RACK_SUDO_PASSWORD") | sudo -S -p '' "
-  else
-    sudo_pfx="sudo -n "
-  fi
   # Quoted for the remote shell: dir/dest come from a validated cluster setting and src from the
   # launch environment, and none of them may split into extra words over there.
-  local q_dir q_dest q_src
   q_dir=$(printf %q "$dir"); q_dest=$(printf %q "$dest"); q_src=$(printf %q "$src")
-  local copy_cmd
+
   if nvis_node_images_p2p; then
-    # P2P owns this cache: verify only. Never write into it, never fan out from the head.
-    echo "${tag}: verifying ${base} (${size} bytes) in ${dir} on ${nhosts} node(s); NVIS-P2P owns this cache, so no head-node copy"
-    copy_cmd=":"
+    local q_receipt
+    q_receipt=$(printf %q "${dir}/.nvis-p2p/receipts/${base}.sha256")
+    echo "${tag}: verifying P2P receipts for ${base} in ${dir} on ${nhosts} node(s); NVIS-P2P owns this cache, so no head-node copy"
+    out=$(pdsh -R ssh -w "$hostcsv" \
+      "if [ ! -r ${q_dest} ]; then echo STAGE_FAIL_missing; \
+elif [ ! -r ${q_receipt} ]; then echo STAGE_FAIL_no_p2p_receipt; \
+else read -r sha path < ${q_receipt}; s=\$(stat -c%s ${q_dest} 2>/dev/null || echo 0); \
+if [ \"\$path\" != ${q_dest} ]; then echo STAGE_FAIL_receipt_names=\$path; \
+elif [ '${size}' != 0 ] && [ \"\$s\" != '${size}' ]; then echo STAGE_FAIL_size=\$s; \
+else echo STAGE_OK sha=\$sha; fi; fi" 2>&1)
   else
+    if [[ "$size" == 0 ]]; then
+      echo "${tag}: ERROR: image is missing or empty on the launch host: ${src}" >&2
+      return 1
+    fi
+    local sudo_pfx
+    if [[ -n "${RACK_SUDO_PASSWORD:-}" ]]; then
+      sudo_pfx="printf '%s\n' $(printf %q "$RACK_SUDO_PASSWORD") | sudo -S -p '' "
+    else
+      sudo_pfx="sudo -n "
+    fi
     echo "${tag}: staging ${base} (${size} bytes) into ${dir} on ${nhosts} node(s)"
-    copy_cmd="{ mkdir -p ${q_dir} && rsync -ah ${q_src} ${q_dest}; } 2>/dev/null \
-|| { ${sudo_pfx}mkdir -p ${q_dir} && ${sudo_pfx}rsync -ah ${q_src} ${q_dest}; }"
-  fi
-  out=$(pdsh -R ssh -w "$hostcsv" \
-    "s=\$(stat -c%s ${q_dest} 2>/dev/null || echo 0); \
-if [ \"\$s\" != '${size}' ]; then ${copy_cmd}; \
+    out=$(pdsh -R ssh -w "$hostcsv" \
+      "s=\$(stat -c%s ${q_dest} 2>/dev/null || echo 0); \
+if [ \"\$s\" != '${size}' ]; then { mkdir -p ${q_dir} && rsync -ah ${q_src} ${q_dest}; } 2>/dev/null \
+|| { ${sudo_pfx}mkdir -p ${q_dir} && ${sudo_pfx}rsync -ah ${q_src} ${q_dest}; }; \
 s=\$(stat -c%s ${q_dest} 2>/dev/null || echo 0); fi; \
 if [ \"\$s\" = '${size}' ] && [ -r ${q_dest} ]; then echo STAGE_OK; else echo STAGE_FAIL_size=\$s; fi" 2>&1)
+  fi
+
   ok=$(printf '%s\n' "$out" | grep -c 'STAGE_OK' || true)
   if [[ "${ok:-0}" -ne "$nhosts" ]]; then
-    echo "${tag}: ERROR: ${base} staged on only ${ok}/${nhosts} node(s) at ${dest}" >&2
+    echo "${tag}: ERROR: ${base} ready on only ${ok}/${nhosts} node(s) at ${dest}" >&2
     printf '%s\n' "$out" | grep -v 'STAGE_OK' | head -10 | sed 's/^/  /' >&2
     if nvis_node_images_p2p; then
       echo "${tag}: distribute ${base} to these nodes with a P2P campaign (Rack Status -> P2P), then relaunch" >&2
     fi
     return 1
+  fi
+  if nvis_node_images_p2p; then
+    # One image, one digest: nodes that each hold a *verified* but different build of the same
+    # filename (a re-staged catalog entry mid-rollout) must not run one job together.
+    local shas
+    shas=$(printf '%s\n' "$out" | grep -o 'STAGE_OK sha=[0-9a-f]*' | sort -u | grep -c . || true)
+    if [[ "$shas" -ne 1 ]]; then
+      echo "${tag}: ERROR: P2P receipts for ${base} disagree across nodes (${shas} distinct SHA256s)" >&2
+      printf '%s\n' "$out" | grep 'STAGE_OK' | sort -k3 | head -10 | sed 's/^/  /' >&2
+      return 1
+    fi
   fi
   echo "${tag}: ${base} ready on all ${nhosts} node(s) at ${dest}"
   export NVIS_NEMO_CONT="$dest"

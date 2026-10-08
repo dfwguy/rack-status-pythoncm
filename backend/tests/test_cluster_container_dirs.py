@@ -256,6 +256,7 @@ def _bash_with_fake_pdsh(tmp_path: Path, body: str, *, unreachable: str = "", en
         for h in "${{hs[@]}}"; do
           [[ " {unreachable} " == *" $h "* ]] && {{ echo "pdsh@x: $h: ssh exited with exit code 255" >&2; continue; }}
           bash -c "$cmd" 2>&1 | sed "s/^/$h: /"
+          [[ -n "${{PDSH_HOOK:-}}" ]] && bash -c "$PDSH_HOOK"
         done
         """))
     (bindir / "pdsh").chmod(0o755)
@@ -319,10 +320,19 @@ class TestTheStagingHelper:
         assert r.returncode == 1
         assert "no nodes" in r.stderr
 
-    def test_on_a_p2p_cluster_a_warm_cache_is_only_verified(self, tmp_path, image):
+    @staticmethod
+    def _p2p_cache(tmp_path, *, receipt_sha="ab" * 32, receipt=True):
         cache = tmp_path / "cache"
-        cache.mkdir()
+        (cache / ".nvis-p2p" / "receipts").mkdir(parents=True)
         (cache / "nemo.sqsh").write_bytes(b"y" * 4096)
+        if receipt:
+            (cache / ".nvis-p2p" / "receipts" / "nemo.sqsh.sha256").write_text(
+                f"{receipt_sha}  {cache}/nemo.sqsh\n"
+            )
+        return cache
+
+    def test_on_a_p2p_cluster_a_received_image_is_only_verified(self, tmp_path, image):
+        cache = self._p2p_cache(tmp_path)
         r = _bash_with_fake_pdsh(
             tmp_path,
             f'nvis_stage_node_image t n1,n2 "{image}" && echo "CONT=$NVIS_NEMO_CONT"',
@@ -330,9 +340,32 @@ class TestTheStagingHelper:
         )
         assert r.returncode == 0, r.stderr
         assert f"CONT={cache}/nemo.sqsh" in r.stdout
-        assert "verifying" in r.stdout
+        assert not (tmp_path / "rsync.log").exists()
 
-    def test_on_a_p2p_cluster_a_missing_image_fails_and_is_never_copied(self, tmp_path, image):
+    def test_on_a_p2p_cluster_the_launch_host_need_not_see_the_source(self, tmp_path):
+        """NC launches from the BCM head, which mounts only /home: /cluster/containers is absent
+        there. The basename names the image; the P2P receipt on each node proves it."""
+        cache = self._p2p_cache(tmp_path)
+        r = _bash_with_fake_pdsh(
+            tmp_path,
+            'nvis_stage_node_image t n1 /cluster/containers/nemo.sqsh',
+            env={"NVIS_NODE_CONTAINER_DIR": str(cache), "NVIS_NODE_IMAGES_P2P": "1"},
+        )
+        assert r.returncode == 0, r.stderr
+
+    def test_on_a_p2p_cluster_a_file_without_a_receipt_fails_and_is_never_copied(self, tmp_path, image):
+        cache = self._p2p_cache(tmp_path, receipt=False)
+        r = _bash_with_fake_pdsh(
+            tmp_path,
+            f'nvis_stage_node_image t n1 "{image}"',
+            env={"NVIS_NODE_CONTAINER_DIR": str(cache), "NVIS_NODE_IMAGES_P2P": "1"},
+        )
+        assert r.returncode == 1
+        assert "no_p2p_receipt" in r.stderr
+        assert "P2P campaign" in r.stderr
+        assert not (tmp_path / "rsync.log").exists()
+
+    def test_on_a_p2p_cluster_a_missing_image_fails(self, tmp_path, image):
         cache = tmp_path / "cache"
         r = _bash_with_fake_pdsh(
             tmp_path,
@@ -340,9 +373,20 @@ class TestTheStagingHelper:
             env={"NVIS_NODE_CONTAINER_DIR": str(cache), "NVIS_NODE_IMAGES_P2P": "1"},
         )
         assert r.returncode == 1
-        assert "P2P campaign" in r.stderr
-        assert not (tmp_path / "rsync.log").exists()
-        assert not (cache / "nemo.sqsh").exists()
+        assert "STAGE_FAIL_missing" in r.stderr
+
+    def test_on_a_p2p_cluster_receipts_that_disagree_fail(self, tmp_path, image):
+        """Two verified-but-different builds of one filename must not run one job together."""
+        cache = self._p2p_cache(tmp_path)
+        receipt = cache / ".nvis-p2p" / "receipts" / "nemo.sqsh.sha256"
+        hook = f"printf '%s  %s\\n' {'cd' * 32} {cache}/nemo.sqsh > {receipt}"
+        r = _bash_with_fake_pdsh(
+            tmp_path,
+            f'nvis_stage_node_image t n1,n2 "{image}"',
+            env={"NVIS_NODE_CONTAINER_DIR": str(cache), "NVIS_NODE_IMAGES_P2P": "1", "PDSH_HOOK": hook},
+        )
+        assert r.returncode == 1
+        assert "disagree" in r.stderr
 
 
 def test_the_rsync_launchers_refuse_to_copy_on_a_p2p_cluster(tmp_path):
