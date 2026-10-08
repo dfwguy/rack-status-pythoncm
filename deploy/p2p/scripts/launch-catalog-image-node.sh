@@ -3,7 +3,7 @@ set -euo pipefail
 
 node=${1:?node is required}
 filename=${2:?canonical image filename is required}
-base=/opt/containers/.nvis-p2p
+base=${NVIS_P2P_BASE:-/opt/containers/.nvis-p2p}
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=2)
 
 ssh "${ssh_opts[@]}" "$node" bash -s -- "$base" "$filename" <<'REMOTE'

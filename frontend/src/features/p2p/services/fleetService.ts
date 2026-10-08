@@ -107,6 +107,8 @@ export type CampaignEdit = {
   timeout_seconds: number;
   /** Nodes per wave after the first stage of a rack-staged plan; 0 inherits. */
   fill_wave_size: number;
+  /** Seconds without download progress before a node is stopped and relaunched; 0 inherits. */
+  stall_seconds: number;
   /** Wave plan override; blank inherits the cluster's rollout strategy. */
   strategy: "" | RolloutStrategy;
   /** Stage ladder override (e.g. ["1", "50%", "100%"]); empty inherits the cluster's. */
@@ -135,7 +137,7 @@ export function saveCampaigns(campaigns: CampaignEdit[]): Promise<CampaignsDoc> 
 /** The campaign fields that override the cluster's rollout pacing. */
 const CAMPAIGN_PACING_KEYS = [
   "wave_size", "parallelism", "poll_seconds", "max_launches", "max_unreachable", "timeout_seconds",
-  "fill_wave_size",
+  "fill_wave_size", "stall_seconds",
 ] as const;
 
 /**

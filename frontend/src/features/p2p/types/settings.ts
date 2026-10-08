@@ -50,6 +50,8 @@ export interface P2pSettingsDoc {
   rollout_stages: string[];
   /** Nodes per wave after the first (seed-loading) stage; 0 = the same as rollout_wave_size. */
   rollout_fill_wave_size: number;
+  /** Seconds a download may go without writing a byte before it is stopped and relaunched; 0 = off. */
+  rollout_stall_seconds: number;
 }
 
 /** GET /api/p2p/settings and PUT response. */

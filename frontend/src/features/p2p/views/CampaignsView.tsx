@@ -32,7 +32,7 @@ import type { Operation } from "../types/fleet";
 const emptyCampaign = (): CampaignEdit => ({
   name: "", description: "", image: "", roster: "",
   wave_size: 0, parallelism: 0, poll_seconds: 0, max_launches: 0, max_unreachable: 0, timeout_seconds: 0,
-  fill_wave_size: 0, strategy: "", stages: [],
+  fill_wave_size: 0, stall_seconds: 0, strategy: "", stages: [],
 });
 
 /** The wave plan a campaign can pick; "inherit" stands for the blank override (the cluster decides). */
@@ -50,6 +50,7 @@ const PACING_FIELDS: { key: keyof CampaignEdit; label: string; placeholder: stri
   { key: "max_launches", label: "Max launches", placeholder: "default" },
   { key: "max_unreachable", label: "Max unreachable", placeholder: "default" },
   { key: "timeout_seconds", label: "Timeout (s)", placeholder: "default" },
+  { key: "stall_seconds", label: "Stall (s)", placeholder: "default" },
 ];
 
 export default function CampaignsView() {

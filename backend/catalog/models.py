@@ -1325,6 +1325,10 @@ class P2pSettings:
     rollout_strategy: str = "sequential"
     rollout_stages: list[str] = field(default_factory=lambda: list(DEFAULT_ROLLOUT_STAGES))
     rollout_fill_wave_size: int = 0
+    #: A download whose written bytes have not moved for this many seconds is stopped and relaunched
+    #: (deferred once it has used ``rollout_max_launches``) instead of holding its wave open until
+    #: the timeout. 0 disables the check.
+    rollout_stall_seconds: int = 600
 
     @classmethod
     def from_dict(cls, d: Any) -> P2pSettings:
@@ -1360,6 +1364,7 @@ class P2pSettings:
             rollout_strategy=_as_str(d.get("rollout_strategy")).lower() or base.rollout_strategy,
             rollout_stages=_as_stages(d.get("rollout_stages")) or base.rollout_stages,
             rollout_fill_wave_size=_as_int(d.get("rollout_fill_wave_size"), base.rollout_fill_wave_size),
+            rollout_stall_seconds=_as_int(d.get("rollout_stall_seconds"), base.rollout_stall_seconds),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1390,6 +1395,8 @@ class P2pSettings:
         problems.extend(validate_rollout_stages(self.rollout_stages))
         if self.rollout_fill_wave_size < 0:
             problems.append(f"rollout_fill_wave_size must be 0 (same as the wave size) or more, got {self.rollout_fill_wave_size}")
+        if self.rollout_stall_seconds < 0:
+            problems.append(f"rollout_stall_seconds must be 0 (off) or more, got {self.rollout_stall_seconds}")
         return problems
 
     def provisioning_blockers(self) -> list[str]:
@@ -1622,6 +1629,7 @@ _CAMPAIGN_PACING_FIELDS = (
     "max_unreachable",
     "timeout_seconds",
     "fill_wave_size",
+    "stall_seconds",
 )
 
 
@@ -1647,6 +1655,8 @@ class P2pCampaign:
     max_unreachable: int = 0
     timeout_seconds: int = 0
     fill_wave_size: int = 0
+    #: Stall window override; 0 inherits (turning stall handling off is a cluster setting).
+    stall_seconds: int = 0
     #: Wave planning overrides; blank / empty inherits the cluster's ``rollout_strategy`` and
     #: ``rollout_stages``.
     strategy: str = ""
@@ -1667,6 +1677,7 @@ class P2pCampaign:
             max_unreachable=_as_int(d.get("max_unreachable"), 0),
             timeout_seconds=_as_int(d.get("timeout_seconds"), 0),
             fill_wave_size=_as_int(d.get("fill_wave_size"), 0),
+            stall_seconds=_as_int(d.get("stall_seconds"), 0),
             strategy=_as_str(d.get("strategy")).lower(),
             stages=_as_stages(d.get("stages")),
         )
@@ -1734,7 +1745,7 @@ class P2pCampaigns:
             if c.parallelism and not 1 <= c.parallelism <= 128:
                 problems.append(f"{where}: parallelism override must be between 1 and 128, got {c.parallelism}")
             for label in ("wave_size", "poll_seconds", "max_launches", "max_unreachable", "timeout_seconds",
-                          "fill_wave_size"):
+                          "fill_wave_size", "stall_seconds"):
                 if getattr(c, label) < 0:
                     problems.append(f"{where}: {label} override must not be negative")
             if c.strategy and c.strategy not in ROLLOUT_STRATEGIES:

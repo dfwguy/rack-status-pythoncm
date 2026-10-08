@@ -126,6 +126,13 @@ new node per step, at the cost of more waves. Because later stages pull inside r
 wider waves than the seed stage without adding seed load — which is why the two are paced
 separately.
 
+On a fleet that already holds the image in most racks, seeding every rack again is wasted work —
+the first run of the plan spent its seed waves on racks that had copies, and picked a few freshly
+reimaged nodes as seeds. So the plan reads the fleet snapshot when it is fresh: holders count
+toward each rack's rungs, a rack with a copy gets no seed, and a rack is seeded by its most proven
+peer. The gain from staging is therefore largest on a cold fleet or a set of new racks; on a warm
+fleet most of what remains is fewer waves, each with less fixed overhead.
+
 ## The sharp edges, and where they come from
 
 None of these are bugs; they follow from the design, and knowing them is the difference between the
@@ -141,10 +148,14 @@ system working and mysteriously not.
   (so it correctly *skips* a re-run) but has GC'd the servable pieces — so a late repair of a few
   stragglers falls back to the seeds. The swarm for a given image fades after a day, which is exactly
   why the seeds must be permanent.
-- **A single stuck node can hold a wave open to its timeout.** The campaign polls until every node is
-  `ready` or `deferred`; one node that neither succeeds nor becomes unreachable keeps the loop
-  running to `max_launches` × poll cycles. There is no straggler prioritisation — you re-run with the
-  `deferred.tsv` as the next roster.
+- **A stuck download used to hold a wave open to its timeout.** The campaign polls until every node
+  is `ready` or `deferred`, and a download that neither finished nor failed counted as active — on NC
+  one sat on 40 of 42.5 GB, idle, for a quarter of an hour. The rollout now watches the bytes each
+  download has actually written and treats one that has not moved for the stall window as stuck:
+  it is stopped and relaunched (the peer keeps its pieces and the scheduler picks new parents), and
+  deferred once it has used its launches. What remains is the stall window itself, which must be
+  long enough to cover a slow transfer that is still moving. Re-run with `deferred.tsv` as the next
+  roster to pick up what was deferred.
 
 ## Idempotency: why re-running is cheap and correct
 

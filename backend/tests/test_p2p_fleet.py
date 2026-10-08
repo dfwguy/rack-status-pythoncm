@@ -401,6 +401,14 @@ class TestRolloutWavePlanSettings:
     def test_counts_and_shares_may_mix(self):
         assert models.validate_rollout_stages(["1", "2", "4", "50%", "100%"]) == []
 
+    def test_the_stall_window_defaults_on_and_zero_turns_it_off(self):
+        assert models.P2pSettings(cluster_id="c1").rollout_stall_seconds == 600
+        off = models.P2pSettings.from_dict({"cluster_id": "c1", "rollout_stall_seconds": 0})
+        assert off.rollout_stall_seconds == 0 and off.validate() == []
+        assert models.P2pSettings.from_dict(off.to_dict()).rollout_stall_seconds == 0
+        assert any("rollout_stall_seconds" in p
+                   for p in models.P2pSettings(cluster_id="c1", rollout_stall_seconds=-1).validate())
+
     def test_settings_validation(self):
         bad = models.P2pSettings(cluster_id="c1", rollout_strategy="random", rollout_stages=["1"],
                                  rollout_fill_wave_size=-1)
@@ -578,6 +586,9 @@ class TestP2pCampaignsModel:
                                         "stages": ["1", "50%", "100%"]}
         back = models.P2pCampaign.from_dict(models.P2pCampaigns(cluster_id="c1", campaigns=[c]).to_dict()["campaigns"][0])
         assert (back.strategy, back.stages, back.fill_wave_size) == ("rack-staged", ["1", "50%", "100%"], 72)
+        assert models.P2pCampaign(name="n", image="n.sqsh", stall_seconds=300).pacing_overrides() == {"stall_seconds": 300}
+        assert any("stall_seconds override must not be negative" in p for p in models.P2pCampaigns.from_dict(
+            {"cluster_id": "c1", "campaigns": [{"name": "s", "image": "a.sqsh", "stall_seconds": -1}]}).validate())
         # Saved before these fields existed: nothing overridden, the cluster decides.
         old = models.P2pCampaign.from_dict({"name": "n", "image": "n.sqsh", "wave_size": 25})
         assert old.pacing_overrides() == {"wave_size": 25}
@@ -665,6 +676,7 @@ class TestP2pCampaignsApi:
         assert req["request"]["rollout"]["strategy"] == "sequential"
         assert req["request"]["rollout"]["stages"] == ["1", "50%", "100%"]
         assert req["request"]["rollout"]["fill_wave_size"] == 0
+        assert req["request"]["rollout"]["stall_seconds"] == 600
 
     def _launch(self, client, tmp_path, monkeypatch, pacing, **settings):
         import p2p_operations
@@ -689,6 +701,10 @@ class TestP2pCampaignsApi:
         rollout = self._rollout(tmp_path)
         assert rollout["strategy"] == "rack-staged" and rollout["stages"] == ["1", "2", "4", "8", "100%"]
         assert rollout["fill_wave_size"] == 72
+
+    def test_a_campaign_can_shorten_the_stall_window(self, client, tmp_path, monkeypatch):
+        assert self._launch(client, tmp_path, monkeypatch, {"stall_seconds": 300}).status_code == 202
+        assert self._rollout(tmp_path)["stall_seconds"] == 300
 
     def test_the_cluster_default_plan_applies_when_the_campaign_names_none(self, client, tmp_path, monkeypatch):
         resp = self._launch(client, tmp_path, monkeypatch, {"wave_size": 25},

@@ -186,3 +186,15 @@ class TestQueue:
         done = json.loads(path.read_text())
         assert done["state"] == "succeeded" and done["finished_at"]
         assert _calls(site)[0].startswith("audit-fleet.sh")
+
+
+class TestRolloutEnv:
+    def test_the_stall_window_reaches_the_rollout(self):
+        env = worker._rollout_env({}, {"stall_seconds": 300}, "/opt/nvis-p2p")
+        assert env["NVIS_P2P_ROLLOUT_STALL_SECONDS"] == "300"
+
+    def test_a_request_queued_before_the_field_existed_gets_the_default(self):
+        assert worker._rollout_env({}, {}, "/opt/nvis-p2p")["NVIS_P2P_ROLLOUT_STALL_SECONDS"] == "600"
+
+    def test_zero_is_passed_through_as_off(self):
+        assert worker._rollout_env({}, {"stall_seconds": 0}, "/opt/nvis-p2p")["NVIS_P2P_ROLLOUT_STALL_SECONDS"] == "0"

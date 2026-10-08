@@ -4,12 +4,15 @@ set -euo pipefail
 filename=${1:?canonical image filename is required}
 roster=${2:?eligible roster file is required}
 label=${3:-fleet}
-root=${NVIS_P2P_ROOT:-/home/hlakshminara/NVIS-P2P}
+root=${NVIS_P2P_ROOT:-/opt/nvis-p2p}
 parallelism=${NVIS_P2P_ROLLOUT_PARALLELISM:-48}
 poll_seconds=${NVIS_P2P_ROLLOUT_POLL_SECONDS:-60}
 max_launches=${NVIS_P2P_ROLLOUT_MAX_LAUNCHES:-3}
 max_unreachable=${NVIS_P2P_ROLLOUT_MAX_UNREACHABLE:-3}
 timeout_seconds=${NVIS_P2P_ROLLOUT_TIMEOUT_SECONDS:-28800}
+# A download whose written bytes have not moved for this long is stopped and relaunched (or deferred
+# once it has used its launches), instead of holding the wave open until the timeout. 0 disables.
+stall_seconds=${NVIS_P2P_ROLLOUT_STALL_SECONDS:-600}
 
 [[ $parallelism =~ ^[1-9][0-9]*$ && $parallelism -le 128 ]] || {
   echo "ROLLOUT_BAD_PARALLELISM value=$parallelism expected=1..128" >&2; exit 64;
@@ -17,6 +20,7 @@ timeout_seconds=${NVIS_P2P_ROLLOUT_TIMEOUT_SECONDS:-28800}
 for value in "$poll_seconds" "$max_launches" "$max_unreachable" "$timeout_seconds"; do
   [[ $value =~ ^[1-9][0-9]*$ ]] || { echo "ROLLOUT_BAD_LIMIT value=$value" >&2; exit 64; }
 done
+[[ $stall_seconds =~ ^[0-9]+$ ]] || { echo "ROLLOUT_BAD_LIMIT value=$stall_seconds" >&2; exit 64; }
 [[ -r $roster ]] || { echo "ROLLOUT_ROSTER_UNREADABLE roster=$roster" >&2; exit 66; }
 
 row=$(awk -F '\t' -v image="$filename" '$3 == image {print; exit}' "$root/catalog/images.tsv")
@@ -39,6 +43,7 @@ printf 'node\tlaunches\tunreachable\tlast_state\tlast_detail\n' > "$run_dir/trac
 awk '{printf "%s\t0\t0\tNEW\t-\n", $0}' "$nodes" >> "$run_dir/tracking.tsv"
 printf 'node\treason\ttimestamp_utc\n' > "$run_dir/deferred.tsv"
 printf 'node\ttimestamp_utc\n' > "$run_dir/ready.tsv"
+printf 'node\twritten\tsince_epoch\n' > "$run_dir/progress.tsv"
 
 log=$run_dir/rollout.log
 exec > >(tee -a "$log") 2>&1
@@ -76,6 +81,23 @@ while :; do
     "$run_dir/tracking.tsv" "$run_dir/check-$iteration.tsv" > "$run_dir/tracking.next"
   mv "$run_dir/tracking.next" "$run_dir/tracking.tsv"
 
+  # Progress per ACTIVE download: when its written bytes last changed. A node is stalled once that is
+  # stall_seconds ago -- unless nothing can be measured yet (written=-1) or every byte is already
+  # there (it is checksumming, which takes minutes on a large image and is not a stall).
+  now_epoch=$(date +%s)
+  : > "$run_dir/stalled.nodes"
+  awk -F '\t' -v OFS='\t' -v now="$now_epoch" -v stall="$stall_seconds" -v full="$expected_bytes" \
+      -v stalled="$run_dir/stalled.nodes" \
+    'BEGIN {print "node","written","since_epoch"}
+     NR==FNR {if (FNR>1) {prev[$1]=$2; since[$1]=$3}; next}
+     $2=="ACTIVE" {
+       w=-1; if (match($3, /written=-?[0-9]+/)) w=substr($3, RSTART+8, RLENGTH-8)+0
+       s=(($1 in prev) && prev[$1]==w) ? since[$1] : now
+       print $1, w, s
+       if (stall>0 && w>=0 && w<full+0 && now-s>=stall) print $1 > stalled
+     }' "$run_dir/progress.tsv" "$run_dir/check-$iteration.tsv" > "$run_dir/progress.next"
+  mv "$run_dir/progress.next" "$run_dir/progress.tsv"
+
   while IFS=$'\t' read -r node state detail; do
     [[ $state == READY ]] || continue
     grep -Fqx "$node" <(awk 'NR>1 {print $1}' "$run_dir/ready.tsv") || \
@@ -83,10 +105,21 @@ while :; do
   done < "$run_dir/check-$iteration.tsv"
 
   : > "$run_dir/relaunch.nodes"
+  : > "$run_dir/stop.nodes"
   while IFS=$'\t' read -r node launches unreachable state detail; do
     [[ $node == node ]] && continue
     case $state in
-      READY|ACTIVE) ;;
+      READY) ;;
+      ACTIVE)
+        if grep -Fqx "$node" "$run_dir/stalled.nodes"; then
+          printf '%s\n' "$node" >> "$run_dir/stop.nodes"
+          if (( launches < max_launches )); then
+            printf '%s\n' "$node" >> "$run_dir/relaunch.nodes"
+          else
+            printf '%s\t%s\t%s\n' "$node" "stalled_${stall_seconds}s_after_${launches}_launches" "$(date -u +%FT%TZ)" >> "$run_dir/deferred.tsv"
+          fi
+        fi
+        ;;
       UNREACHABLE)
         if (( unreachable >= max_unreachable )); then
           printf '%s\t%s\t%s\n' "$node" "unreachable_after_${unreachable}_checks" "$(date -u +%FT%TZ)" >> "$run_dir/deferred.tsv"
@@ -105,6 +138,21 @@ while :; do
         ;;
     esac
   done < "$run_dir/tracking.tsv"
+
+  stops=$(wc -l < "$run_dir/stop.nodes")
+  if (( stops > 0 )); then
+    # Stop first, so the relaunch below starts a fresh transfer rather than finding the old one alive.
+    set +e
+    xargs -r -P "$parallelism" -I{} "$root/scripts/stop-catalog-image-node.sh" \
+      "{}" "$filename" < "$run_dir/stop.nodes" > "$run_dir/stop-$iteration.log" 2>&1
+    stop_rc=$?
+    set -e
+    # A stopped node starts its stall clock again from its next measurement.
+    awk -F '\t' 'NR==FNR {stopped[$1]=1; next} !($1 in stopped)' \
+      "$run_dir/stop.nodes" "$run_dir/progress.tsv" > "$run_dir/progress.next"
+    mv "$run_dir/progress.next" "$run_dir/progress.tsv"
+    echo "ROLLOUT_STALLED iteration=$iteration nodes=$stops stall_seconds=$stall_seconds rc=$stop_rc"
+  fi
 
   sort -u -o "$run_dir/relaunch.nodes" "$run_dir/relaunch.nodes"
   relaunches=$(wc -l < "$run_dir/relaunch.nodes")

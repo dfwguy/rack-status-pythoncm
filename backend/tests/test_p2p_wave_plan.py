@@ -24,7 +24,9 @@ plan that falls back to plain slicing -- loudly -- when the topology is missing.
 
 from __future__ import annotations
 
+import datetime
 import importlib.util
+import json
 import math
 from pathlib import Path
 
@@ -152,6 +154,102 @@ class TestRackStagedWaves:
         assert summary["unplaced"] == 3
 
 
+def _fleet_state(holders=(), unreachable=(), present=None):
+    return worker.FleetState(set(holders), set(unreachable), dict(present or {}), age=60)
+
+
+class TestPlanWithAFleetSnapshot:
+    """What is already on the fleet changes the plan: no seed wave for a rack that holds the image,
+    seeds chosen from proven peers, unreachable nodes kept out of the early stages."""
+
+    def _rack(self, name, size, su="19"):
+        return {f"{name}-{i:02d}": (su, name) for i in range(1, size + 1)}
+
+    def test_a_rack_already_half_full_goes_straight_to_its_last_stage(self):
+        topo = self._rack("U19", 17)
+        all_nodes = sorted(topo)
+        holders, roster = all_nodes[:9], all_nodes[9:]          # 9 of 17 hold it: past the 50% rung
+        waves, summary = worker.rack_staged_waves(roster, topo, LADDER, 25, 72, _fleet_state(holders))
+        assert waves == [("100%", roster)]
+        assert summary["racks_already_holding"] == 1
+        assert [row["nodes"] for row in summary["stages"]] == [0, 0, 8]
+
+    def test_a_rack_with_one_holder_skips_seeding_and_fills_to_half(self):
+        topo = self._rack("U19", 17)
+        all_nodes = sorted(topo)
+        roster = all_nodes[1:]
+        waves, _ = worker.rack_staged_waves(roster, topo, LADDER, 25, 72, _fleet_state([all_nodes[0]]))
+        assert [stage for stage, _ in waves] == ["50%", "100%"]
+        assert len(waves[0][1]) == 8 and len(waves[1][1]) == 8     # 1 held + 8 = 9 = half of 17
+
+    def test_the_seed_is_the_most_proven_reachable_peer(self):
+        topo = self._rack("U19", 4)
+        a, b, c, d = sorted(topo)
+        fleet = _fleet_state(unreachable=[d], present={a: 0, b: 5, c: 2, d: 7})
+        waves, _ = worker.rack_staged_waves([a, b, c, d], topo, LADDER, 25, 72, fleet)
+        assert waves[0] == ("1", [b])                 # most verified images; d has more but is unreachable
+        assert waves[-1][1][-1] == d                  # the unreachable node is filled last
+
+    def test_unreachable_nodes_never_seed_a_rack(self):
+        topo = self._rack("U19", 3)
+        nodes = sorted(topo)
+        waves, summary = worker.rack_staged_waves(nodes, topo, LADDER, 25, 72, _fleet_state(unreachable=nodes))
+        assert waves == [("100%", nodes)]
+        assert summary["roster_unreachable"] == 3
+
+    def test_roster_nodes_that_already_hold_it_go_last(self):
+        topo = self._rack("U19", 4)
+        a, b, c, d = sorted(topo)
+        waves, summary = worker.rack_staged_waves([a, b, c, d], topo, LADDER, 25, 72, _fleet_state(holders=[a]))
+        assert a not in [n for s, w in waves if s != "100%" for n in w]
+        assert waves[-1][1][-1] == a and summary["roster_holders"] == 1
+
+    def test_without_a_snapshot_the_plan_is_unchanged(self):
+        nodes, topo = _fleet({"19": [("U19", 17), ("U20", 5)]})
+        assert worker.rack_staged_waves(nodes, topo, LADDER, 25, 72) == \
+            worker.rack_staged_waves(nodes, topo, LADDER, 25, 72, None)
+
+
+class TestLoadFleetState:
+    IMAGE = "nemo.sqsh"
+
+    def _snapshot(self, tmp_path, generated: datetime.datetime, rows):
+        path = tmp_path / "default.json"
+        path.write_text(json.dumps({"coverage": {"generated_at": generated.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                                 "nodes": rows}}))
+        return path
+
+    def test_reads_holders_reachability_and_track_record(self, tmp_path):
+        now = datetime.datetime.now(datetime.timezone.utc)
+        path = self._snapshot(tmp_path, now, [
+            {"node": "a", "state": "complete", "verified": 7, "images": {self.IMAGE: "ready"}},
+            {"node": "b", "state": "incomplete", "verified": 2, "images": {self.IMAGE: "missing"}},
+            {"node": "c", "state": "unreachable", "verified": 0, "images": {self.IMAGE: "missing"}}])
+        fleet = worker._load_fleet_state(path, self.IMAGE, tmp_path / "op.log")
+        assert fleet.holders == {"a"} and fleet.unreachable == {"c"}
+        assert fleet.present == {"a": 7, "b": 2, "c": 0} and fleet.age < 60
+
+    def test_a_stale_snapshot_is_not_trusted(self, tmp_path):
+        old = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
+        path = self._snapshot(tmp_path, old, [{"node": "a", "state": "complete", "images": {self.IMAGE: "ready"}}])
+        log = tmp_path / "op.log"
+        assert worker._load_fleet_state(path, self.IMAGE, log) is None
+        assert "s old; planning by placement only" in log.read_text()
+
+    @pytest.mark.parametrize("content", [None, "{not json", json.dumps({"coverage": {}})])
+    def test_a_missing_or_malformed_snapshot_falls_back(self, tmp_path, content):
+        path = tmp_path / "default.json"
+        if content is not None:
+            path.write_text(content)
+        log = tmp_path / "op.log"
+        assert worker._load_fleet_state(path, self.IMAGE, log) is None
+        assert "planning by placement only" in log.read_text()
+
+    def test_the_snapshot_sits_beside_the_operations_directory(self, tmp_path):
+        ops = tmp_path / "state" / "p2p-operations" / "default"
+        assert worker.default_snapshot(ops) == tmp_path / "state" / "p2p-snapshots" / "default.json"
+
+
 class TestPlanWaves:
     def _env(self, tmp_path, topo_text=None):
         root = tmp_path / "root" / "current"
@@ -191,6 +289,19 @@ class TestPlanWaves:
                                    env, tmp_path / "op.log")
         # A two-node rack: its first node seeds it, half of it is already held, the last node fills it.
         assert waves == [("1", ["a"]), ("100%", ["b"])]
+
+    def test_a_fresh_snapshot_shapes_the_plan_and_is_logged(self, tmp_path):
+        topo = "".join(f"n{i}\t19\tU19\n" for i in range(4))
+        snap = tmp_path / "snap.json"
+        snap.write_text(json.dumps({"coverage": {
+            "generated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "nodes": [{"node": "n0", "state": "complete", "verified": 3, "images": {"img.sqsh": "ready"}}]}}))
+        log = tmp_path / "op.log"
+        waves = worker._plan_waves(["n1", "n2", "n3"],
+                                   {"wave_size": 25, "strategy": "rack-staged", "stages": LADDER},
+                                   self._env(tmp_path, topo), log, "img.sqsh", snap)
+        assert [s for s, _ in waves] == ["50%", "100%"]          # n0 already seeds the rack
+        assert "1 racks already hold the image, 0 roster nodes hold it" in log.read_text()
 
     def test_a_missing_topology_falls_back_to_sequential_and_says_so(self, tmp_path):
         log = tmp_path / "op.log"

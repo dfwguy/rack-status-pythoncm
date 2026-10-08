@@ -59,6 +59,7 @@ def _rollout_env(base: dict, rollout: dict, root: str) -> dict:
     env["NVIS_P2P_ROLLOUT_MAX_LAUNCHES"] = str(rollout.get("max_launches", 3))
     env["NVIS_P2P_ROLLOUT_MAX_UNREACHABLE"] = str(rollout.get("max_unreachable", 3))
     env["NVIS_P2P_ROLLOUT_TIMEOUT_SECONDS"] = str(rollout.get("timeout_seconds", 1800))
+    env["NVIS_P2P_ROLLOUT_STALL_SECONDS"] = str(rollout.get("stall_seconds", 600))
     return env
 
 
@@ -81,6 +82,54 @@ def _load_topology(path: pathlib.Path) -> dict[str, tuple[str, str]]:
         if len(parts) >= 3 and all(parts[:3]):
             topology[parts[0]] = (parts[1], parts[2])
     return topology
+
+
+class FleetState:
+    """What the fleet snapshot last saw, for one image: who holds it, who answered, who has a record.
+
+    ``holders`` already carry the image (a valid receipt); ``unreachable`` did not answer the last
+    receipt audit; ``present`` counts each node's verified catalog images -- a peer that has finished
+    many downloads is the safest choice to seed a rack. ``age`` is seconds since the snapshot.
+    """
+
+    def __init__(self, holders: set[str], unreachable: set[str], present: dict[str, int], age: float):
+        self.holders = holders
+        self.unreachable = unreachable
+        self.present = present
+        self.age = age
+
+
+#: A snapshot older than this is not trusted to say who holds what (the cron refreshes every 15 min).
+_SNAPSHOT_MAX_AGE = 3600
+
+
+def _load_fleet_state(path: pathlib.Path, image: str, log: pathlib.Path) -> FleetState | None:
+    """The snapshot's view of ``image`` across the fleet, or None when it is missing, unreadable or
+    stale -- the plan then falls back to placement alone, and the log says why."""
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        stamp = datetime.datetime.strptime(doc["coverage"]["generated_at"], "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=datetime.timezone.utc)
+        rows = doc["coverage"]["nodes"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        _append(log, f"[worker] rack-staged: no usable fleet snapshot at {path} ({type(exc).__name__}); "
+                     "planning by placement only")
+        return None
+    age = (datetime.datetime.now(datetime.timezone.utc) - stamp).total_seconds()
+    if age > _SNAPSHOT_MAX_AGE:
+        _append(log, f"[worker] rack-staged: fleet snapshot is {int(age)}s old; planning by placement only")
+        return None
+    holders, unreachable, present = set(), set(), {}
+    for row in rows:
+        node = row.get("node")
+        if not node:
+            continue
+        if row.get("state") == "unreachable":
+            unreachable.add(node)
+        if (row.get("images") or {}).get(image) == "ready":
+            holders.add(node)
+        present[node] = int(row.get("verified") or row.get("present") or 0)
+    return FleetState(holders, unreachable, present, age)
 
 
 def _rung(token: str, size: int) -> int:
@@ -121,7 +170,8 @@ def _pack(slices: list[list[str]], cap: int) -> list[list[str]]:
 
 
 def rack_staged_waves(nodes: list[str], topology: dict[str, tuple[str, str]], stages: list[str],
-                      seed_wave: int, fill_wave: int) -> tuple[list[tuple[str, list[str]]], dict]:
+                      seed_wave: int, fill_wave: int,
+                      fleet: FleetState | None = None) -> tuple[list[tuple[str, list[str]]], dict]:
     """Plan a roster as ``[(stage, wave_nodes), ...]`` that fills racks by the stage ladder.
 
     Stage one gives every rack its first holder, paced at ``seed_wave`` -- these are the only pulls
@@ -129,10 +179,20 @@ def rack_staged_waves(nodes: list[str], topology: dict[str, tuple[str, str]], st
     ``fill_wave``: the new nodes find holders in their own rack (the scheduler ranks same-rack
     parents first), and because the ladder rises gradually no single holder feeds a whole rack.
 
+    With a ``fleet`` snapshot the plan also knows what is already there. A rack's rungs are measured
+    against the whole rack (from the topology), and nodes that already hold the image count toward
+    them -- so a rack that is half full skips straight to its last stage, and no seed wave is spent
+    on a rack that has a copy. Within a rack the most proven peers (most verified images) go first,
+    so a rack is seeded by a node that has finished downloads before; nodes the snapshot could not
+    reach, and roster nodes that already hold the image, go to the rack's last stage.
+
     Racks are visited round-robin across SUs, so a wave spreads over the fabric instead of loading
     one SU's uplinks. Roster nodes missing from the topology go last, paced like seeds: they have no
     known rack-mates and will draw on the seeds or their SU. Returns the waves and a summary.
     """
+    holders = fleet.holders if fleet else set()
+    unreachable = fleet.unreachable if fleet else set()
+    present = fleet.present if fleet else {}
     racks: dict[tuple[str, str], list[str]] = {}
     unplaced: list[str] = []
     for node in nodes:
@@ -141,8 +201,19 @@ def rack_staged_waves(nodes: list[str], topology: dict[str, tuple[str, str]], st
             unplaced.append(node)
         else:
             racks.setdefault(where, []).append(node)
-    for members in racks.values():
-        members.sort(key=_natural)
+    rack_size: dict[tuple[str, str], int] = {}
+    rack_held: dict[tuple[str, str], int] = {}
+    if fleet is not None:
+        for node, where in topology.items():
+            if where in racks:
+                rack_size[where] = rack_size.get(where, 0) + 1
+                rack_held[where] = rack_held.get(where, 0) + (node in holders)
+    # Fill order inside a rack: proven reachable peers first, then the unreachable, then roster nodes
+    # that already hold the image (they short-circuit on their receipt wherever they land).
+    late: dict[tuple[str, str], int] = {}
+    for key, members in racks.items():
+        members.sort(key=lambda n: (n in holders, n in unreachable, -present.get(n, 0), _natural(n)))
+        late[key] = sum(1 for n in members if n in holders or n in unreachable)
     by_su: dict[str, list[tuple[str, str]]] = {}
     for key in sorted(racks, key=lambda k: (_natural(k[0]), _natural(k[1]))):
         by_su.setdefault(key[0], []).append(key)
@@ -153,29 +224,48 @@ def rack_staged_waves(nodes: list[str], topology: dict[str, tuple[str, str]], st
             if queue:
                 order.append(queue.pop(0))
 
-    cuts = {key: _stage_cuts(len(racks[key]), stages) for key in order}
+    # How far along each rung a rack already is, and how many roster nodes each stage takes from it.
+    # Without a snapshot the rack is just its roster nodes and starts empty (the plain ladder).
+    taken = {key: 0 for key in order}
     waves: list[tuple[str, list[str]]] = []
     per_stage: list[dict] = []
-    previous = {key: 0 for key in order}
+    last = len(stages) - 1
     for index, token in enumerate(stages):
-        slices = [racks[key][previous[key]:cuts[key][index]] for key in order]
-        slices = [part for part in slices if part]
+        slices = []
+        for key in order:
+            members = racks[key]
+            if index == last:
+                part = members[taken[key]:]
+            else:
+                size = rack_size.get(key, len(members))
+                target = _stage_cuts(size, stages)[index]
+                eligible = len(members) - late[key]          # only proven, reachable, not-yet-holding
+                want = max(0, target - rack_held.get(key, 0) - taken[key])
+                part = members[taken[key]:min(eligible, taken[key] + want)]
+            taken[key] += len(part)
+            if part:
+                slices.append(part)
         stage_waves = _pack(slices, seed_wave if index == 0 else fill_wave)
         waves.extend((token, wave) for wave in stage_waves)
         per_stage.append({"stage": token, "nodes": sum(len(p) for p in slices),
                           "racks": len(slices), "waves": len(stage_waves)})
-        previous = {key: cuts[key][index] for key in order}
     if unplaced:
         unplaced_waves = _pack([sorted(unplaced, key=_natural)], seed_wave)
         waves.extend(("unplaced", wave) for wave in unplaced_waves)
         per_stage.append({"stage": "unplaced", "nodes": len(unplaced), "racks": 0, "waves": len(unplaced_waves)})
-    summary = {"racks": len(order), "sus": len(by_su), "unplaced": len(unplaced), "stages": per_stage}
+    summary = {"racks": len(order), "sus": len(by_su), "unplaced": len(unplaced), "stages": per_stage,
+               "racks_already_holding": sum(1 for key in order if rack_held.get(key, 0) > 0),
+               "roster_holders": sum(1 for n in nodes if n in holders),
+               "roster_unreachable": sum(1 for n in nodes if n in unreachable)}
     return waves, summary
 
 
-def _plan_waves(nodes: list[str], rollout: dict, env: dict, log: pathlib.Path) -> list[tuple[str, list[str]]]:
+def _plan_waves(nodes: list[str], rollout: dict, env: dict, log: pathlib.Path,
+                image: str = "", snapshot: pathlib.Path | None = None) -> list[tuple[str, list[str]]]:
     """The roster as waves, by the request's strategy. Rack-staged falls back to sequential, loudly,
-    when there is no usable topology -- the image still reaches every node, just without the plan."""
+    when there is no usable topology -- the image still reaches every node, just without the plan.
+    A fresh fleet snapshot, when there is one, lets the plan skip racks that already hold ``image``
+    and seed each rack from a proven peer."""
     wave_size = max(1, int(rollout.get("wave_size", 50)))
     if rollout.get("strategy") == "rack-staged":
         path = pathlib.Path(env.get("NVIS_TOPOLOGY_FILE") or f"{env['NVIS_P2P_ROOT']}/inventory/topology.tsv")
@@ -187,9 +277,15 @@ def _plan_waves(nodes: list[str], rollout: dict, env: dict, log: pathlib.Path) -
         if topology:
             fill = int(rollout.get("fill_wave_size") or 0) or wave_size
             stages = list(rollout.get("stages") or ["1", "50%", "100%"])
-            waves, summary = rack_staged_waves(nodes, topology, stages, wave_size, max(1, fill))
+            fleet = _load_fleet_state(snapshot, image, log) if snapshot and image else None
+            waves, summary = rack_staged_waves(nodes, topology, stages, wave_size, max(1, fill), fleet)
             _append(log, f"[worker] rack-staged plan from {path}: {summary['racks']} racks in "
                          f"{summary['sus']} SUs, ladder {' → '.join(stages)}, seed waves {wave_size}, fill waves {fill}")
+            if fleet is not None:
+                _append(log, f"[worker]   fleet snapshot ({int(fleet.age)}s old): "
+                             f"{summary['racks_already_holding']} racks already hold the image, "
+                             f"{summary['roster_holders']} roster nodes hold it, "
+                             f"{summary['roster_unreachable']} roster nodes were unreachable (placed last)")
             for row in summary["stages"]:
                 _append(log, f"[worker]   stage {row['stage']}: {row['nodes']} nodes over {row['racks']} racks "
                              f"in {row['waves']} waves")
@@ -199,7 +295,7 @@ def _plan_waves(nodes: list[str], rollout: dict, env: dict, log: pathlib.Path) -
 
 
 def _staged_campaign(image: str, roster: pathlib.Path, rollout: dict, scripts: str,
-                     env: dict, log: pathlib.Path, label: str) -> int:
+                     env: dict, log: pathlib.Path, label: str, snapshot: pathlib.Path | None = None) -> int:
     """Preheat the seeds, then roll the image out wave by wave so each wave seeds the next.
 
     The waves are the roster in order (``sequential``) or a placement plan (``rack-staged``, see
@@ -212,7 +308,7 @@ def _staged_campaign(image: str, roster: pathlib.Path, rollout: dict, scripts: s
         return rc
     nodes = [n.strip() for n in roster.read_text(encoding="utf-8").splitlines() if n.strip()]
     worst = 0
-    for index, (stage, wave) in enumerate(_plan_waves(nodes, rollout, env, log)):
+    for index, (stage, wave) in enumerate(_plan_waves(nodes, rollout, env, log, image, snapshot)):
         wave_file = roster.parent / f".{label}-wave{index:02d}.nodes"
         wave_file.write_text("\n".join(wave) + "\n", encoding="utf-8")
         tag = "" if stage == "sequential" else f" (stage {stage})"
@@ -338,7 +434,8 @@ def _handle(req: dict, args: argparse.Namespace, log: pathlib.Path) -> int:
     if action == "sync":
         return _sync_catalog(inner, roster, log)
     if action in ("distribute", "repair"):
-        return _staged_campaign(req["images"][0], roster, inner.get("rollout", {}), scripts, env, log, req["id"])
+        return _staged_campaign(req["images"][0], roster, inner.get("rollout", {}), scripts, env, log, req["id"],
+                                getattr(args, "snapshot", None))
     _append(log, f"[worker] no handler for action {action!r}")
     return 2
 
@@ -368,6 +465,15 @@ def _claim_and_run(path: pathlib.Path, args: argparse.Namespace) -> None:
         lock.unlink(missing_ok=True)
 
 
+def default_snapshot(ops_dir: pathlib.Path) -> pathlib.Path:
+    """The fleet snapshot that sits beside an operations directory.
+
+    Both live under the app's state directory, keyed by cluster: ``<state>/p2p-operations/<cluster>``
+    holds the queue and ``<state>/p2p-snapshots/<cluster>.json`` the snapshot cron's output.
+    """
+    return ops_dir.parent.parent / "p2p-snapshots" / f"{ops_dir.name}.json"
+
+
 def _pending(ops_dir: pathlib.Path) -> list[pathlib.Path]:
     """Unfinished requests in the order they were enqueued.
 
@@ -389,9 +495,14 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--ops-dir", required=True, type=pathlib.Path, help="per-cluster operations directory")
     ap.add_argument("--roster", required=True, help="eligible-node file for fleet-scoped actions")
+    ap.add_argument("--snapshot", type=pathlib.Path, default=None,
+                    help="fleet snapshot the rack-staged plan reads (default: the cluster's "
+                         "<state>/p2p-snapshots/<cluster>.json beside <state>/p2p-operations/<cluster>)")
     args = ap.parse_args(argv)
     if not args.ops_dir.is_dir():
         return 0
+    if args.snapshot is None:
+        args.snapshot = default_snapshot(args.ops_dir)
     # One worker at a time per cluster. The per-request lock stops two workers running the SAME
     # request; it does not stop a cron tick starting the next request while a long rollout is still
     # going, which put two fleet-wide transfers on the seeds at once. A tick that finds the worker

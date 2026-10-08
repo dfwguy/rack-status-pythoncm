@@ -5,7 +5,7 @@ node=${1:?node is required}
 filename=${2:?canonical image filename is required}
 expected_bytes=${3:?expected byte count is required}
 expected_sha=${4:?expected SHA-256 is required}
-base=/opt/containers/.nvis-p2p
+base=${NVIS_P2P_BASE:-/opt/containers/.nvis-p2p}
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout="${NVIS_P2P_SSH_TIMEOUT:-8}" \
   -o ServerAliveInterval=4 -o ServerAliveCountMax=1)
 
@@ -13,7 +13,8 @@ if ! result=$(ssh "${ssh_opts[@]}" "$node" bash -s -- \
   "$base" "$filename" "$expected_bytes" "$expected_sha" <<'REMOTE'
 set -u
 base=$1 filename=$2 expected_bytes=$3 expected_sha=$4
-target=/opt/containers/$filename
+target=${base%/*}/$filename
+partial=$base/staging/$filename.partial
 receipt=$base/receipts/$filename.sha256
 pid_file=$base/run/catalog-$filename.pid
 log=$base/logs/catalog-$filename.log
@@ -42,7 +43,15 @@ if [[ -s $pid_file ]]; then
   if [[ $pid =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
     if [[ $state != READY ]]; then
       state=ACTIVE
-      detail="pid=$pid"
+      # Bytes actually written to the download, not its length: dfget preallocates the partial to the
+      # full size, so only the allocated blocks move. The rollout watches this to spot a stall.
+      # -1 means there is nothing to measure yet (no partial), which never counts as a stall.
+      written=-1
+      if [[ -e $partial ]]; then
+        read -r blocks block_size < <(stat -c '%b %B' "$partial" 2>/dev/null) || true
+        [[ ${blocks:-} =~ ^[0-9]+$ && ${block_size:-} =~ ^[0-9]+$ ]] && written=$((blocks * block_size))
+      fi
+      detail="pid=$pid written=$written"
     fi
   elif [[ $state != READY && -s $log ]]; then
     detail=$(tail -n 1 "$log" | tr '\t\r\n' '   ' | cut -c1-240)

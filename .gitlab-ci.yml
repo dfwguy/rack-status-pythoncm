@@ -312,7 +312,7 @@ python-test:
     # Same rule for `squashfs-tools` and `curl`: the image scrub (test_enroot_scrub_rootfs.py) and the
     # node catalog refresh (test_p2p_catalog_refresh.py) run the real scripts against the real tools,
     # and both skip where a tool is missing. On this image that skip was silent and permanent.
-    - apt-get update -qq && apt-get install -y -qq --no-install-recommends rsync squashfs-tools curl
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends rsync squashfs-tools curl procps
     # BEFORE the suite, because it answers a different question and answers it clearly: does the
     # COMMITTED tree import, using only files git tracks? On 2026-08-21 an import was committed one
     # commit before the module it named, and the suite reported it as 34 collection errors whose

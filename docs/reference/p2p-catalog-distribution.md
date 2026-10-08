@@ -97,6 +97,7 @@ Environment variables read by `rollout-catalog-image-fleet.sh`:
 | `NVIS_P2P_ROLLOUT_MAX_LAUNCHES` | `3` | Re-launch attempts before a node is deferred. |
 | `NVIS_P2P_ROLLOUT_MAX_UNREACHABLE` | `3` | Failed reachability checks before a node is deferred. |
 | `NVIS_P2P_ROLLOUT_TIMEOUT_SECONDS` | — | Overall campaign timeout. |
+| `NVIS_P2P_ROLLOUT_STALL_SECONDS` | `600` | Stop and relaunch a download whose written bytes have not moved for this long; `0` disables. |
 | `NVIS_P2P_ROOT` | `/opt/nvis-p2p` | Install root; set to `/opt/nvis-p2p/current` for the live release. |
 
 Invocation: `rollout-catalog-image-fleet.sh <image-filename> <roster-file> [<label>]`.
@@ -114,6 +115,7 @@ per wave, in order. Cluster defaults live in **Dragonfly Settings**; a campaign 
 | `rollout_wave_size` | `wave_size` | `50` | Nodes per wave; under `rack-staged`, the size of the first-stage (seed-loading) waves. |
 | `rollout_fill_wave_size` | `fill_wave_size` | `0` | `rack-staged` only: nodes per wave in every later stage. `0` = the wave size. |
 | `rollout_stages` | `stages` | `1, 50%, 100%` | `rack-staged` only: the stage ladder. |
+| `rollout_stall_seconds` | `stall_seconds` | `600` | Becomes `NVIS_P2P_ROLLOUT_STALL_SECONDS`; `0` (cluster only) disables. |
 
 **Stage ladder.** Each rung is a cumulative per-rack target: a node count (`1`, `2`) or a share of
 the rack, rounded up (`50%`). Counts must rise, shares must rise, and the last rung must be `100%`.
@@ -131,6 +133,20 @@ early and skips it. For a 17-node rack the default ladder gives cuts of 1, 9 and
    over the fabric.
 4. Roster nodes missing from the topology go last, paced at `wave_size`.
 
+**Using the fleet snapshot.** When the cluster's fleet snapshot
+(`<state>/p2p-snapshots/<cluster>.json`, beside the operations directory; the worker's `--snapshot`
+overrides it) is less than an hour old, the plan also uses what is already on the fleet:
+
+- A rack's rungs are measured against the whole rack in the topology, and nodes that already hold
+  the image count toward them. A rack with a copy gets no first-stage node; a rack already past 50%
+  goes straight to its last stage.
+- Within a rack, the reachable node with the most verified catalog images is taken first, so a rack
+  is seeded by a peer that has finished downloads before.
+- Nodes the snapshot could not reach, and roster nodes that already hold the image, go to their
+  rack's last stage.
+
+A missing, unreadable or older snapshot is logged and the plan uses placement alone.
+
 **Topology contract.** The plan reads `$NVIS_TOPOLOGY_FILE`, default
 `<install_root>/current/inventory/topology.tsv`: one row per compute node,
 `<hostname>\t<su>\t<rack>`, captured from the cluster manager's placement. It is the file the peers'
@@ -142,6 +158,7 @@ The worker logs the plan before the first wave, for example:
 
 ```text
 [worker] rack-staged plan from /opt/nvis-p2p/current/inventory/topology.tsv: 93 racks in 15 SUs, ladder 1 → 50% → 100%, seed waves 25, fill waves 72
+[worker]   fleet snapshot (723s old): 55 racks already hold the image, 55 roster nodes hold it, 22 roster nodes were unreachable (placed last)
 [worker]   stage 1: 93 nodes over 93 racks in 4 waves
 [worker]   stage 50%: 647 nodes over 93 racks in 10 waves
 [worker]   stage 100%: 707 nodes over 93 racks in 11 waves
@@ -154,8 +171,18 @@ Run-directory artifacts (under `$NVIS_P2P_ROOT/state/rollout-<label>-<image>-<st
 |---|---|
 | `tracking.tsv` | `node  launches  unreachable  last_state  last_detail` — the live ledger. |
 | `ready.tsv` | Nodes confirmed present + verified, with timestamp. |
-| `deferred.tsv` | Nodes given up on, with reason (`launch_limit_N`, `unreachable_after_N_checks`). |
-| `rollout.log` | `ROLLOUT_BEGIN` / `PREHEAT_READY` / `ROLLOUT_PROGRESS` / `ROLLOUT_COMPLETE`. |
+| `deferred.tsv` | Nodes given up on, with reason (`launch_limit_N`, `unreachable_after_N_checks`, `stalled_<S>s_after_<N>_launches`, `timeout_after_<S>s`). |
+| `progress.tsv` | `node  written  since_epoch` — each active download's written bytes and when they last changed. |
+| `rollout.log` | `ROLLOUT_BEGIN` / `PREHEAT_READY` / `ROLLOUT_PROGRESS` / `ROLLOUT_STALLED` / `ROLLOUT_COMPLETE`. |
+
+**Stalled downloads.** Each poll, `check-catalog-image-node.sh` reports an active download as
+`ACTIVE  pid=<pid> written=<bytes>`, where `written` is the bytes allocated to the node's staging
+partial (dfget preallocates its length, so only the allocated blocks move; `-1` until a partial
+exists). A download whose `written` has not changed for `NVIS_P2P_ROLLOUT_STALL_SECONDS` is stalled,
+unless `written` already equals the image size (it is checksumming). A stalled node is stopped with
+`stop-catalog-image-node.sh` and relaunched; once it has used `NVIS_P2P_ROLLOUT_MAX_LAUNCHES` it is
+stopped and deferred as `stalled_<S>s_after_<N>_launches`. The peer keeps the pieces it already
+holds, so a relaunch resumes rather than restarts.
 
 ## Catalog manifest (`images.tsv`)
 

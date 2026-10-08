@@ -194,6 +194,7 @@ export default function P2pSettingsView() {
               {num("Max launches", "rollout_max_launches", "Re-launch attempts before a node is deferred.")}
               {num("Max unreachable", "rollout_max_unreachable", "Failed reachability checks before a node is deferred.")}
               {num("Timeout (s)", "rollout_timeout_seconds", "Overall campaign timeout before it gives up.")}
+              {num("Stall (s)", "rollout_stall_seconds", "A download that writes nothing for this long is stopped and relaunched, then deferred after Max launches — instead of holding its wave to the timeout. 0 = off.")}
               <FormField name="p2p-rollout_strategy" slotLabel="Wave plan"
                 slotHelp="Sequential slices the roster in order. Rack-staged gives every rack one copy first (the only waves that load the seeds), then grows every rack up the stage ladder.">
                 <SegmentedControl

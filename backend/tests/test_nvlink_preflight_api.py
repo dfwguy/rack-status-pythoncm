@@ -247,7 +247,11 @@ def test_platform_compatibility_before_execution(client, stub_pdsh, monkeypatch,
     response = client.post("/api/nvlink-preflight-async", json={"target": "n01", "quick": True})
     if compatible:
         assert response.status_code == 200
-        assert response.get_json()["job_id"]
+        job_id = response.get_json()["job_id"]
+        assert job_id
+        # The job runs on a worker thread after the response; under a loaded full-suite run it may not
+        # have reached pdsh yet. Wait for it to finish before asserting what it ran.
+        _wait(client, job_id)
         assert "cmd" in stub_pdsh
     else:
         assert response.status_code == 400

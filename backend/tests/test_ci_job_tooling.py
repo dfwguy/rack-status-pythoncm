@@ -31,6 +31,7 @@ developer's shell, where git is always on the PATH.
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -181,6 +182,7 @@ class TestNoJobCallsAToolItsImageLacks:
         [
             ("squashfs-tools", "test_enroot_scrub_rootfs.py builds and reads images with mksquashfs/unsquashfs"),
             ("curl", "test_p2p_catalog_refresh.py runs the node refresh script, which fetches with curl"),
+            ("procps", "test_p2p_rollout_stall.py stops a stand-in download with pkill and checks it with pgrep"),
         ],
     )
     def test_the_test_job_provides_the_tools_the_suite_runs(self, package, why):
@@ -328,3 +330,34 @@ class TestNoJobCallsAToolItsImageLacks:
         assert all("|| stale=1" in line for line in checks), (
             f"the checks short-circuit instead of collecting every verdict: {checks}"
         )
+
+
+class TestLocalCiRunnerMatchesThePipeline:
+    """`bin/ci-local.sh` runs the test jobs on a laptop in the images CI uses; it is only worth
+    trusting while those are the same images with the same packages. These pin it to the pipeline,
+    so a bumped image or a new apt package in CI fails here rather than drifting silently."""
+
+    SCRIPT = Path(__file__).resolve().parents[2] / "bin" / "ci-local.sh"
+
+    def _pin(self, name: str) -> str:
+        m = re.search(rf"^{name}=\"?([^\"\n]+)\"?$", self.SCRIPT.read_text(encoding="utf-8"), re.MULTILINE)
+        assert m, f"{name} is not pinned in {self.SCRIPT.name}"
+        return m.group(1)
+
+    @pytest.mark.parametrize(("pin", "jobs"), [
+        ("PYTHON_IMAGE", ("python-test",)),
+        ("NODE_IMAGE", ("frontend-test", "typescript-check")),
+    ])
+    def test_it_uses_the_images_the_jobs_run_in(self, pin, jobs):
+        pipeline = _pipeline()
+        for job in jobs:
+            assert str(pipeline[job]["image"]) == self._pin(pin), f"{job} runs elsewhere than {pin}"
+
+    def test_it_installs_what_the_python_test_job_installs(self):
+        installed: set[str] = set()
+        for line in _command_lines(_pipeline()["python-test"]):
+            installed |= _apt_packages(line)
+        assert set(self._pin("PYTHON_APT_PACKAGES").split()) == installed
+
+    def test_it_is_executable(self):
+        assert os.access(self.SCRIPT, os.X_OK)
