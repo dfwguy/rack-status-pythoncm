@@ -117,13 +117,23 @@ _nvis_fabric_ns_ifname() {
       [[ "$st" == "up" ]] && { printf '%s' "$nic"; return; }
     fi
   done
-  # First "up" ethernet-ish netdev that isn't loopback/docker/ib/veth.
-  local n
+  # First "up" netdev that isn't loopback/docker/ib/veth/bridge AND carries a routable
+  # (global-scope) IPv4. Requiring the IPv4 is the fix for GB300 nodes with no bond0: the old
+  # name-only pick grabbed the first "up" device, which was a RoCE-rail bridge (br-rail*) that is
+  # "up" with only a link-local IPv6 and no routable address -- Open MPI then aborted the whole
+  # run with "None of the TCP networks ... could be found: br-rail1" before NCCL ever started.
+  # `ip` is present on every compute node; if it somehow is not, fall back to the name-only pick.
+  local n have_ip=0
+  command -v ip >/dev/null 2>&1 && have_ip=1
   for n in "${netroot}"/*; do
     nic="$(basename "$n")"
-    case "$nic" in lo|docker*|veth*|ib*|virbr*) continue ;; esac
+    case "$nic" in lo|docker*|veth*|ib*|virbr*|br-*) continue ;; esac
     [[ -r "$n/operstate" ]] || continue
-    [[ "$(tr -d '\n' < "$n/operstate")" == "up" ]] && { printf '%s' "$nic"; return; }
+    [[ "$(tr -d '\n' < "$n/operstate")" == "up" ]] || continue
+    if (( have_ip )); then
+      ip -o -4 addr show dev "$nic" scope global 2>/dev/null | grep -q . || continue
+    fi
+    printf '%s' "$nic"; return
   done
   printf 'bond0'  # last-resort default
 }
