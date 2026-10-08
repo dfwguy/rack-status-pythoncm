@@ -321,72 +321,81 @@ class TestTheStagingHelper:
         assert "no nodes" in r.stderr
 
     @staticmethod
-    def _p2p_cache(tmp_path, *, receipt_sha="ab" * 32, receipt=True):
-        cache = tmp_path / "cache"
-        (cache / ".nvis-p2p" / "receipts").mkdir(parents=True)
-        (cache / "nemo.sqsh").write_bytes(b"y" * 4096)
-        if receipt:
-            (cache / ".nvis-p2p" / "receipts" / "nemo.sqsh.sha256").write_text(
-                f"{receipt_sha}  {cache}/nemo.sqsh\n"
-            )
-        return cache
+    def _p2p(tmp_path, *, content=b"y" * 4096, pinned_sha=None, pinned_bytes=None, listed=True):
+        """A node cache holding nemo.sqsh and a published catalog pinning it (by default correctly)."""
+        import hashlib
 
-    def test_on_a_p2p_cluster_a_received_image_is_only_verified(self, tmp_path, image):
-        cache = self._p2p_cache(tmp_path)
+        cache = tmp_path / "cache"
+        cache.mkdir()
+        (cache / "nemo.sqsh").write_bytes(content)
+        config = tmp_path / "config"
+        config.mkdir()
+        sha = pinned_sha or hashlib.sha256(content).hexdigest()
+        size = len(content) if pinned_bytes is None else pinned_bytes
+        rows = ["order\tname\tfilename\tbytes\tsha256", f"1\tOther\tother.sqsh\t1\t{'0' * 64}"]
+        if listed:
+            rows.append(f"2\tNeMo\tnemo.sqsh\t{size}\t{sha}")
+        (config / "image-catalog.tsv").write_text("\n".join(rows) + "\n")
+        return {"NVIS_NODE_CONTAINER_DIR": str(cache), "NVIS_NODE_IMAGES_P2P": "1",
+                "NVIS_NODE_CONFIG_DIR": str(config)}
+
+    def test_on_a_p2p_cluster_an_image_matching_the_catalog_passes(self, tmp_path):
+        """Only the basename is used: NC's launch host (the BCM head) cannot see /cluster at all."""
+        env = self._p2p(tmp_path)
         r = _bash_with_fake_pdsh(
             tmp_path,
-            f'nvis_stage_node_image t n1,n2 "{image}" && echo "CONT=$NVIS_NEMO_CONT"',
-            env={"NVIS_NODE_CONTAINER_DIR": str(cache), "NVIS_NODE_IMAGES_P2P": "1"},
+            'nvis_stage_node_image t n1,n2 /cluster/containers/nemo.sqsh && echo "CONT=$NVIS_NEMO_CONT"',
+            env=env,
         )
         assert r.returncode == 0, r.stderr
-        assert f"CONT={cache}/nemo.sqsh" in r.stdout
+        assert f"CONT={tmp_path}/cache/nemo.sqsh" in r.stdout
         assert not (tmp_path / "rsync.log").exists()
 
-    def test_on_a_p2p_cluster_the_launch_host_need_not_see_the_source(self, tmp_path):
-        """NC launches from the BCM head, which mounts only /home: /cluster/containers is absent
-        there. The basename names the image; the P2P receipt on each node proves it."""
-        cache = self._p2p_cache(tmp_path)
-        r = _bash_with_fake_pdsh(
-            tmp_path,
-            'nvis_stage_node_image t n1 /cluster/containers/nemo.sqsh',
-            env={"NVIS_NODE_CONTAINER_DIR": str(cache), "NVIS_NODE_IMAGES_P2P": "1"},
-        )
-        assert r.returncode == 0, r.stderr
-
-    def test_on_a_p2p_cluster_a_file_without_a_receipt_fails_and_is_never_copied(self, tmp_path, image):
-        cache = self._p2p_cache(tmp_path, receipt=False)
-        r = _bash_with_fake_pdsh(
-            tmp_path,
-            f'nvis_stage_node_image t n1 "{image}"',
-            env={"NVIS_NODE_CONTAINER_DIR": str(cache), "NVIS_NODE_IMAGES_P2P": "1"},
-        )
+    def test_on_a_p2p_cluster_a_hash_mismatch_fails(self, tmp_path):
+        env = self._p2p(tmp_path, pinned_sha="ab" * 32)
+        r = _bash_with_fake_pdsh(tmp_path, "nvis_stage_node_image t n1 /x/nemo.sqsh", env=env)
         assert r.returncode == 1
-        assert "no_p2p_receipt" in r.stderr
+        assert "STAGE_FAIL_sha256=" in r.stderr
+
+    def test_size_mode_skips_the_hash_but_not_the_size(self, tmp_path):
+        env = self._p2p(tmp_path, pinned_sha="ab" * 32)
+        r = _bash_with_fake_pdsh(tmp_path, "nvis_stage_node_image t n1 /x/nemo.sqsh",
+                                 env={**env, "NVIS_NODE_IMAGE_VERIFY": "size"})
+        assert r.returncode == 0, r.stderr
+        short = tmp_path / "short"
+        short.mkdir()
+        env = self._p2p(short, pinned_bytes=1)
+        r = _bash_with_fake_pdsh(short, "nvis_stage_node_image t n1 /x/nemo.sqsh",
+                                 env={**env, "NVIS_NODE_IMAGE_VERIFY": "size"})
+        assert r.returncode == 1
+        assert "STAGE_FAIL_size=4096" in r.stderr
+
+    def test_on_a_p2p_cluster_an_image_the_catalog_does_not_pin_fails(self, tmp_path):
+        env = self._p2p(tmp_path, listed=False)
+        r = _bash_with_fake_pdsh(tmp_path, "nvis_stage_node_image t n1 /x/nemo.sqsh", env=env)
+        assert r.returncode == 1
+        assert "not pinned in the image catalog" in r.stderr
+
+    def test_on_a_p2p_cluster_no_published_catalog_fails_with_how_to_publish(self, tmp_path):
+        env = {**self._p2p(tmp_path), "NVIS_NODE_CONFIG_DIR": str(tmp_path / "nowhere")}
+        r = _bash_with_fake_pdsh(tmp_path, "nvis_stage_node_image t n1 /x/nemo.sqsh", env=env)
+        assert r.returncode == 1
+        assert "no image catalog" in r.stderr
+
+    def test_on_a_p2p_cluster_a_missing_image_fails_and_is_never_copied(self, tmp_path):
+        env = self._p2p(tmp_path)
+        (tmp_path / "cache" / "nemo.sqsh").unlink()
+        r = _bash_with_fake_pdsh(tmp_path, "nvis_stage_node_image t n1 /x/nemo.sqsh", env=env)
+        assert r.returncode == 1
+        assert "STAGE_FAIL_missing" in r.stderr
         assert "P2P campaign" in r.stderr
         assert not (tmp_path / "rsync.log").exists()
 
-    def test_on_a_p2p_cluster_a_missing_image_fails(self, tmp_path, image):
-        cache = tmp_path / "cache"
-        r = _bash_with_fake_pdsh(
-            tmp_path,
-            f'nvis_stage_node_image t n1 "{image}"',
-            env={"NVIS_NODE_CONTAINER_DIR": str(cache), "NVIS_NODE_IMAGES_P2P": "1"},
-        )
-        assert r.returncode == 1
-        assert "STAGE_FAIL_missing" in r.stderr
-
-    def test_on_a_p2p_cluster_receipts_that_disagree_fail(self, tmp_path, image):
-        """Two verified-but-different builds of one filename must not run one job together."""
-        cache = self._p2p_cache(tmp_path)
-        receipt = cache / ".nvis-p2p" / "receipts" / "nemo.sqsh.sha256"
-        hook = f"printf '%s  %s\\n' {'cd' * 32} {cache}/nemo.sqsh > {receipt}"
-        r = _bash_with_fake_pdsh(
-            tmp_path,
-            f'nvis_stage_node_image t n1,n2 "{image}"',
-            env={"NVIS_NODE_CONTAINER_DIR": str(cache), "NVIS_NODE_IMAGES_P2P": "1", "PDSH_HOOK": hook},
-        )
-        assert r.returncode == 1
-        assert "disagree" in r.stderr
+    def test_the_config_dir_is_beside_these_scripts(self):
+        r = subprocess.run(["bash", "-c", f'source "{SCRIPTS}/lib/node_config.inc.sh"; nvis_node_config_dir'],
+                           capture_output=True, text=True, check=False,
+                           env={k: v for k, v in os.environ.items() if k != "NVIS_NODE_CONFIG_DIR"})
+        assert r.stdout.strip() == str(SCRIPTS / "config")
 
 
 def test_the_rsync_launchers_refuse_to_copy_on_a_p2p_cluster(tmp_path):

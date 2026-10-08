@@ -978,6 +978,12 @@
   "variant": "sync"
  },
  {
+  "endpoint": "p2p_fleet.p2p_catalog_publish",
+  "method": "POST",
+  "action": "p2p:publish",
+  "variant": "sync"
+ },
+ {
   "endpoint": "p2p_fleet.p2p_catalog_put",
   "method": "PUT",
   "action": "p2p:catalog",

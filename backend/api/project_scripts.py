@@ -205,6 +205,16 @@ def api_project_scripts_bootstrap(doc_id: str):
     # against the flat legacy directory for up to the cache TTL.
     script_tree.clear_cache()
 
+    # A fresh project copy is where launchers look for this project's published settings
+    # (config/<cluster-id>/, node_config); fill it now rather than at the next catalog save.
+    import p2p_catalog
+
+    published = {
+        c.id: p2p_catalog.publish_to_scripts(c.id)
+        for c in project.clusters
+        if c.p2p_enabled and p2p_catalog.has_catalog(c.id)
+    }
+
     _logger.info(
         "project scripts bootstrapped: project=%s platform=%s dest=%s copied=%s forced=%s",
         doc_id,
@@ -222,6 +232,7 @@ def api_project_scripts_bootstrap(doc_id: str):
             "copied": summary.get("copied", 0),
             "differs_from_defaults": summary.get("differs_from_defaults", 0),
             "forced": force,
+            "published_config": published,
             "layout": script_tree.describe(),
             "command": " ".join(shlex.quote(a) for a in ["bash", _bootstrap_path(), "--project", doc_id]),
         }

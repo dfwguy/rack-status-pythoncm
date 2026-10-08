@@ -120,6 +120,9 @@ fi
 
 # -r recursive, -l links, -p perms (keep +x), -t times, -c checksum (content-based), -i itemize.
 RSYNC_COMMON=(-rlptc -i --exclude='__pycache__/' --exclude='*.pyc' --exclude='*.bak*')
+# config/ holds what Rack Status publishes into the deployed copy (bin/scripts/config/README.md);
+# only the README ships, so a deploy never overwrites a cluster's published settings.
+RSYNC_COMMON+=(--include='config/README.md' --exclude='config/*')
 # `platform/` is a source-tree convention, not a deployed directory: its contents become
 # per-platform layers beside multi-platform/, so it must not be copied *into* the default set.
 RSYNC_COMMON+=(--exclude='platform/')

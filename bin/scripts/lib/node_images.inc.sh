@@ -21,6 +21,9 @@
 
 NVIS_NODE_CONTAINER_DIR_DEFAULT=/tmp/containers
 
+# shellcheck source=lib/node_config.inc.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/node_config.inc.sh"
+
 # Print the node image cache directory, without a trailing slash.
 nvis_node_container_dir() {
   local d="${NVIS_NODE_CONTAINER_DIR:-${NVIS_NODE_CONTAINER_DIR_DEFAULT}}"
@@ -34,18 +37,28 @@ nvis_node_images_p2p() {
   [[ "${NVIS_NODE_IMAGES_P2P:-0}" == 1 ]]
 }
 
+# nvis_catalog_image <basename> — print "<bytes> <sha256>" for an image in the published catalog
+# (config/image-catalog.tsv); non-zero when the catalog is absent or does not list the image.
+nvis_catalog_image() {
+  local tsv
+  tsv="$(nvis_node_config_file image-catalog.tsv)" || return 2
+  awk -F'\t' -v f="$1" 'NR > 1 && $3 == f && $4 ~ /^[0-9]+$/ && $5 ~ /^[0-9a-f]{64}$/ {print $4, $5; found=1; exit}
+                        END {exit !found}' "$tsv"
+}
+
 # nvis_stage_node_image <tag> <host,csv> <source .sqsh>
 #
 # Make <source> present on every listed node at $(nvis_node_container_dir)/<basename>, then export
 # NVIS_NEMO_CONT to that path.
 #
-# On a P2P cluster (nvis_node_images_p2p) nothing is copied: the image must already be there, and
-# a node without it fails the launch with a pointer to a P2P campaign. The proof is P2P's own
-# receipt (<cache>/.nvis-p2p/receipts/<basename>.sha256, written only after a verified download),
-# not a size compared against the launch host's copy -- on NC the launch host is the BCM head,
-# which mounts only /home and cannot see the shared store at all. Every node's receipt must name
-# this path and all of them must carry the same SHA256; if the source is readable here its size
-# is checked too.
+# On a P2P cluster (nvis_node_images_p2p) nothing is copied -- P2P distributes the images -- and the
+# node's copy is checked against the image catalog Rack Status publishes beside these scripts
+# (config/image-catalog.tsv, lib/node_config.inc.sh): the catalog names the image's byte size and
+# SHA256, and every node must hold a file of that size whose SHA256 matches. Only the basename of
+# <source> is used, so the launch host need not see the shared store (on NC it is the BCM head,
+# which mounts only /home). NVIS_NODE_IMAGE_VERIFY=size skips the hash for a quick re-launch; the
+# default hashes the file on every node, in parallel. This is script execution's own check, kept
+# apart from the P2P control plane's manifests and receipts, which tell P2P whether *it* is in sync.
 #
 # Elsewhere a node whose copy already has the source's byte size is left alone (rsync -a would
 # re-read 40+ GiB per node because the mtimes differ), and only a missing or short copy is rsync'd
@@ -62,8 +75,6 @@ nvis_stage_node_image() {
   dir="$(nvis_node_container_dir)"
   base="$(basename "$src")"
   dest="${dir}/${base}"
-  size=$(stat -c%s "$src" 2>/dev/null || echo 0)
-  [[ "$size" =~ ^[1-9][0-9]*$ ]] || size=0
   nhosts=$(tr ',' '\n' <<<"$hostcsv" | grep -c . || true)
   if [[ "${nhosts:-0}" -eq 0 ]]; then
     echo "${tag}: ERROR: no nodes to stage ${base} onto" >&2
@@ -74,18 +85,32 @@ nvis_stage_node_image() {
   q_dir=$(printf %q "$dir"); q_dest=$(printf %q "$dest"); q_src=$(printf %q "$src")
 
   if nvis_node_images_p2p; then
-    local q_receipt
-    q_receipt=$(printf %q "${dir}/.nvis-p2p/receipts/${base}.sha256")
-    echo "${tag}: verifying P2P receipts for ${base} in ${dir} on ${nhosts} node(s); NVIS-P2P owns this cache, so no head-node copy"
+    local entry sha mode hash_cmd
+    if ! entry="$(nvis_catalog_image "$base")"; then
+      if [[ ! -r "$(nvis_node_config_file image-catalog.tsv)" ]]; then
+        echo "${tag}: ERROR: no image catalog at $(nvis_node_config_file image-catalog.tsv); publish it from Rack Status (P2P -> Catalog -> Publish to scripts)" >&2
+      else
+        echo "${tag}: ERROR: ${base} is not pinned in the image catalog ($(nvis_node_config_file image-catalog.tsv)); add it under P2P -> Catalog and distribute it" >&2
+      fi
+      return 1
+    fi
+    read -r size sha <<<"$entry"
+    mode="${NVIS_NODE_IMAGE_VERIFY:-sha256}"
+    if [[ "$mode" == size ]]; then
+      hash_cmd="echo STAGE_OK"
+    else
+      hash_cmd="h=\$(sha256sum ${q_dest} 2>/dev/null | cut -d' ' -f1); \
+if [ \"\$h\" = '${sha}' ]; then echo STAGE_OK; else echo STAGE_FAIL_sha256=\${h:-unreadable}; fi"
+    fi
+    echo "${tag}: checking ${base} in ${dir} on ${nhosts} node(s) against the image catalog (${size} bytes, sha256 ${sha:0:12}…, verify=${mode}); P2P distributes images here, so nothing is copied"
     out=$(pdsh -R ssh -w "$hostcsv" \
-      "if [ ! -r ${q_dest} ]; then echo STAGE_FAIL_missing; \
-elif [ ! -r ${q_receipt} ]; then echo STAGE_FAIL_no_p2p_receipt; \
-else read -r sha path < ${q_receipt}; s=\$(stat -c%s ${q_dest} 2>/dev/null || echo 0); \
-if [ \"\$path\" != ${q_dest} ]; then echo STAGE_FAIL_receipt_names=\$path; \
-elif [ '${size}' != 0 ] && [ \"\$s\" != '${size}' ]; then echo STAGE_FAIL_size=\$s; \
-else echo STAGE_OK sha=\$sha; fi; fi" 2>&1)
+      "s=\$(stat -c%s ${q_dest} 2>/dev/null || echo 0); \
+if [ ! -r ${q_dest} ]; then echo STAGE_FAIL_missing; \
+elif [ \"\$s\" != '${size}' ]; then echo STAGE_FAIL_size=\$s; \
+else ${hash_cmd}; fi" 2>&1)
   else
-    if [[ "$size" == 0 ]]; then
+    size=$(stat -c%s "$src" 2>/dev/null || echo 0)
+    if [[ ! "$size" =~ ^[1-9][0-9]*$ ]]; then
       echo "${tag}: ERROR: image is missing or empty on the launch host: ${src}" >&2
       return 1
     fi
@@ -112,17 +137,6 @@ if [ \"\$s\" = '${size}' ] && [ -r ${q_dest} ]; then echo STAGE_OK; else echo ST
       echo "${tag}: distribute ${base} to these nodes with a P2P campaign (Rack Status -> P2P), then relaunch" >&2
     fi
     return 1
-  fi
-  if nvis_node_images_p2p; then
-    # One image, one digest: nodes that each hold a *verified* but different build of the same
-    # filename (a re-staged catalog entry mid-rollout) must not run one job together.
-    local shas
-    shas=$(printf '%s\n' "$out" | grep -o 'STAGE_OK sha=[0-9a-f]*' | sort -u | grep -c . || true)
-    if [[ "$shas" -ne 1 ]]; then
-      echo "${tag}: ERROR: P2P receipts for ${base} disagree across nodes (${shas} distinct SHA256s)" >&2
-      printf '%s\n' "$out" | grep 'STAGE_OK' | sort -k3 | head -10 | sed 's/^/  /' >&2
-      return 1
-    fi
   fi
   echo "${tag}: ${base} ready on all ${nhosts} node(s) at ${dest}"
   export NVIS_NEMO_CONT="$dest"

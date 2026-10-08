@@ -76,8 +76,17 @@ _SKIP_DIRS = ("__pycache__",)
 CHUNK_BYTES = 64 * 1024
 
 
+#: ``config/`` holds what Rack Status publishes into a deployed copy (``node_config``); only its
+#: README ships. Anything else there in the source tree is a stray local publish, and shipping it
+#: would overwrite the cluster's own published settings on every deploy.
+_CONFIG_DIR = "config"
+_CONFIG_SHIPPED = ("README.md",)
+
+
 def _is_wanted(path: Path) -> bool:
     if any(part in _SKIP_DIRS for part in path.parts):
+        return False
+    if _CONFIG_DIR in path.parts[:-1] and path.name not in _CONFIG_SHIPPED:
         return False
     if path.suffix in _SKIP_SUFFIXES:
         return False
@@ -119,7 +128,9 @@ def _add_tree(tar: tarfile.TarFile, source: Path, prefix: str, manifest: list[st
     """Add every wanted file under *source*, placed at *prefix* in the archive."""
     for path in sorted(source.rglob("*")):
         relative = path.relative_to(source)
-        if not _is_wanted(relative):
+        # Judged with the walked directory's own name in front, so a rule about a top-level
+        # directory (config/ ships only its README) still sees which directory a file is in.
+        if not _is_wanted(Path(source.name) / relative):
             continue
         if path.is_dir() and not path.is_symlink():
             continue
@@ -204,7 +215,7 @@ def deploy(*, dry_run: bool = False, profile: str = "script", timeout: int = 600
     # `run` raises. Writing first therefore staged 280 KB of tarball chunks into the app's
     # own source tree and only then discovered it could not extract them, leaving the parts
     # behind because the cleanup needs the same `run` that just failed.
-    unreachable = _cannot_execute(conn)
+    unreachable = cannot_execute(conn)
     if unreachable:
         return {**summary, "ok": False, "error": unreachable}
 
@@ -257,13 +268,35 @@ def deploy(*, dry_run: bool = False, profile: str = "script", timeout: int = 600
     # Without this the very next resolution still answers with the flat legacy path, and the
     # bootstrap that follows in the wizard looks for defaults that it cannot see.
     script_tree.clear_cache()
+    summary["catalog"] = _publish_catalog(profile)
     summary["seconds"] = round(time.monotonic() - started, 1)
     summary["detail"] = f"sent {len(manifest)} file(s) to {tree}"
     _logger.info("script-deploy: %s", summary["detail"])
     return summary
 
 
-def _cannot_execute(conn) -> str:
+def _publish_catalog(profile: str) -> dict:
+    """Ship the active P2P cluster's image catalog with the scripts that check images against it.
+
+    The launchers verify a node's image by ``<scripts>/config/image-catalog.tsv``, so a fresh
+    script tree without it would refuse every container launch. Not P2P, or no authored catalog:
+    nothing to ship, and that is not a deploy failure.
+    """
+    import p2p_catalog
+    from catalog import context as catalog_context
+
+    try:
+        _project, cluster, _platform = catalog_context.resolve()
+    except Exception as exc:  # noqa: BLE001 - catalog trouble must not fail a script deploy
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:200]}
+    if cluster is None or not cluster.p2p_enabled:
+        return {"ok": True, "skipped": "P2P is not enabled on the active cluster"}
+    if not p2p_catalog.has_catalog(cluster.id):
+        return {"ok": True, "skipped": "no authored P2P catalog"}
+    return p2p_catalog.publish_to_scripts(cluster.id, profile=profile)
+
+
+def cannot_execute(conn) -> str:
     """"" if the target really runs commands for us, else why not.
 
     It echoes a nonce and checks it comes back, rather than trusting a zero exit. That is

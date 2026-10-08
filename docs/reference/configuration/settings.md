@@ -13,7 +13,7 @@ the source knows the whole set.
 
 **358 settings.** 19 are *declared* in
 `backend/config_registry.py`, which is the set `rackstatus.toml` can carry, the required-
-setting preflight can demand, and `rackstatus.toml.example` lists. 173 are named in
+setting preflight can demand, and `rackstatus.toml.example` lists. 174 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
 whether that document mentions the setting at all. It is not in this site yet; see
 `docs/README.md` for why the migration is page-at-a-time.

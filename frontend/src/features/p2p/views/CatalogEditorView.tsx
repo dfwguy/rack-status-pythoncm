@@ -21,8 +21,16 @@ import { PageHeader } from "../../../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../../../components/layout/contentWidth";
 import { useActiveCluster } from "../../../context/ActiveClusterContext";
 import { ApiError } from "../lib/apiFetch";
-import { getCatalog, saveCatalog, startOperation } from "../services/fleetService";
-import type { CatalogImageEdit } from "../services/fleetService";
+import { getCatalog, publishCatalogToScripts, saveCatalog, startOperation } from "../services/fleetService";
+import type { CatalogImageEdit, ScriptsCatalogPublish } from "../services/fleetService";
+
+/** How the launchers' copy of the catalog fared, as one sentence for the status banner. */
+function describeScriptsPublish(published: ScriptsCatalogPublish | undefined): string {
+  if (!published) return "";
+  return published.ok
+    ? ` Launchers now check node images against it (${published.dest}).`
+    : ` The launchers' copy was NOT updated (${published.error ?? "unknown error"}); use "Publish to scripts" to retry.`;
+}
 
 const BLANK: CatalogImageEdit = { order: 0, name: "", filename: "", bytes: 0, sha256: "", required_by: [] };
 
@@ -75,11 +83,22 @@ export default function CatalogEditorView() {
       const saved = await saveCatalog(images);
       setImages(saved.images.map((i) => ({ ...i, required_by: i.required_by ?? [] })));
       setAuthored(true);
-      setStatus("Catalog saved. Run a sync to project it onto the fleet.");
+      setStatus(`Catalog saved. Run a sync to project it onto the fleet.${describeScriptsPublish(saved.scripts_catalog)}`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Failed to save the catalog");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const onPublish = async () => {
+    setError(null);
+    setStatus(null);
+    try {
+      const published = await publishCatalogToScripts();
+      setStatus(`Catalog published for the launchers to ${published.dest} (${published.images ?? 0} image(s)).`);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to publish the catalog to the scripts");
     }
   };
 
@@ -115,6 +134,9 @@ export default function CatalogEditorView() {
             </Button>
             <Button kind="secondary" color="brand" size="small" disabled={saving || !images} onClick={() => void onSave()}>
               {saving ? "Saving…" : "Save"}
+            </Button>
+            <Button kind="secondary" color="neutral" size="small" disabled={!authored} onClick={() => void onPublish()}>
+              Publish to scripts
             </Button>
             <Button kind="primary" color="brand" size="small" disabled={syncing || !authored} onClick={() => void onSync()}>
               {syncing ? "Syncing…" : "Sync to fleet"}

@@ -275,8 +275,27 @@ def p2p_catalog_put():
         saved = p2p_catalog.save_catalog(catalog)
     except ValueError as exc:
         return jsonify({"ok": False, "message": str(exc)}), 400
+    # Launchers check node images against the catalog beside the scripts, a projection separate
+    # from the P2P origin's manifest (which the P2P sync owns). Keep it current with every save; a
+    # failure is reported, not fatal -- the document is saved and the next save or deploy retries.
+    published = p2p_catalog.publish_to_scripts(cluster.id)
     return jsonify({"ok": True, "cluster_id": cluster.id, "authored": True,
-                    "images": saved.to_dict()["images"]})
+                    "images": saved.to_dict()["images"], "scripts_catalog": published})
+
+
+@bp.route("/catalog/publish", methods=["POST"])
+@action(post="p2p:publish")
+def p2p_catalog_publish():
+    """Re-publish the active cluster's catalog beside the scripts (``<scripts it runs>/config``).
+
+    Saves and in-app script deploys already do this; this is for a script tree pushed some other
+    way (``bin/deploy-scripts.sh`` from a workstation), which never carries the catalog.
+    """
+    _project, cluster, _platform = catalog_context.resolve()
+    if cluster is None or not getattr(cluster, "p2p_enabled", False):
+        return jsonify({"ok": False, "message": "P2P is not enabled for the active cluster."}), 404
+    published = p2p_catalog.publish_to_scripts(cluster.id)
+    return jsonify(published), (200 if published.get("ok") else 502)
 
 
 @bp.route("/rosters", methods=["GET"])

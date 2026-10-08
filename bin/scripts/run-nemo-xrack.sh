@@ -55,6 +55,8 @@ echo "Hosts: ${spec_tag}"
 # nodes). Avoids clustershell `nodeset`, which is frequently absent on BCM head nodes.
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/lib/nodes.inc.sh"
+# shellcheck source=lib/node_images.inc.sh
+source "${SCRIPT_DIR}/lib/node_images.inc.sh"
 
 # Split the comma-joined specs on commas that are OUTSIDE [...]. A plain IFS=',' split tears a
 # bracketed range apart wherever the range itself contains a comma: this site's tray range is
@@ -156,72 +158,92 @@ export NVIS_NCCL_IGNORE_COLLNET_MISMATCH="${NVIS_NCCL_IGNORE_COLLNET_MISMATCH:-1
 : "${NEMO_SQSH_SRC:?set NEMO_SQSH_SRC to the configured nemo .sqsh image}"
 _sqsh_b=$(basename "$NEMO_SQSH_SRC")
 _hostcsv="$(echo "${hosts[*]}" | tr ' ' ',')"
-_src_size=$(stat -c%s "$NEMO_SQSH_SRC" 2>/dev/null || echo 0)
-if [[ ! "${_src_size}" =~ ^[1-9][0-9]*$ ]]; then
-  echo "run-nemo-xrack: ERROR: configured image is missing or empty: ${NEMO_SQSH_SRC}" >&2
-  exit 1
-fi
-
-# Bryan's bringup-agent/FileCopyTrigger (or a P2P campaign) keeps every image in the shared container
-# directory warm in each compute node's image cache -- the cluster's node_container_dir, exported as
-# NVIS_NODE_CONTAINER_DIR (/tmp/containers on TX, /opt/containers on NC). Prefer that copy
-# directly: copying the same 40+ GiB image from the head node at launch defeats the cache and
-# creates a fleet-wide NFS burst before Slurm even sees the job.
-_shared_cache_dir="${NVIS_NEMO_SHARED_CACHE_DIR:-${RACK_VALIDATION_CONTAINER_ROOT:-/cluster/containers}}"
-_node_cache_dir="${NVIS_NEMO_NODE_CACHE_DIR:-${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}}"
-_cache_b="${NVIS_NEMO_CACHE_BASENAME:-}"
-
-# build_containers.sh adds an architecture suffix, while the LLMB installer names the same
-# logical image without one. Prefer an exact basename, then the ARM spelling used on this GB300
-# fleet. An explicit NVIS_NEMO_CACHE_BASENAME always wins (needed for a separately vetted image).
-if [[ -z "${_cache_b}" ]]; then
-  _cache_candidates=("${_sqsh_b}")
-  if [[ "${_sqsh_b}" == *.sqsh ]]; then
-    _cache_candidates+=("${_sqsh_b%.sqsh}-arm.sqsh")
-  fi
-  for _candidate in "${_cache_candidates[@]}"; do
-    _candidate_size=$(stat -c%s "${_shared_cache_dir}/${_candidate}" 2>/dev/null || echo 0)
-    if [[ "${_candidate_size}" == "${_src_size}" ]]; then
-      _cache_b="${_candidate}"
-      break
+if nvis_node_images_p2p; then
+  # P2P distributes the images here, and the launch host may not even see the shared store (NC's
+  # BCM head mounts only /home). Check the nodes' copies against the image catalog published
+  # beside the scripts (lib/node_images.inc.sh). The LLMB installer names the image without the
+  # arch suffix that build_containers.sh adds; take whichever spelling the catalog pins, unless
+  # NVIS_NEMO_CACHE_BASENAME names one explicitly.
+  _cache_b="${NVIS_NEMO_CACHE_BASENAME:-}"
+  if [[ -z "${_cache_b}" ]]; then
+    _cache_b="${_sqsh_b}"
+    if ! nvis_catalog_image "${_cache_b}" >/dev/null && [[ "${_sqsh_b}" == *.sqsh ]] \
+        && nvis_catalog_image "${_sqsh_b%.sqsh}-arm.sqsh" >/dev/null; then
+      _cache_b="${_sqsh_b%.sqsh}-arm.sqsh"
     fi
-  done
-fi
+  fi
+  nvis_stage_node_image run-nemo-xrack "$_hostcsv" "${_cache_b}" || {
+    echo "run-nemo-xrack: aborting before submit." >&2
+    exit 1
+  }
+else
+  _src_size=$(stat -c%s "$NEMO_SQSH_SRC" 2>/dev/null || echo 0)
+  if [[ ! "${_src_size}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "run-nemo-xrack: ERROR: configured image is missing or empty: ${NEMO_SQSH_SRC}" >&2
+    exit 1
+  fi
 
-_shared_cache_path="${_shared_cache_dir}/${_cache_b}"
-_cache_size=$(stat -c%s "${_shared_cache_path}" 2>/dev/null || echo 0)
-if [[ -z "${_cache_b}" || "${_cache_size}" != "${_src_size}" ]]; then
-  echo "run-nemo-xrack: ERROR: no matching pre-cached image for ${NEMO_SQSH_SRC}." >&2
-  echo "run-nemo-xrack: expected ${_src_size} bytes under ${_shared_cache_dir}; refusing the legacy head-node fan-out." >&2
-  echo "run-nemo-xrack: stage the image through FileCopyTrigger, or set NVIS_NEMO_CACHE_BASENAME explicitly." >&2
-  exit 1
-fi
+  # Bryan's bringup-agent/FileCopyTrigger (or a P2P campaign) keeps every image in the shared container
+  # directory warm in each compute node's image cache -- the cluster's node_container_dir, exported as
+  # NVIS_NODE_CONTAINER_DIR (/tmp/containers on TX, /opt/containers on NC). Prefer that copy
+  # directly: copying the same 40+ GiB image from the head node at launch defeats the cache and
+  # creates a fleet-wide NFS burst before Slurm even sees the job.
+  _shared_cache_dir="${NVIS_NEMO_SHARED_CACHE_DIR:-${RACK_VALIDATION_CONTAINER_ROOT:-/cluster/containers}}"
+  _node_cache_dir="${NVIS_NEMO_NODE_CACHE_DIR:-${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}}"
+  _cache_b="${NVIS_NEMO_CACHE_BASENAME:-}"
 
-_node_cache_path="${_node_cache_dir}/${_cache_b}"
-echo "run-nemo-xrack: checking pre-cached ${_cache_b} (${_cache_size} bytes) on ${#hosts[@]} node(s)…"
+  # build_containers.sh adds an architecture suffix, while the LLMB installer names the same
+  # logical image without one. Prefer an exact basename, then the ARM spelling used on this GB300
+  # fleet. An explicit NVIS_NEMO_CACHE_BASENAME always wins (needed for a separately vetted image).
+  if [[ -z "${_cache_b}" ]]; then
+    _cache_candidates=("${_sqsh_b}")
+    if [[ "${_sqsh_b}" == *.sqsh ]]; then
+      _cache_candidates+=("${_sqsh_b%.sqsh}-arm.sqsh")
+    fi
+    for _candidate in "${_cache_candidates[@]}"; do
+      _candidate_size=$(stat -c%s "${_shared_cache_dir}/${_candidate}" 2>/dev/null || echo 0)
+      if [[ "${_candidate_size}" == "${_src_size}" ]]; then
+        _cache_b="${_candidate}"
+        break
+      fi
+    done
+  fi
 
-# Verify by counting nodes that POSITIVELY confirm the full readable file, and require all of
-# them. Unreachable nodes and short/absent files cannot accidentally pass. Do not fall back to
-# rsync from /home: a green-button click must never trigger an unbounded 40+ GiB fan-out.
-#
-# This used to count nodes that answered with a WRONG size ("echo BAD") and pass when that count
-# was zero, with pdsh's stderr sent to /dev/null. A node that could not be reached at all never
-# ran the remote command, so it printed no BAD and was silently counted as staged: a run where
-# ssh failed 255 on all 36 nodes still reported "staged OK on all 36 nodes" and went on to
-# submit. Requiring one OK per node inverts that — unreachable or short/missing files fail the
-# same way, because none of them produce CACHE_OK.
-_verify_out=$(pdsh -R ssh -w "$_hostcsv" \
-  "s=\$(stat -c%s '${_node_cache_path}' 2>/dev/null || echo 0); if [ \"\$s\" = '${_cache_size}' ] && [ -r '${_node_cache_path}' ]; then echo CACHE_OK; else echo CACHE_MISS_size=\$s; fi" 2>&1)
-_ok=$(printf '%s\n' "${_verify_out}" | grep -c 'CACHE_OK' || true)
-if [ "${_ok:-0}" -ne "${#hosts[@]}" ]; then
-  echo "run-nemo-xrack: ERROR: local image verified on only ${_ok}/${#hosts[@]} nodes at ${_node_cache_path}." >&2
-  echo "run-nemo-xrack: first cache misses or transport failures:" >&2
-  printf '%s\n' "${_verify_out}" | grep -v 'CACHE_OK' | head -10 | sed 's/^/  /' >&2
-  echo "run-nemo-xrack: aborting before submit; wait for bringup-agent/FileCopyTrigger rather than reading the image from the head node." >&2
-  exit 1
+  _shared_cache_path="${_shared_cache_dir}/${_cache_b}"
+  _cache_size=$(stat -c%s "${_shared_cache_path}" 2>/dev/null || echo 0)
+  if [[ -z "${_cache_b}" || "${_cache_size}" != "${_src_size}" ]]; then
+    echo "run-nemo-xrack: ERROR: no matching pre-cached image for ${NEMO_SQSH_SRC}." >&2
+    echo "run-nemo-xrack: expected ${_src_size} bytes under ${_shared_cache_dir}; refusing the legacy head-node fan-out." >&2
+    echo "run-nemo-xrack: stage the image through FileCopyTrigger, or set NVIS_NEMO_CACHE_BASENAME explicitly." >&2
+    exit 1
+  fi
+
+  _node_cache_path="${_node_cache_dir}/${_cache_b}"
+  echo "run-nemo-xrack: checking pre-cached ${_cache_b} (${_cache_size} bytes) on ${#hosts[@]} node(s)…"
+
+  # Verify by counting nodes that POSITIVELY confirm the full readable file, and require all of
+  # them. Unreachable nodes and short/absent files cannot accidentally pass. Do not fall back to
+  # rsync from /home: a green-button click must never trigger an unbounded 40+ GiB fan-out.
+  #
+  # This used to count nodes that answered with a WRONG size ("echo BAD") and pass when that count
+  # was zero, with pdsh's stderr sent to /dev/null. A node that could not be reached at all never
+  # ran the remote command, so it printed no BAD and was silently counted as staged: a run where
+  # ssh failed 255 on all 36 nodes still reported "staged OK on all 36 nodes" and went on to
+  # submit. Requiring one OK per node inverts that — unreachable or short/missing files fail the
+  # same way, because none of them produce CACHE_OK.
+  _verify_out=$(pdsh -R ssh -w "$_hostcsv" \
+    "s=\$(stat -c%s '${_node_cache_path}' 2>/dev/null || echo 0); if [ \"\$s\" = '${_cache_size}' ] && [ -r '${_node_cache_path}' ]; then echo CACHE_OK; else echo CACHE_MISS_size=\$s; fi" 2>&1)
+  _ok=$(printf '%s\n' "${_verify_out}" | grep -c 'CACHE_OK' || true)
+  if [ "${_ok:-0}" -ne "${#hosts[@]}" ]; then
+    echo "run-nemo-xrack: ERROR: local image verified on only ${_ok}/${#hosts[@]} nodes at ${_node_cache_path}." >&2
+    echo "run-nemo-xrack: first cache misses or transport failures:" >&2
+    printf '%s\n' "${_verify_out}" | grep -v 'CACHE_OK' | head -10 | sed 's/^/  /' >&2
+    echo "run-nemo-xrack: aborting before submit; wait for bringup-agent/FileCopyTrigger rather than reading the image from the head node." >&2
+    exit 1
+  fi
+  echo "run-nemo-xrack: cache ready on all ${#hosts[@]} nodes (verified ${_ok}/${#hosts[@]}); skipping head-node rsync"
+  export NVIS_NEMO_CONT="${_node_cache_path}"
 fi
-echo "run-nemo-xrack: cache ready on all ${#hosts[@]} nodes (verified ${_ok}/${#hosts[@]}); skipping head-node rsync"
-export NVIS_NEMO_CONT="${_node_cache_path}"
 
 # A node can remain IDLE in Slurm and still have every GPU marked reset-required. In that state
 # nvidia-smi inventory queries succeed, but CUDA context creation fails with "device busy or

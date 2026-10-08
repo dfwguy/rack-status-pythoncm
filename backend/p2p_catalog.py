@@ -16,8 +16,11 @@ is the source of truth; the file on the cluster is downstream of it.
 """
 from __future__ import annotations
 
+import json
+from typing import Any
+
 from catalog import models
-from catalog.store import TABLE_P2P_CATALOG, Repo, get_repo
+from catalog.store import TABLE_P2P_CATALOG, TABLE_PROJECTS, Repo, get_repo
 
 
 def get_catalog(cluster_id: str, repo: Repo | None = None) -> models.P2pCatalog:
@@ -44,3 +47,67 @@ def save_catalog(catalog: models.P2pCatalog, repo: Repo | None = None) -> models
     repo = repo or get_repo()
     saved = repo.upsert(TABLE_P2P_CATALOG, catalog.to_dict())
     return models.P2pCatalog.from_dict({**saved, "cluster_id": catalog.cluster_id})
+
+
+# ---------------------------------------------------------------------------
+# The catalog the launchers read
+# ---------------------------------------------------------------------------
+
+#: The catalog's files in the ``config/`` of the scripts the cluster runs (``script_tree.config_dir``). Read by
+#: ``bin/scripts/lib/node_images.inc.sh`` to check a node's image before a launch. Separate from the
+#: P2P origin's ``images.json``/``images.tsv``, which the P2P sync owns.
+CONFIG_JSON = "image-catalog.json"
+CONFIG_TSV = "image-catalog.tsv"
+
+
+def manifest_files(catalog: models.P2pCatalog, canonical_directory: str = "") -> dict[str, bytes]:
+    """The catalog as JSON and TSV, in exactly the operations worker's manifest format.
+
+    The worker's sync (``deploy/p2p/scripts/operations-worker.py:_sync_catalog``) writes the same two
+    shapes at the P2P origin, so a reader of either copy parses one format.
+    """
+    # The same projection the operations request carries (``P2pCatalog.to_dict()["images"]``).
+    images = catalog.to_dict()["images"]
+    doc = {"schema_version": 1, "catalog_name": "authored",
+           "canonical_directory": canonical_directory, "images": images}
+    rows = ["order\tname\tfilename\tbytes\tsha256"]
+    rows += [f"{i.get('order', 0)}\t{i.get('name', '')}\t{i.get('filename', '')}\t"
+             f"{i.get('bytes', 0)}\t{i.get('sha256', '')}" for i in images]
+    return {
+        CONFIG_JSON: json.dumps(doc, indent=2).encode("utf-8"),
+        CONFIG_TSV: ("\n".join(rows) + "\n").encode("utf-8"),
+    }
+
+
+def _placement(cluster_id: str, repo: Repo) -> tuple[str, str] | None:
+    """``(project_id, platform_id)`` of the cluster, which decide whose scripts it runs."""
+    for raw in repo.list(TABLE_PROJECTS):
+        project = models.Project.from_dict(raw)
+        cluster = project.get_cluster(cluster_id)
+        if cluster is not None:
+            return project.id, cluster.platform_id
+    return None
+
+
+def publish_to_scripts(cluster_id: str, *, repo: Repo | None = None, profile: str = "script") -> dict[str, Any]:
+    """Publish this cluster's authored catalog into the ``config/`` of the scripts it runs.
+
+    The authored document stays the source of truth; this is a projection of it for script
+    execution, re-published on every catalog save and script deploy.
+    """
+    import node_config
+    import p2p_config
+
+    repo = repo or get_repo()
+    if not has_catalog(cluster_id, repo):
+        return {"ok": False, "error": "no authored P2P catalog for this cluster"}
+    placement = _placement(cluster_id, repo)
+    if placement is None:
+        return {"ok": False, "error": f"cluster {cluster_id!r} belongs to no project"}
+    project_id, platform_id = placement
+    catalog = get_catalog(cluster_id, repo)
+    settings = p2p_config.get_settings(cluster_id, repo)
+    summary = node_config.publish(manifest_files(catalog, settings.container_path),
+                                  project_id=project_id, platform_id=platform_id, profile=profile)
+    summary["images"] = len(catalog.images)
+    return summary

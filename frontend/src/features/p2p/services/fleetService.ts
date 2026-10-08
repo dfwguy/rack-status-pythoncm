@@ -42,7 +42,17 @@ export type CatalogDoc = {
   /** false when the images are seeded from the current manifest rather than an authored document. */
   authored: boolean;
   images: CatalogImageEdit[];
+  /** On save: the copy published to the config/ of the scripts the cluster runs for launchers to check node images by. */
+  scripts_catalog?: ScriptsCatalogPublish;
 };
+
+/** Result of publishing the catalog into the scripts' shared config directory. */
+export type ScriptsCatalogPublish = { ok: boolean; dest?: string; images?: number; error?: string };
+
+/** Re-publish the catalog into the config/ of the scripts the cluster runs (for a script tree pushed outside the app). */
+export function publishCatalogToScripts(): Promise<ScriptsCatalogPublish> {
+  return apiJson<ScriptsCatalogPublish>(`${BASE}/catalog/publish`, { method: "POST" });
+}
 
 /** The active cluster's editable catalog (the task list). */
 export function getCatalog(): Promise<CatalogDoc> {

@@ -222,6 +222,24 @@ def scripts_dir(project_id: str = "", platform_id: str = "") -> str:
     return layers(project_id, platform_id)[-1]
 
 
+#: Inside a scripts directory: settings Rack Status publishes for the cluster, as files
+#: (``node_config``). Shipped empty in the default set (``bin/scripts/config/README.md``) so every
+#: layer and every bootstrapped project copy has one.
+CONFIG = "config"
+
+
+def config_dir(project_id: str = "", platform_id: str = "") -> str:
+    """The ``config/`` of the scripts a project actually runs.
+
+    Follows :func:`scripts_dir` -- the most specific layer that exists -- because that is the copy
+    whose ``lib/`` reads it: ``project-<id>/config`` once the project is bootstrapped, the platform
+    layer's when one is deployed, else ``multi-platform/config``. A project that is never
+    bootstrapped (NC today: project ``default`` on ``gb300-nvl72``, no platform layer) runs from the
+    shared default set, so that is where its settings must be.
+    """
+    return f"{scripts_dir(project_id, platform_id).rstrip('/')}/{CONFIG}"
+
+
 def resolve(basename: str, project_id: str = "", platform_id: str = "") -> str:
     """Absolute path to *basename*, from the most specific layer that has it.
 

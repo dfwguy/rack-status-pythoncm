@@ -23,6 +23,26 @@ from catalog.context import get_active
 from catalog.store import TABLE_PROJECTS, TinyDBRepo, get_repo, set_repo
 
 
+@pytest.fixture(autouse=True)
+def published(monkeypatch):
+    """Record catalog publishes instead of writing a scripts tree.
+
+    A save publishes the catalog into the scripts' config/ over the execution transport; here that
+    would land in whatever local tree the test environment resolves to. Where it lands is pinned by
+    test_node_config.py against a real deployed instance; these tests only need to know it was asked.
+    """
+    import p2p_catalog
+
+    calls: list[str] = []
+
+    def fake(cluster_id, **_kw):
+        calls.append(cluster_id)
+        return {"ok": True, "dest": "/scripts/multi-platform/config", "images": 1}
+
+    monkeypatch.setattr(p2p_catalog, "publish_to_scripts", fake)
+    return calls
+
+
 @pytest.fixture
 def client(tmp_path):
     repo = TinyDBRepo(tmp_path / "catalog.json")
@@ -520,6 +540,24 @@ class TestP2pCatalogApi:
         # The authored catalog is what the fleet status surfaces, even unprovisioned.
         status = client.get("/api/p2p/status").get_json()
         assert [i["name"] for i in status["catalog"]["images"]] == ["Only"]
+
+    def test_a_save_publishes_the_catalog_for_the_launchers(self, client, published):
+        _set_active_p2p(True)
+        imgs = [{"order": 1, "name": "Only", "filename": "only.sqsh", "bytes": 5, "sha256": "b" * 64}]
+        put = client.put("/api/p2p/catalog", json={"images": imgs}).get_json()
+        assert put["scripts_catalog"] == {"ok": True, "dest": "/scripts/multi-platform/config", "images": 1}
+        assert published == [get_active(get_repo())["cluster"]]
+
+    def test_publish_on_demand(self, client, published):
+        _set_active_p2p(True)
+        resp = client.post("/api/p2p/catalog/publish")
+        assert resp.status_code == 200 and resp.get_json()["ok"] is True
+        assert len(published) == 1
+
+    def test_publish_needs_p2p(self, client, published):
+        _set_active_p2p(False)
+        assert client.post("/api/p2p/catalog/publish").status_code == 404
+        assert published == []
 
     def test_put_rejects_invalid(self, client):
         _set_active_p2p(True)
