@@ -61,6 +61,7 @@ RACK_AI_SETTINGS_FILE = "Persisted assistant settings, so a change survives a re
 RACK_AI_TOOL_AUDIT_FILE = "Audit log of the tool calls the assistant made."
 
 # --- execution and Slurm -----------------------------------------------------------------------
+NVIS_RACK_MAPPING_MODE = "Rack placement mode selected by the active cluster: 'direct' parses rack ids from hostnames, 'translate' uses cluster-manager rack attributes, and 'pool' keeps nodes ungrouped. Defaults to 'direct'; BCM with Slurm uses Translate mode to enrich its scheduler roster with BCM placement."
 RACK_SCHEDULER = "Scheduler provider selected by the active cluster. Defaults to `slurm`; other schedulers read compute inventory from the cluster manager."
 RACK_SLURM_CONF = "An explicit `SLURM_CONF` to export before running Slurm commands. Needed where the scripts host is not the Slurm controller."
 RACK_MODULES_INIT = "Shell snippet that initialises Environment Modules before a Slurm command, replacing the built-in default."

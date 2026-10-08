@@ -11,7 +11,7 @@ Every environment variable the backend reads, found by scanning the source rathe
 importing it — a variable read inside a function body is never reached by an import, so only
 the source knows the whole set.
 
-**258 settings.** 21 are *declared* in
+**259 settings.** 21 are *declared* in
 `backend/config_registry.py`, which is the set `rackstatus.toml` can carry, the required-
 setting preflight can demand, and `rackstatus.toml.example` lists. 120 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
@@ -143,6 +143,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-nvis-rackstatus-config"></a>`NVIS_RACKSTATUS_CONFIG` | environment |  | Path of the operator config file, default config/rackstatus.toml. Its directory also holds tls/ for a supplied certificate. | `backend/config_launch.py` |
 | <a id="s-nvis-rack-fname-re"></a>`NVIS_RACK_FNAME_RE` | environment |  | Regex that finds a rack id inside a result-log filename. | `backend/universal_parser.py` |
 | <a id="s-nvis-rack-id"></a>`NVIS_RACK_ID` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvis_id_templates.py` +1 |
+| <a id="s-nvis-rack-mapping-mode"></a>`NVIS_RACK_MAPPING_MODE` | ladder | `direct` | Rack placement mode selected by the active cluster: 'direct' parses rack ids from hostnames, 'translate' uses cluster-manager rack attributes, and 'pool' keeps nodes ungrouped. Defaults to 'direct'; BCM with Slurm uses Translate mode to enrich its scheduler roster with BCM placement. | `backend/config_env.py` |
 | <a id="s-nvis-reports-dir"></a>`NVIS_REPORTS_DIR` | environment |  | Where generated reports are stored. | `backend/report_store.py` |
 | <a id="s-nvis-scripts-tree"></a>`NVIS_SCRIPTS_TREE` | ladder |  | Override the root of the layered script tree. | `backend/script_tree.py` |
 | <a id="s-nvis-ssh-key-dir"></a>`NVIS_SSH_KEY_DIR` | environment |  | Where cluster SSH private keys are written, owner-only. Defaults under `var/secrets/ssh`. | `backend/ssh_key_store.py` |
@@ -262,7 +263,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-pdsh-w-skip-slurm-expand"></a>`RACK_PDSH_W_SKIP_SLURM_EXPAND` | environment |  | Pass a `pdsh -w` target through verbatim instead of expanding it via Slurm first. | `backend/node_targets.py` |
 | <a id="s-rack-physical-rf0-loose-hostnames"></a>`RACK_PHYSICAL_RF0_LOOSE_HOSTNAMES` | environment |  | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
 | <a id="s-rack-physical-rf0-map-disabled"></a>`RACK_PHYSICAL_RF0_MAP_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/rack_status_engine.py` |
-| <a id="s-rack-platform"></a>`RACK_PLATFORM` | ladder | `bcm` | Cluster manager provider: 'bcm' (Base Command Manager) or 'maas'. | `backend/native_status.py`, `backend/platforms/__init__.py` |
+| <a id="s-rack-platform"></a>`RACK_PLATFORM` | ladder | `bcm` | Cluster manager provider: 'bcm' (Base Command Manager) or 'maas'. | `backend/config_env.py`, `backend/native_status.py` +1 |
 | <a id="s-rack-post-run-history-file"></a>`RACK_POST_RUN_HISTORY_FILE` | environment |  | Append-only history of post-run report events. | `backend/post_run_report.py` |
 | <a id="s-rack-post-run-max-events"></a>`RACK_POST_RUN_MAX_EVENTS` | environment | `100000` | Ceiling on retained post-run events. Floors at 1000. | `backend/post_run_report.py` |
 | <a id="s-rack-power-disabled"></a>`RACK_POWER_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
@@ -281,7 +282,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-remote-base-path"></a>`RACK_REMOTE_BASE_PATH` | ladder |  | Where the tooling is deployed on the head node. Script paths and the default log directory derive from it. Optional: unset falls back to the repo root, and a declared topology's scripts role root supersedes it. | `backend/host_exec.py`, `backend/paths.py` +2 |
 | <a id="s-rack-results-db"></a>`RACK_RESULTS_DB` | environment |  | SQLite database of parsed results history. | `backend/results_history.py` |
 | <a id="s-rack-results-db-busy-ms"></a>`RACK_RESULTS_DB_BUSY_MS` | environment |  | How long a results-database write waits on a lock before failing. | `backend/results_history.py` |
-| <a id="s-rack-scheduler"></a>`RACK_SCHEDULER` | ladder | `slurm` | Scheduler provider selected by the active cluster. Defaults to `slurm`; other schedulers read compute inventory from the cluster manager. | `backend/native_status.py`, `backend/rack_status_engine.py` |
+| <a id="s-rack-scheduler"></a>`RACK_SCHEDULER` | ladder | `slurm` | Scheduler provider selected by the active cluster. Defaults to `slurm`; other schedulers read compute inventory from the cluster manager. | `backend/config_env.py`, `backend/native_status.py` +1 |
 | <a id="s-rack-scheduler-watch-disabled"></a>`RACK_SCHEDULER_WATCH_DISABLED` | ladder |  | Stop sampling whether the active cluster's scheduler can accept work. The samples are what answer *when* it stopped answering; on-demand probing still works without them. | `backend/scheduler_watch.py` |
 | <a id="s-rack-scheduler-watch-interval-sec"></a>`RACK_SCHEDULER_WATCH_INTERVAL_SEC` | ladder |  | Seconds between scheduler readiness samples. Default 60, floors at 10 so the check never becomes the load. | `backend/scheduler_watch.py` |
 | <a id="s-rack-services-restart-disabled"></a>`RACK_SERVICES_RESTART_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py` |
