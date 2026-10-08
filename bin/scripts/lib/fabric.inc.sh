@@ -155,13 +155,32 @@ _nvis_fabric_apply() {
   # shellcheck disable=SC2086
   eval "${scan}"
 
+  # Bootstrap / north-south plane (routable) for NCCL + Open MPI wireup. Exported FIRST and
+  # unconditionally: it is a different plane from the compute rails, and the scan resolves it
+  # whether or not any rail is found. Gating it behind the rail check below meant a node whose
+  # rail probe came back empty exported nothing, and nccl_allreduce.sbatch fell through to a
+  # literal bond0 -- which GB300 nodes do not have -- so mpirun aborted on "None of the TCP
+  # networks ... could be found: bond0" even for a single-node NVLink run that needs no rails.
+  export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-${NVIS_FAB_NS_IFNAME}}"
+  export OMPI_MCA_btl_tcp_if_include="${OMPI_MCA_btl_tcp_if_include:-${NVIS_FAB_NS_IFNAME}}"
+  export OMPI_MCA_oob_tcp_if_include="${OMPI_MCA_oob_tcp_if_include:-${NVIS_FAB_NS_IFNAME}}"
+  # Transport-safety defaults, likewise independent of which rails exist. Left behind the rail
+  # gate, a no-rails node ran with UCC enabled and every rank died at once with
+  # "UCC ERROR failed to create tl context for ucp" then SIGSEGV (rc=139).
+  # UCX transport: forbid the tcp/IPoIB transport (unroutable cross-rack); use RDMA.
+  export UCX_TLS="${UCX_TLS:-^tcp}"
+  # UCC's cross-rack address exchange segfaults on unroutable IPoIB; drop it (NCCL,
+  # not MPI collectives, does the real work in the perf tests).
+  export OMPI_MCA_coll_ucc_enable="${OMPI_MCA_coll_ucc_enable:-0}"
+
   local gpus; gpus="$(_nvis_fabric_gpu_count)"
   if [[ -n "${NVIS_FAB_RAILS:-}" && "${NVIS_FAB_RAILS}" -gt 0 && "${NVIS_FAB_RAILS}" -lt "${gpus}" ]]; then
     echo "nvis_fabric: WARNING: only ${NVIS_FAB_RAILS} compute rail(s) found for ${gpus} GPUs" \
          "(link=${NVIS_FAB_LINK} rate=${NVIS_FAB_RATE}G) — check NVIS_RDMA_LINK_TECH / cabling" >&2
   fi
   if [[ -z "${NVIS_FAB_IB_HCA:-}" ]]; then
-    echo "nvis_fabric: WARNING: no compute rails detected; leaving NCCL/UCX env untouched" >&2
+    echo "nvis_fabric: WARNING: no compute rails detected; device selection left to per-rank auto-detect" \
+         "(bootstrap NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME})" >&2
     return 0
   fi
 
@@ -185,16 +204,6 @@ _nvis_fabric_apply() {
     [[ -n "${NCCL_IB_HCA:-}" ]] && export NCCL_IB_HCA
     [[ -n "${UCX_NET_DEVICES:-}" ]] && export UCX_NET_DEVICES
   fi
-  # Bootstrap / north-south plane (routable) for NCCL + Open MPI wireup.
-  export NCCL_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME:-${NVIS_FAB_NS_IFNAME}}"
-  export OMPI_MCA_btl_tcp_if_include="${OMPI_MCA_btl_tcp_if_include:-${NVIS_FAB_NS_IFNAME}}"
-  export OMPI_MCA_oob_tcp_if_include="${OMPI_MCA_oob_tcp_if_include:-${NVIS_FAB_NS_IFNAME}}"
-  # UCX transport: forbid the tcp/IPoIB transport (unroutable cross-rack); use RDMA.
-  export UCX_TLS="${UCX_TLS:-^tcp}"
-  # UCC's cross-rack address exchange segfaults on unroutable IPoIB; drop it (NCCL,
-  # not MPI collectives, does the real work in the perf tests).
-  export OMPI_MCA_coll_ucc_enable="${OMPI_MCA_coll_ucc_enable:-0}"
-
   echo "nvis_fabric: link=${NVIS_FAB_LINK} rate=${NVIS_FAB_RATE}G rails=${NVIS_FAB_RAILS}" \
        "NCCL_IB_HCA=${NCCL_IB_HCA:-<auto: per-node detect>} NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME}" >&2
 }

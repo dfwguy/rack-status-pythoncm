@@ -170,7 +170,10 @@ if [ "${NVIS_NCCL_HCA_AUTO:-0}" = "1" ]; then
   unset NCCL_IB_HCA UCX_NET_DEVICES
   echo "nccl_allreduce: NVIS_NCCL_HCA_AUTO=1 — per-node HCA auto-detect (not pinning NCCL_IB_HCA/UCX_NET_DEVICES)"
 fi
-NS_IF="${NCCL_SOCKET_IFNAME:-bond0}"  # routable mgmt iface for MPI + NCCL bootstrap
+# Routable mgmt iface for MPI + NCCL bootstrap. Fall back to the fabric library's own resolver
+# (bond0/bond1, else the first up netdev with a global IPv4), never a literal bond0 -- GB300
+# nodes have none, and that literal is what aborted mpirun before any collective ran.
+NS_IF="${NCCL_SOCKET_IFNAME:-$(_nvis_fabric_ns_ifname)}"
 
 # --- Build hostfile from the allocation -----------------------------------------
 NODES="$(scontrol show hostnames "${SLURM_JOB_NODELIST}")"
