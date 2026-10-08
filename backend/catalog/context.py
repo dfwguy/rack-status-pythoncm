@@ -235,6 +235,14 @@ def high_overlay(
     # P2P owns the node cache: launchers verify the image is there and never copy it from the head
     # (lib/node_images.inc.sh). A missing image is a campaign to run, not a 40 GiB NFS fan-out.
     _put(out, "NVIS_NODE_IMAGES_P2P", "1" if cluster.p2p_enabled else "")
+    # How this site's compute fabric is wired and addressed, where it differs from the platform
+    # (blank = detect on the node). In the HIGH overlay, so a scale-out the cluster states beats
+    # the platform's low-precedence fabric_defaults(). Read by lib/fabric.inc.sh; NVIS_ forwards
+    # over SSH, and the sbatch carries it to the ranks with --export=ALL.
+    fab = cluster.fabric
+    _put(out, "NVIS_RDMA_LINK_TECH", fab.scaleout)
+    _put(out, "NVIS_FABRIC_ADDR_FAMILY", fab.addr_family)
+    _put(out, "NVIS_FABRIC_HCA", fab.compute_hca)
     _put(out, "RACK_CLUSTER_NAME", cluster.name)
     # The active ids, so `script_tree` can pick a project's own copy of a script without
     # importing the catalog. Every other per-cluster value already reaches its consumer this

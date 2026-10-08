@@ -37,6 +37,7 @@ every login, and what keeps it away from a deployment that upgrades.
 | `site_prefix` | string | The leading token in this site's rack ids. Used to group a multirack launch. |
 | `naming` | object | The three templates — see [Geometry and hostnames](../../explanation/geometry-and-hostnames.md). |
 | `geometry` | object | `pods`, `rows_per_pod`, `racks_per_row`, `trays_per_rack`. |
+| `fabric` | object | How this site's compute fabric is wired and addressed, where it differs from the platform: `scaleout`, `addr_family`, `compute_hca`. All blank = detect on each node; see below. |
 | `scalable_units` | list | This cluster's SU-to-rack mapping. Empty derives it from the platform's `fabric.racks_per_su`; see below. |
 | `connection` | object | How the app reaches the cluster, below. |
 
@@ -199,6 +200,32 @@ ordered list reproduces.
 
 An explicit list must be a clean partition. A rack appearing in two SUs, a duplicate id, or an SU
 with no racks is a validation error on the record, not a warning.
+
+
+### fabric
+
+Overrides for the on-node fabric scan (`bin/scripts/lib/fabric.inc.sh`). The **platform** says
+what the scale-out hardware is (`fabric.scaleout`, rails per GPU, rate); the **site** decides how it
+is wired and addressed, and two sites with the same platform can disagree. Every field is blank by
+default, which means "detect", and detection is right on every cluster we run today — set a field
+only where it is not.
+
+| Field | Values | Exported as | Purpose |
+|---|---|---|---|
+| `scaleout` | blank, `ib`, `roce` | `NVIS_RDMA_LINK_TECH` | Overrides the platform's `fabric.scaleout`. Blank inherits it. |
+| `addr_family` | blank, `ipv4`, `ipv6` | `NVIS_FABRIC_ADDR_FAMILY` | RoCE address family; becomes `NCCL_IB_ADDR_FAMILY`. Blank reads it off the compute GIDs. |
+| `compute_hca` | an `NCCL_IB_HCA` value | `NVIS_FABRIC_HCA` | The devices (or name prefix) that are the compute plane, e.g. `roce_vf_r`. Blank detects. Device names or prefixes, comma-separated, optionally led by `^` or `=`; nothing a shell would interpret. |
+
+What detection does, so you can tell when it is wrong. A RoCE rail is an ACTIVE port with a
+**routable** GID (not zero, not `fe80::`) whose netdev does **not** carry a default route; bonds and
+the NVSwitch-attached HCA are never rails, and rate is not used. That is what finds Nscale NC's
+compute plane — SR-IOV VFs `roce_vf_r1..4` at 200G with IPv6-only GIDs — and rejects the 400G
+`mlx5_12` (the default-route management NIC) and the OVS uplink PFs `roce_r1..4` (no routable GID).
+Because an unpinned NCCL would also open those, the scan pins `NCCL_IB_HCA` to the rails' common name
+prefix (`roce_vf_r`, the same string on every node) and sets `NCCL_IB_ADDR_FAMILY=AF_INET6`.
+InfiniBand is unchanged: IB GIDs sit on `fe80::/64` by design, so IB rails are still chosen by rate
+and left to per-rank auto-detect. All three values are projected per cluster in the high overlay, so
+`scaleout` beats the platform's default, and they forward over SSH by their `NVIS_` prefix.
 
 ## Connection
 

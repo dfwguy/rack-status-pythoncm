@@ -903,6 +903,59 @@ class ClusterGeometry:
         )
 
 
+#: Scale-out technology a cluster may state; blank inherits the platform's ``fabric.scaleout``.
+CLUSTER_FABRIC_SCALEOUT = ("", "ib", "roce")
+#: RoCE address family a cluster may state; blank lets the scan read it off the compute GIDs.
+CLUSTER_FABRIC_ADDR_FAMILIES = ("", "ipv4", "ipv6")
+#: An ``NCCL_IB_HCA`` value: an optional ``^``/``=`` modifier, then comma-separated device names or
+#: name prefixes, each with an optional ``:port``. Nothing else -- it is exported into a shell.
+_NCCL_IB_HCA_RE = re.compile(r"^[\^=]?[A-Za-z0-9_.-]+(:[0-9]+)?(,[A-Za-z0-9_.-]+(:[0-9]+)?)*$")
+
+
+@dataclass
+class ClusterFabric:
+    """How this deployment's compute fabric differs from what its platform implies.
+
+    The platform says what the hardware is (``PlatformFabric``: IB or RoCE, rails per GPU, rate).
+    A site decides how it is wired and addressed, and two sites with the same platform can
+    disagree: NscaleTX-NC runs its GB300 Spectrum-X rails as SR-IOV VFs (``roce_vf_r1..4``) behind
+    OVS uplink PFs (``roce_r1..4``), addressed over IPv6 only, while the 400G NICs a rate-based pick
+    would choose are its management plane. ``bin/scripts/lib/fabric.inc.sh`` detects all of that
+    unaided; every field here is an override for a site where detection is wrong, and blank means
+    "detect". Projected per cluster (``catalog.context``) as ``NVIS_RDMA_LINK_TECH``,
+    ``NVIS_FABRIC_ADDR_FAMILY`` and ``NVIS_FABRIC_HCA``, which forward over SSH by their prefix.
+    """
+
+    scaleout: str = ""  # "" (platform's) | ib | roce
+    addr_family: str = ""  # "" (detect) | ipv4 | ipv6
+    #: The ``NCCL_IB_HCA`` value naming the compute plane (e.g. ``roce_vf_r``); blank = detect.
+    compute_hca: str = ""
+
+    @classmethod
+    def from_dict(cls, d: Any) -> ClusterFabric:
+        d = _as_dict(d)
+        return cls(
+            scaleout=_as_str(d.get("scaleout")).strip().lower(),
+            addr_family=_as_str(d.get("addr_family")).strip().lower(),
+            compute_hca=_as_str(d.get("compute_hca")).strip(),
+        )
+
+    def validate(self) -> list[str]:
+        problems: list[str] = []
+        if self.scaleout not in CLUSTER_FABRIC_SCALEOUT:
+            problems.append(f"fabric.scaleout must be one of ib, roce or blank (got {self.scaleout!r})")
+        if self.addr_family not in CLUSTER_FABRIC_ADDR_FAMILIES:
+            problems.append(
+                f"fabric.addr_family must be one of ipv4, ipv6 or blank (got {self.addr_family!r})"
+            )
+        if self.compute_hca and not _NCCL_IB_HCA_RE.match(self.compute_hca):
+            problems.append(
+                "fabric.compute_hca must be an NCCL_IB_HCA value: device names or name prefixes, "
+                f"comma-separated, optionally led by ^ or = (got {self.compute_hca!r})"
+            )
+        return problems
+
+
 @dataclass
 class Endpoint:
     """One place the app can execute: a host, or a hop *through* another endpoint.
@@ -1116,6 +1169,8 @@ class Cluster:
     site_prefix: str = ""  # pod/site prefix for multirack bracket expansion
     naming: ClusterNaming = field(default_factory=ClusterNaming)
     geometry: ClusterGeometry = field(default_factory=ClusterGeometry)
+    # How this site's compute fabric is wired and addressed, where that differs from the platform.
+    fabric: ClusterFabric = field(default_factory=ClusterFabric)
     connection: ClusterConnection = field(default_factory=ClusterConnection)
     # Empty means "derive from the platform's racks_per_su"; see scalable_units_for().
     scalable_units: list[ClusterScalableUnit] = field(default_factory=list)
@@ -1145,6 +1200,7 @@ class Cluster:
             site_prefix=_as_str(d.get("site_prefix")),
             naming=ClusterNaming.from_dict(d.get("naming")),
             geometry=ClusterGeometry.from_dict(d.get("geometry")),
+            fabric=ClusterFabric.from_dict(d.get("fabric")),
             connection=ClusterConnection.from_dict(d.get("connection")),
             scalable_units=(
                 [ClusterScalableUnit.from_dict(s) for s in sus_raw]
@@ -1201,6 +1257,7 @@ class Cluster:
                 f"{P2P_NODE_CONTAINER_DIR} on every node; leave it blank or set {P2P_NODE_CONTAINER_DIR}"
             )
         problems.extend(self._validate_scalable_units())
+        problems.extend(self.fabric.validate())
         problems.extend(self._validate_campaigns())
         return problems
 

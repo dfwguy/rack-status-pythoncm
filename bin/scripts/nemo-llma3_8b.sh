@@ -73,16 +73,11 @@ ns_nic=$(select_ns_nic)
 echo "INFO: ns_nic=${ns_nic} (auto: bond0 vs enP22s22f0np0)"
 set -x
 # East-west (compute) rails via the shared classifier (ACTIVE + IB/RoCE + top line
-# rate; excludes slower BlueField-3 storage NICs). Falls back to mlx5_0..3.
+# rate on IB; routable-GID, off-the-default-route ports on RoCE). No mlx5_N fallback.
 _nvis_lib="$(dirname "${BASH_SOURCE[0]}")/lib/fabric.inc.sh"
 # shellcheck disable=SC1090
 [[ -f "${_nvis_lib}" ]] && . "${_nvis_lib}"
 if declare -F nvis_fabric_scan >/dev/null 2>&1; then eval "$(nvis_fabric_scan 2>/dev/null)"; fi
-if [[ -n "${NVIS_FAB_IB_HCA:-}" ]]; then
-  IFS=',' read -r -a ew_nics <<< "${NVIS_FAB_IB_HCA}"
-else
-  ew_nics=($(echo mlx5_{0..3}))
-fi
 export MELLANOX_VISIBLE_DEVICES=all
 export PMIX_MCA_gds=hash
 #
@@ -92,8 +87,14 @@ if [ $single_rack -eq 1 ]; then
   export UCX_NET_DEVICES=${ns_nic}
 else
   export UCX_TLS=rc
-  export UCX_NET_DEVICES="$(echo ${ew_nics[@]}|tr ' ' '\n'|xargs -I {} echo {}:1|paste -s -d',')"
-  export NCCL_IB_HCA="=$(echo ${ew_nics[@]}|tr ' ' '\n'|xargs -I {} echo {}|paste -s -d',')"
+  # Cross-rack plane: this node's exact rails (=list), the RoCE address family and the cluster's
+  # stated plane, all from lib/fabric.inc.sh -- never a guessed mlx5_0..3, which mixed IB and RoCE
+  # NICs on one cluster and named no rail at all on GB300 NscaleTX-NC (rails roce_vf_r1..4, IPv6).
+  if declare -F nvis_fabric_export_pinned >/dev/null 2>&1; then
+    nvis_fabric_export_pinned || echo "WARN: no compute rails detected; NCCL/UCX auto-detect the cross-rack plane"
+  else
+    echo "WARN: lib/fabric.inc.sh not loaded; NCCL/UCX auto-detect the cross-rack plane"
+  fi
 fi
 #
 export NCCL_SOCKET_IFNAME=${ns_nic}

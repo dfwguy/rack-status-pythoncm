@@ -37,20 +37,14 @@ echo "== nccl_a2a_debug: NNODES=${SLURM_NNODES} CONT=${CONT} =="
 echo "== nodelist: ${SLURM_JOB_NODELIST} =="
 
 # --- Fabric env: identical to the multi-rack NeMo / A/B path -----------------------------------
-ns_nic=bond0
 # shellcheck disable=SC1090,SC1091
 [[ -f "${SCR}/lib/fabric.inc.sh" ]] && . "${SCR}/lib/fabric.inc.sh"
-if declare -F nvis_fabric_scan >/dev/null 2>&1; then eval "$(nvis_fabric_scan 2>/dev/null)"; fi
-if [[ -n "${NVIS_FAB_IB_HCA:-}" ]]; then
-  IFS=',' read -r -a ew <<< "${NVIS_FAB_IB_HCA}"
-else
-  ew=(mlx5_0 mlx5_1 mlx5_4 mlx5_5)
-fi
+# Rails (pinned exactly, =list), RoCE address family, the bootstrap NIC and the MPI transport
+# defaults all come from the shared detector. This used to hard-code ns_nic=bond0 and fall back to
+# mlx5_0,1,4,5 -- GB300 NscaleTX-NC has no bond0 and its rails are roce_vf_r1..4.
+if declare -F nvis_fabric_export_pinned >/dev/null 2>&1; then nvis_fabric_export_pinned || true; fi
 export MELLANOX_VISIBLE_DEVICES=all PMIX_MCA_gds=hash
 export UCX_TLS=rc
-export UCX_NET_DEVICES="$(printf '%s:1\n' "${ew[@]}" | paste -sd,)"
-export NCCL_IB_HCA="=$(printf '%s\n' "${ew[@]}" | paste -sd,)"
-export NCCL_SOCKET_IFNAME=${ns_nic} OMPI_MCA_btl_tcp_if_include=${ns_nic} OMPI_MCA_oob_tcp_if_include=${ns_nic}
 export OMPI_ALLOW_RUN_AS_ROOT=1 OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1 OMPI_MCA_coll_hcoll_enable=0 SLURM_CPU_BIND=none
 export NCCL_NVLS_ENABLE=1 NCCL_MIN_CTAS=16 NCCL_RUNTIME_CONNECT=0 NCCL_IB_QPS_PER_CONNECTION=2 CUDA_MODULE_LOADING=EAGER
 unset NCCL_MNNVL_ENABLE

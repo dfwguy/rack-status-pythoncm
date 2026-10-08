@@ -290,8 +290,11 @@ f_check_ew_ib(){
 f_check_ew_spx(){
   ## SPX
   ret=($(
-  for dev in /sys/class/infiniband/mlx5_*; do
-    roce_adp_retrans=$(</sys/class/infiniband/$(basename ${dev})/ports/1/hw_counters/roce_adp_retrans)
+  # Every RDMA device, not just mlx5_*: GB300 Spectrum-X compute rails are VFs named roce_vf_r*.
+  # Devices without the counter (IB HCAs, bonds) are skipped rather than read as an error.
+  for dev in /sys/class/infiniband/*; do
+    [[ -r ${dev}/ports/1/hw_counters/roce_adp_retrans ]] || continue
+    roce_adp_retrans=$(<${dev}/ports/1/hw_counters/roce_adp_retrans)
     if [[ ${roce_adp_retrans} -ne 0 ]]; then
       echo $(basename ${dev}):roce_adp_retrans=${roce_adp_retrans}
     fi

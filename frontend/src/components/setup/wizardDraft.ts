@@ -228,6 +228,9 @@ export function toCluster(draft: WizardDraft): Cluster {
       racks_per_row: int(draft.racksPerRow),
       trays_per_rack: int(draft.traysPerRack),
     },
+    // The wizard does not ask about the fabric: the on-node scan detects the rails and their
+    // address family, which is right unless a site is unusual; that site states it in the editor.
+    fabric: { scaleout: "", addr_family: "", compute_hca: "" },
     connection: {
       exec_mode: draft.execMode,
       ssh_host: draft.sshHost.trim(),

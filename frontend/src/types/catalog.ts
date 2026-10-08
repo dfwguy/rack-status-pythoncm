@@ -187,6 +187,23 @@ export interface ClusterEvidence {
   healthcheck_root: string;
 }
 
+/**
+ * How this site's compute fabric is wired and addressed, where that differs from its platform.
+ *
+ * Every field is an override; blank means the on-node scan (`bin/scripts/lib/fabric.inc.sh`)
+ * detects it. NscaleTX-NC needs none of them -- the scan finds its SR-IOV RoCE rails
+ * (`roce_vf_r1..4`) and their IPv6-only GIDs on its own -- but a site where detection is wrong
+ * states the answer here, per cluster, instead of editing a script.
+ */
+export interface ClusterFabric {
+  /** "" inherits the platform's `fabric.scaleout`; otherwise "ib" or "roce". */
+  scaleout: string;
+  /** "" reads it off the compute GIDs; otherwise "ipv4" or "ipv6" (NCCL_IB_ADDR_FAMILY). */
+  addr_family: string;
+  /** An NCCL_IB_HCA value naming the compute plane, e.g. "roce_vf_r"; "" detects. */
+  compute_hca: string;
+}
+
 export interface ClusterConnection {
   exec_mode: string;
   ssh_host: string;
@@ -221,6 +238,8 @@ export interface Cluster {
   site_prefix: string;
   naming: ClusterNaming;
   geometry: ClusterGeometry;
+  /** Per-site fabric overrides; all blank = detect on the node. */
+  fabric: ClusterFabric;
   connection: ClusterConnection;
   /** Empty means "derive from the platform's `fabric.racks_per_su`", not "one SU". */
   scalable_units: ClusterScalableUnit[];

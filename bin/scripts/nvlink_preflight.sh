@@ -63,7 +63,8 @@
 #   pdsh -R ssh -w '<nodes>' 'bash /cm/shared/nvtest/nvlink_preflight.sh --quick' | dshbak -c
 #
 # Env: NVLS_VENV, NVLS_TEST, NVLS_TIMEOUT (see nvlink_fabric_fingerprint.sh).
-#      SHARP check (two-stage): Stage 1 filters candidate rails = active mlx5 ports on an RDMA
+#      SHARP check (two-stage): Stage 1 filters candidate rails = active RDMA ports (any device
+#      name, bonds excluded) on an RDMA
 #      link layer (InfiniBand OR Ethernet/RoCE); Stage 2 runs sharp_hello and the passers are the
 #      SHARP rails. Gate = SHARP rails >= #GPUs (one compute rail per GPU), so the Ethernet
 #      BlueField-3 storage plane is simply not counted (no false WARN) and it works on GB200/
@@ -235,7 +236,10 @@ if [ "${SHARP_ENABLE:-1}" = "1" ]; then
       _hcas="${SHARP_HCAS}"
     else
       _hcas=""
-      for _d in $(ls /sys/class/infiniband 2>/dev/null | grep -E '^mlx5_' | sort -V); do
+      # Any RDMA device name, not just mlx5_*: GB300 Spectrum-X exposes its compute rails as SR-IOV
+      # VFs named roce_vf_r1..4, which an ^mlx5_ filter never offered to sharp_hello. Bonds are never
+      # a GPU rail. sharp_hello below is still what decides which candidates are SHARP rails.
+      for _d in $(ls /sys/class/infiniband 2>/dev/null | grep -v bond | sort -V); do
         _ll=$(cat "/sys/class/infiniband/${_d}/ports/1/link_layer" 2>/dev/null)
         _st=$(cat "/sys/class/infiniband/${_d}/ports/1/state" 2>/dev/null)
         printf '%s' "${_st}" | grep -q 'ACTIVE' || continue

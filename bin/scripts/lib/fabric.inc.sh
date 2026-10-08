@@ -19,14 +19,25 @@
 # the 400G InfiniBand rails).
 #
 # Selection heuristic (works across GB200/GB300/B300/VR200/HGX + IB or RoCE):
-#   1. Consider only mlx5_* ports that are state=ACTIVE.
-#   2. Split by link_layer: InfiniBand vs Ethernet(RoCE).
-#   3. Pick the desired technology (NVIS_RDMA_LINK_TECH: ib|roce|auto; auto = IB
-#      if any active IB port exists, else RoCE).
-#   4. Within that technology keep only ports at the TOP link rate — this drops
-#      slower BlueField-3 storage NICs (e.g. 200G) while keeping the 400G/800G
-#      compute rails.
-#   5. Sanity gate: if the count of selected rails is < the GPU count we log a
+#   1. Consider every RDMA device whose port 1 is state=ACTIVE, except bonds (mlx5_bond_*,
+#      the OOB bond0) and the NVSwitch-attached HCA (one PCIe device with 4 functions).
+#   2. Split by link_layer: InfiniBand vs Ethernet(RoCE). Pick the technology
+#      (NVIS_RDMA_LINK_TECH: ib|roce|auto; auto = IB if any active IB port exists, else RoCE).
+#   3. InfiniBand: keep the ports at the TOP link rate (drops slower BlueField-3 storage
+#      NICs). IB GIDs live on fe80::/64 by default, so no GID rule applies there.
+#   4. RoCE: keep a port only if it has a ROUTABLE GID (not zero, not fe80::) and its netdev
+#      does not carry a default route. Rate is NOT used: on GB300 NVL72 Spectrum-X the compute
+#      rails are 200G VFs (roce_vf_r*) while the management NICs are 400G, so a top-rate rule
+#      picked exactly the wrong devices. The PFs behind the VFs (roce_r*) are OVS uplinks with
+#      no routable GID and drop out by rule 4. The kept GIDs decide the address family: all
+#      IPv6 (no IPv4-mapped GID) -> NCCL_IB_ADDR_FAMILY=AF_INET6, else AF_INET. NCCL's GID
+#      auto-select needs the family; the GID *index* differs per node, so it is never pinned.
+#   5. RoCE only: if any other ACTIVE device exists, NCCL left to itself would use it too, so
+#      NCCL_IB_HCA is pinned -- to the rails' common name prefix (e.g. roce_vf_r, which NCCL
+#      prefix-matches) when no other device starts with it, since that string is identical on
+#      every node even when one node lacks a rail; otherwise to the exact list. IB keeps its
+#      per-rank auto-detect (see the job 65648 note in _nvis_fabric_apply).
+#   6. Sanity gate: if the count of selected rails is < the GPU count we log a
 #      warning (likely mis-detection) but still proceed with what we found.
 #
 # EVERY exported var is overridable: if the caller already set it (site override,
@@ -35,19 +46,90 @@
 # Public functions:
 #   nvis_fabric_scan            — print eval-able NVIS_FAB_* assignments (local sysfs)
 #   nvis_fabric_export          — scan locally + export NCCL/UCX/OMPI env (on-node use)
+#   nvis_fabric_export_pinned   — the same, then pin NCCL/UCX to this node's exact rails (=list)
+#   nvis_fabric_export_compute  — ONLY the RoCE compute plane (NCCL_IB_HCA pin, NCCL_IB_ADDR_FAMILY)
+#   nvis_fabric_ns_ifname       — print the routable bootstrap netdev (bond0 if present, else routable)
 #   nvis_fabric_export_from_node <node> [ssh]  — scan a remote node + export (head/submit-time use)
 #   nvis_fabric_report          — human-readable classification (+ expected-vs-actual if NVIS_FABRIC_EXPECT_*)
 #
-# Env inputs:
-#   NVIS_RDMA_LINK_TECH   ib | roce | auto      (default auto)
-#   GPUS_PER_NODE         gpu count for the gate (default: nvidia-smi -L count, else 4)
-#   NVIS_FABRIC_NS_IFNAME bootstrap/NS netdev override (default: bond0 if up, else first up eth)
+# Env inputs (the cluster's fabric record projects the first three -- catalog.models.ClusterFabric):
+#   NVIS_RDMA_LINK_TECH      ib | roce | auto   (default auto)
+#   NVIS_FABRIC_HCA          NCCL_IB_HCA value naming the compute plane, e.g. roce_vf_r (default: detect)
+#   NVIS_FABRIC_ADDR_FAMILY  ipv4 | ipv6        (default: detect from the compute GIDs)
+#   GPUS_PER_NODE            gpu count for the gate (default: nvidia-smi -L count, else 4)
+#   NVIS_FABRIC_NS_IFNAME    bootstrap/NS netdev override (default: bond0 if up, else first up eth)
 #   NVIS_FABRIC_EXPECT_RAILS / NVIS_FABRIC_EXPECT_RATE  optional expected profile (validation)
+# Test seams: NVIS_FABRIC_SYSFS (ib root), NVIS_FABRIC_NETFS (net root), NVIS_FABRIC_PROCNET,
+#   NVIS_FABRIC_DEFAULT_ROUTE_IFS / NVIS_FABRIC_NVSWITCH_BDFS (set, even empty, to skip probing).
+
+# Netdevs carrying a default route (the management plane), one per line.
+_nvis_fabric_default_route_ifs() {
+  if [[ -n "${NVIS_FABRIC_DEFAULT_ROUTE_IFS+x}" ]]; then
+    # shellcheck disable=SC2086
+    printf '%s\n' ${NVIS_FABRIC_DEFAULT_ROUTE_IFS}
+    return 0
+  fi
+  # /proc/net when there is no `ip` -- inside a pyxis container, where the NeMo launchers run
+  # this scan. Containers share the host network namespace, so the routes are the host's. Without
+  # this the exclusion silently did nothing there and a default-route NIC with a routable GID
+  # (NscaleTX-NC's mlx5_12) was taken for a rail. NVIS_FABRIC_PROCNET is the test seam.
+  local procnet="${NVIS_FABRIC_PROCNET:-/proc/net}"
+  if [[ -z "${NVIS_FABRIC_PROCNET:-}" ]] && command -v ip >/dev/null 2>&1; then
+    { ip -o route show default; ip -6 -o route show default; } 2>/dev/null \
+      | awk '{for (i = 1; i < NF; i++) if ($i == "dev") print $(i + 1)}' | sort -u
+    return 0
+  fi
+  {
+    # route: Iface Destination ... -- a default route is Destination 00000000 (hex, little-endian).
+    [[ -r "${procnet}/route" ]] && awk 'NR > 1 && $2 == "00000000" {print $1}' "${procnet}/route"
+    # ipv6_route: dest dest_len ... iface -- a default route is ::/0.
+    [[ -r "${procnet}/ipv6_route" ]] \
+      && awk '$1 == "00000000000000000000000000000000" && $2 == "00" && $NF != "lo" {print $NF}' "${procnet}/ipv6_route"
+  } | sort -u
+}
+
+# PCI bus addresses (BDF minus function) of the NVSwitch-attached HCA: one device, 4 functions.
+_nvis_fabric_nvswitch_bdfs() {
+  if [[ -n "${NVIS_FABRIC_NVSWITCH_BDFS+x}" ]]; then
+    # shellcheck disable=SC2086
+    printf '%s\n' ${NVIS_FABRIC_NVSWITCH_BDFS}
+    return 0
+  fi
+  command -v lspci >/dev/null 2>&1 || return 0
+  lspci -D 2>/dev/null | grep -i infiniband | awk '{print $1}' | cut -d. -f1 \
+    | sort | uniq -c | awk '$1 == 4 {print $2}'
+}
+
+# Routable-GID family of one port dir: v6, v4, both, or nothing when it has no routable GID.
+# Zero and link-local (fe80::) GIDs are skipped; ::ffff:a.b.c.d is an IPv4-mapped GID.
+_nvis_fabric_gid_family() {
+  local g v4=0 v6=0
+  for g in "$1"/gids/*; do
+    [[ -r "$g" ]] || continue
+    g="$(cat "$g" 2>/dev/null)"
+    [[ -z "$g" || "$g" == 0000:0000:0000:0000:0000:0000:0000:0000 || "$g" == fe80:* ]] && continue
+    if [[ "$g" == 0000:0000:0000:0000:0000:ffff:* ]]; then v4=1; else v6=1; fi
+  done
+  if (( v4 && v6 )); then printf 'both'; elif (( v6 )); then printf 'v6'; elif (( v4 )); then printf 'v4'; fi
+}
+
+# Longest common prefix of the arguments.
+_nvis_fabric_common_prefix() {
+  local p="$1" s
+  shift
+  for s in "$@"; do
+    while [[ -n "$p" && "$s" != "$p"* ]]; do p="${p%?}"; done
+  done
+  printf '%s' "$p"
+}
 
 # --- local sysfs scan -------------------------------------------------------
 # Prints (to stdout) eval-able assignments:
 #   NVIS_FAB_LINK=ib|roce  NVIS_FAB_RATE=<gbps>  NVIS_FAB_RAILS=<n>
-#   NVIS_FAB_IB_HCA=mlx5_0,mlx5_1,...   NVIS_FAB_UCX_NET_DEVICES=mlx5_0:1,...
+#   NVIS_FAB_IB_HCA=roce_vf_r1,...      exact rail list (empty = no compute rails found)
+#   NVIS_FAB_UCX_NET_DEVICES=roce_vf_r1:1,...
+#   NVIS_FAB_HCA_PIN=roce_vf_r         NCCL_IB_HCA to pin, or empty to leave NCCL to auto-detect
+#   NVIS_FAB_ADDR_FAMILY=ipv6|ipv4|    RoCE address family, empty when not determinable / IB
 #   NVIS_FAB_NS_IFNAME=<netdev>
 nvis_fabric_scan() {
   local want="${NVIS_RDMA_LINK_TECH:-auto}"
@@ -56,26 +138,42 @@ nvis_fabric_scan() {
   [[ "${want}" == "spectrumx" || "${want}" == "spx" ]] && want=roce
 
   local ibroot="${NVIS_FABRIC_SYSFS:-/sys/class/infiniband}"
-  local d dev ll st rate rnum
-  local -a ib=() eth=()
-  local top_ib=0 top_eth=0
+  local mgmt_ifs nvsw_bdfs
+  mgmt_ifs=" $(_nvis_fabric_default_route_ifs | tr '\n' ' ') "
+  nvsw_bdfs=" $(_nvis_fabric_nvswitch_bdfs | tr '\n' ' ') "
+
+  local d dev st ll rnum nd bdf fam top_ib=0
+  local -a ib=() roce=() active=() all_devs=()
   shopt -s nullglob
-  for d in "${ibroot}"/mlx5_*; do
+  for d in "${ibroot}"/*; do
     [[ -d "$d" ]] || continue
-    dev="$(basename "$d")"
+    dev="${d##*/}"
+    all_devs+=("$dev")
     st="$(cat "$d/ports/1/state" 2>/dev/null)"
-    printf '%s' "$st" | grep -q 'ACTIVE' || continue
+    [[ "$st" == *ACTIVE* ]] || continue
+    # Every ACTIVE device counts here, bonds included: it is what NCCL could pick unpinned.
+    active+=("$dev")
+    [[ "$dev" == *bond* ]] && continue
+    bdf="$(basename "$(dirname "$(dirname "$(readlink -f "$d")")")")"
+    [[ "$nvsw_bdfs" == *" ${bdf%.*} "* ]] && continue
     ll="$(cat "$d/ports/1/link_layer" 2>/dev/null)"
-    rate="$(cat "$d/ports/1/rate" 2>/dev/null)"
-    rnum="$(printf '%s' "$rate" | grep -oE '[0-9]+' | head -1)"; rnum="${rnum:-0}"
+    rnum="$(grep -oE '[0-9]+' "$d/ports/1/rate" 2>/dev/null | head -1)"; rnum="${rnum:-0}"
     case "$ll" in
-      InfiniBand) ib+=("${dev}:${rnum}");  (( rnum > top_ib ))  && top_ib=$rnum ;;
-      Ethernet)   eth+=("${dev}:${rnum}"); (( rnum > top_eth )) && top_eth=$rnum ;;
+      InfiniBand)
+        ib+=("${dev}:${rnum}")
+        (( rnum > top_ib )) && top_ib=$rnum
+        ;;
+      Ethernet)
+        nd="$(ls "$d/device/net" 2>/dev/null | head -1)"
+        [[ -n "$nd" && "$mgmt_ifs" == *" $nd "* ]] && continue
+        fam="$(_nvis_fabric_gid_family "$d/ports/1")"
+        [[ -n "$fam" ]] || continue
+        roce+=("${dev}:${rnum}:${fam}")
+        ;;
     esac
   done
   shopt -u nullglob
 
-  # Resolve technology (auto -> prefer IB when present).
   local link
   case "$want" in
     ib)   link=ib ;;
@@ -83,27 +181,70 @@ nvis_fabric_scan() {
     *)    if [[ "${#ib[@]}" -gt 0 ]]; then link=ib; else link=roce; fi ;;
   esac
 
-  local -a pool; local top
-  if [[ "$link" == "ib" ]]; then pool=("${ib[@]}"); top=$top_ib; else pool=("${eth[@]}"); top=$top_eth; fi
+  local -a rails=()
+  local e name r f top=0 all_v4=1 all_v6=1
+  if [[ "$link" == "ib" ]]; then
+    top=$top_ib
+    for e in "${ib[@]}"; do
+      name="${e%%:*}"; r="${e##*:}"
+      [[ "$r" == "$top" ]] && rails+=("$name")
+    done
+  else
+    for e in "${roce[@]}"; do
+      name="${e%%:*}"; r="${e#*:}"; f="${r#*:}"; r="${r%%:*}"
+      rails+=("$name")
+      (( r > top )) && top=$r
+      [[ "$f" == v4 || "$f" == both ]] || all_v4=0
+      [[ "$f" == v6 || "$f" == both ]] || all_v6=0
+    done
+  fi
+  if [[ "${#rails[@]}" -gt 0 ]]; then
+    mapfile -t rails < <(printf '%s\n' "${rails[@]}" | sort -V)
+  fi
 
-  # Keep only devices at the top rate (drops slower storage/BF3 NICs).
-  local -a rails=(); local e name r
-  for e in "${pool[@]}"; do
-    name="${e%%:*}"; r="${e##*:}"
-    [[ "$r" == "$top" ]] && rails+=("$name")
-  done
+  # Address family (RoCE): every rail reachable over IPv4 keeps NCCL's default; otherwise a
+  # family every rail has. A rail set with neither in common gets nothing (logged by apply).
+  local addr_family=""
+  if [[ "$link" == "roce" && "${#rails[@]}" -gt 0 ]]; then
+    if (( all_v4 )); then addr_family=ipv4; elif (( all_v6 )); then addr_family=ipv6; fi
+  fi
+  case "$(printf '%s' "${NVIS_FABRIC_ADDR_FAMILY:-}" | tr '[:upper:]' '[:lower:]')" in
+    ipv4|inet|af_inet)    addr_family=ipv4 ;;
+    ipv6|inet6|af_inet6)  addr_family=ipv6 ;;
+  esac
 
-  local hca ucx
+  # Pin (RoCE): only when NCCL, unpinned, could reach a device that is not a rail.
+  local pin="" a
+  local -a others=()
+  if [[ "$link" == "roce" && "${#rails[@]}" -gt 0 ]]; then
+    for a in "${active[@]}"; do
+      [[ " ${rails[*]} " == *" $a "* ]] || others+=("$a")
+    done
+    if [[ "${#others[@]}" -gt 0 ]]; then
+      pin="$(_nvis_fabric_common_prefix "${rails[@]}")"
+      for a in "${all_devs[@]}"; do
+        [[ " ${rails[*]} " == *" $a "* ]] && continue
+        [[ -n "$pin" && "$a" == "$pin"* ]] && { pin=""; break; }
+      done
+      [[ -n "$pin" ]] || pin="$(IFS=,; echo "${rails[*]}")"
+    fi
+  fi
+  # The cluster's stated compute plane wins over anything detected.
+  [[ -n "${NVIS_FABRIC_HCA:-}" ]] && pin="${NVIS_FABRIC_HCA}"
+
+  local hca ucx=""
   hca="$(IFS=,; echo "${rails[*]}")"
-  ucx="$(printf '%s\n' "${rails[@]}" | sed 's/$/:1/' | paste -sd, -)"
+  [[ "${#rails[@]}" -gt 0 ]] && ucx="$(printf '%s\n' "${rails[@]}" | sed 's/$/:1/' | paste -sd, -)"
 
-  printf 'NVIS_FAB_LINK=%s\n' "$link"
-  printf 'NVIS_FAB_RATE=%s\n' "$top"
-  printf 'NVIS_FAB_RAILS=%s\n' "${#rails[@]}"
-  printf 'NVIS_FAB_IB_HCA=%s\n' "$hca"
-  printf 'NVIS_FAB_UCX_NET_DEVICES=%s\n' "$ucx"
-  printf 'NVIS_FAB_NS_IFNAME=%s\n' "$(_nvis_fabric_ns_ifname)"
-  printf 'NVIS_FAB_GPUS=%s\n' "$(_nvis_fabric_gpu_count)"
+  printf 'NVIS_FAB_LINK=%q\n' "$link"
+  printf 'NVIS_FAB_RATE=%q\n' "$top"
+  printf 'NVIS_FAB_RAILS=%q\n' "${#rails[@]}"
+  printf 'NVIS_FAB_IB_HCA=%q\n' "$hca"
+  printf 'NVIS_FAB_UCX_NET_DEVICES=%q\n' "$ucx"
+  printf 'NVIS_FAB_HCA_PIN=%q\n' "$pin"
+  printf 'NVIS_FAB_ADDR_FAMILY=%q\n' "$addr_family"
+  printf 'NVIS_FAB_NS_IFNAME=%q\n' "$(_nvis_fabric_ns_ifname)"
+  printf 'NVIS_FAB_GPUS=%q\n' "$(_nvis_fabric_gpu_count)"
 }
 
 # Pick the routable bootstrap / north-south netdev.
@@ -138,6 +279,13 @@ _nvis_fabric_ns_ifname() {
   printf 'bond0'  # last-resort default
 }
 
+# Public: the routable bootstrap / north-south netdev, for launchers that set their own socket and
+# UCX env (the MNUberGEMM MOP). bond0/bond1 when present, else the first up netdev with a global
+# IPv4; NVIS_FABRIC_NS_IFNAME overrides.
+nvis_fabric_ns_ifname() {
+  _nvis_fabric_ns_ifname
+}
+
 # Number of local GPUs (for the sanity gate).
 _nvis_fabric_gpu_count() {
   if [[ -n "${GPUS_PER_NODE:-}" && "${GPUS_PER_NODE}" -gt 0 ]] 2>/dev/null; then
@@ -150,6 +298,24 @@ _nvis_fabric_gpu_count() {
 
 # --- export NCCL / UCX / OMPI env from a scan (respects existing overrides) --
 # $1..: optional pre-captured NVIS_FAB_* eval lines; if empty, scans locally.
+# The compute-plane half of apply, shared with nvis_fabric_export_compute. Reads NVIS_FAB_* from a
+# scan already eval'd into the caller. Touches nothing but NCCL_IB_ADDR_FAMILY and NCCL_IB_HCA, and
+# on InfiniBand (no pin, no family) exports nothing at all.
+_nvis_fabric_apply_compute() {
+  # RoCE address family. NCCL defaults to AF_INET; on an IPv6-only RoCE fabric that finds no
+  # GID ("local GID index -1") and the transport never comes up.
+  case "${NVIS_FAB_ADDR_FAMILY:-}" in
+    ipv6) export NCCL_IB_ADDR_FAMILY="${NCCL_IB_ADDR_FAMILY:-AF_INET6}" ;;
+    ipv4) export NCCL_IB_ADDR_FAMILY="${NCCL_IB_ADDR_FAMILY:-AF_INET}" ;;
+  esac
+  # A RoCE compute plane NCCL could not tell apart from the management NICs unaided, or one the
+  # cluster states outright (NVIS_FABRIC_HCA).
+  if [[ -n "${NVIS_FAB_HCA_PIN:-}" && "${NVIS_FABRIC_PIN_DEVICES:-0}" != "1" ]]; then
+    export NCCL_IB_HCA="${NCCL_IB_HCA:-${NVIS_FAB_HCA_PIN}}"
+  fi
+  return 0
+}
+
 _nvis_fabric_apply() {
   local scan="$1"
   # shellcheck disable=SC2086
@@ -172,6 +338,17 @@ _nvis_fabric_apply() {
   # UCC's cross-rack address exchange segfaults on unroutable IPoIB; drop it (NCCL,
   # not MPI collectives, does the real work in the perf tests).
   export OMPI_MCA_coll_ucc_enable="${OMPI_MCA_coll_ucc_enable:-0}"
+  # HCOLL, likewise: `--mca pml ob1 --mca btl tcp,self` does NOT constrain MPI collectives, and
+  # HPC-X's HCOLL opens its own UCX endpoints on EVERY device at MPI_Init -- including NICs that
+  # are not the compute plane. On NscaleTX-NC that is mlx5_13 (link-local GID only): every rank of
+  # a cross-rack run stalled in "ibv_create_ah(... dgid=fe80::...) for RC DEVX QP connect on
+  # mlx5_13 failed: Connection timed out" before NCCL measured anything. The fix the
+  # multirack-nccl-hcoll-nvls rule prescribes; five launchers already set it by hand.
+  export OMPI_MCA_coll_hcoll_enable="${OMPI_MCA_coll_hcoll_enable:-0}"
+
+  # Compute-plane selection (RoCE pin + address family). Before the rail gate, so a value the
+  # cluster states still applies when this node's probe found no rails.
+  _nvis_fabric_apply_compute
 
   local gpus; gpus="$(_nvis_fabric_gpu_count)"
   if [[ -n "${NVIS_FAB_RAILS:-}" && "${NVIS_FAB_RAILS}" -gt 0 && "${NVIS_FAB_RAILS}" -lt "${gpus}" ]]; then
@@ -197,6 +374,10 @@ _nvis_fabric_apply() {
   # its own HCAs locally. Set NVIS_FABRIC_PIN_DEVICES=1 to restore the old pinned behaviour
   # (single-node/homogeneous runs only). An explicit NCCL_IB_HCA/UCX_NET_DEVICES from the
   # operator is always honoured, pinning on or off.
+  #
+  # RoCE is the exception, handled above: there an unpinned NCCL also opens the management
+  # NIC, so the scan pins NVIS_FAB_HCA_PIN -- preferably a name prefix, which is the same
+  # string on every node and so does not reintroduce the job-65648 failure.
   if [[ "${NVIS_FABRIC_PIN_DEVICES:-0}" == "1" ]]; then
     export NCCL_IB_HCA="${NCCL_IB_HCA:-${NVIS_FAB_IB_HCA}}"
     export UCX_NET_DEVICES="${UCX_NET_DEVICES:-${NVIS_FAB_UCX_NET_DEVICES}}"
@@ -205,12 +386,48 @@ _nvis_fabric_apply() {
     [[ -n "${UCX_NET_DEVICES:-}" ]] && export UCX_NET_DEVICES
   fi
   echo "nvis_fabric: link=${NVIS_FAB_LINK} rate=${NVIS_FAB_RATE}G rails=${NVIS_FAB_RAILS}" \
-       "NCCL_IB_HCA=${NCCL_IB_HCA:-<auto: per-node detect>} NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME}" >&2
+       "NCCL_IB_HCA=${NCCL_IB_HCA:-<auto: per-node detect>}" \
+       "NCCL_IB_ADDR_FAMILY=${NCCL_IB_ADDR_FAMILY:-<default>} NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME}" >&2
 }
 
 # On-node: scan local sysfs + export.
 nvis_fabric_export() {
   _nvis_fabric_apply "$(nvis_fabric_scan)"
+}
+
+# On-node, compute plane ONLY: the RoCE NCCL_IB_HCA pin and NCCL_IB_ADDR_FAMILY -- nothing about the
+# bootstrap NIC, MPI transports or HCOLL/UCC. For a launcher whose MPI and bootstrap env is already
+# validated and must not move (the Llama 405B profile). On InfiniBand it exports nothing.
+nvis_fabric_export_compute() {
+  local scan
+  scan="$(nvis_fabric_scan)"
+  # shellcheck disable=SC2086
+  eval "${scan}"
+  _nvis_fabric_apply_compute
+}
+
+# On-node, for launchers that pin by hand: everything nvis_fabric_export does, then pin NCCL and
+# UCX to THIS node's exact compute rails -- NCCL_IB_HCA="=r1,r2,..." (the `=` makes it an exact
+# match, so mlx5_1 cannot also prefix-match mlx5_10..13 on a B300) and UCX_NET_DEVICES="r1:1,...".
+# A caller's own NCCL_IB_HCA / UCX_NET_DEVICES, or the cluster's NVIS_FABRIC_HCA, still win.
+# Returns 1 and pins nothing when no rail was found, so the caller decides; it never falls back to
+# a guessed mlx5_N list (which is what every caller used to do).
+nvis_fabric_export_pinned() {
+  local had_hca="${NCCL_IB_HCA:-}" had_ucx="${UCX_NET_DEVICES:-}"
+  _nvis_fabric_apply "$(nvis_fabric_scan)"
+  if [[ -z "${NVIS_FAB_IB_HCA:-}" ]]; then
+    echo "nvis_fabric: WARNING: no compute rails to pin; leaving NCCL_IB_HCA/UCX_NET_DEVICES to the caller" >&2
+    return 1
+  fi
+  if [[ -n "$had_hca" ]]; then
+    export NCCL_IB_HCA="$had_hca"
+  elif [[ -n "${NVIS_FABRIC_HCA:-}" ]]; then
+    export NCCL_IB_HCA="${NVIS_FABRIC_HCA}"
+  else
+    export NCCL_IB_HCA="=${NVIS_FAB_IB_HCA}"
+  fi
+  export UCX_NET_DEVICES="${had_ucx:-${NVIS_FAB_UCX_NET_DEVICES}}"
+  return 0
 }
 
 # Run the scan on a remote node and print its NVIS_FAB_* lines (stdout).
@@ -227,6 +444,8 @@ nvis_fabric_scan_node() {
   {
     [[ -n "${NVIS_RDMA_LINK_TECH:-}" ]] && printf 'export NVIS_RDMA_LINK_TECH=%q\n' "${NVIS_RDMA_LINK_TECH}"
     [[ -n "${NVIS_FABRIC_NS_IFNAME:-}" ]] && printf 'export NVIS_FABRIC_NS_IFNAME=%q\n' "${NVIS_FABRIC_NS_IFNAME}"
+    [[ -n "${NVIS_FABRIC_HCA:-}" ]] && printf 'export NVIS_FABRIC_HCA=%q\n' "${NVIS_FABRIC_HCA}"
+    [[ -n "${NVIS_FABRIC_ADDR_FAMILY:-}" ]] && printf 'export NVIS_FABRIC_ADDR_FAMILY=%q\n' "${NVIS_FABRIC_ADDR_FAMILY}"
     cat "${src}"
     printf '\nnvis_fabric_scan\n'
   } | ${ssh_cmd} "${node}" "bash -s" 2>/dev/null
@@ -253,6 +472,8 @@ nvis_fabric_report() {
   echo "fabric: link=${NVIS_FAB_LINK} top_rate=${NVIS_FAB_RATE}G compute_rails=${NVIS_FAB_RAILS}"
   echo "  NCCL_IB_HCA=${NVIS_FAB_IB_HCA}"
   echo "  UCX_NET_DEVICES=${NVIS_FAB_UCX_NET_DEVICES}"
+  echo "  NCCL_IB_HCA (pinned)=${NVIS_FAB_HCA_PIN:-<auto: per-node detect>}"
+  echo "  NCCL_IB_ADDR_FAMILY=${NVIS_FAB_ADDR_FAMILY:-<default>}"
   echo "  NCCL_SOCKET_IFNAME=${NVIS_FAB_NS_IFNAME}"
   local gpus; gpus="$(_nvis_fabric_gpu_count)"
   echo "  gpus_per_node=${gpus}"

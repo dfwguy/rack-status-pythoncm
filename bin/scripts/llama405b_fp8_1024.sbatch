@@ -81,10 +81,11 @@ srun --nodes=256 --ntasks=256 --ntasks-per-node=1 --kill-on-bad-exit=1 --label "
 srun --nodes=256 --ntasks=256 --ntasks-per-node=1 --kill-on-bad-exit=1 --label bash -euo pipefail -c '
   test -c /dev/infiniband/rdma_cm
   [[ "$(find /dev/infiniband -maxdepth 1 -name "uverbs*" -type c | wc -l)" -ge 4 ]]
-  active=0
-  for hca in mlx5_0 mlx5_1 mlx5_2 mlx5_3; do grep -q ACTIVE "/sys/class/infiniband/${hca}/ports/1/state" && ((active+=1)); done
-  [[ "$active" == 4 ]]
-  echo "HOST_IB_READY $(hostname): active_hcas=$active"
+  . "${NVIS_LLAMA_SCRIPTS_DIR}/lib/fabric.inc.sh"
+  eval "$(nvis_fabric_scan)"
+  want="${NVIS_FABRIC_EXPECT_RAILS:-4}"
+  [[ "${NVIS_FAB_RAILS:-0}" -ge "$want" ]]
+  echo "HOST_IB_READY $(hostname): link=${NVIS_FAB_LINK} rails=${NVIS_FAB_RAILS} want>=${want} hcas=${NVIS_FAB_IB_HCA}"
 '
 
 srun --nodes=256 --ntasks=256 --ntasks-per-node=1 --kill-on-bad-exit=1 --label \
@@ -115,7 +116,17 @@ export TORCH_NCCL_HIGH_PRIORITY=1 TORCH_NCCL_AVOID_RECORD_STREAMS=1 HF_HUB_OFFLI
 export HF_HOME=/home/cmods/workspace/llmb/.cache/huggingface HF_HUB_CACHE=/home/cmods/workspace/llmb/.cache/huggingface/hub
 export CUDA_DEVICE_MAX_CONNECTIONS=32 NVTE_FWD_LAYERNORM_SM_MARGIN=16 NVTE_BWD_LAYERNORM_SM_MARGIN=16
 export NVTE_NORM_FWD_USE_CUDNN=1 NVTE_NORM_BWD_USE_CUDNN=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True NCCL_GRAPH_REGISTER=0
+# The training ranks' compute plane (lib/fabric.inc.sh). On a RoCE cluster NCCL must be kept off
+# the management NIC (NCCL_IB_HCA pin) and told the address family (NscaleTX-NC is IPv6-only); on
+# InfiniBand this exports nothing, so the validated IB profile is unchanged. Only the compute plane:
+# this profile's MPI/bootstrap env is validated as-is and is deliberately not touched.
+# shellcheck disable=SC1091
+. "${NVIS_LLAMA_SCRIPTS_DIR}/lib/fabric.inc.sh"
+nvis_fabric_export_compute || true
 common_env=HF_HOME,HF_HUB_CACHE,HF_HUB_OFFLINE,NCCL_NVLS_ENABLE,NCCL_DEBUG,MELLANOX_VISIBLE_DEVICES,RUN_CONF_IMAGE,CUDA_DEVICE_MAX_CONNECTIONS,NVTE_FWD_LAYERNORM_SM_MARGIN,NVTE_BWD_LAYERNORM_SM_MARGIN,NVTE_NORM_FWD_USE_CUDNN,NVTE_NORM_BWD_USE_CUDNN,PYTORCH_CUDA_ALLOC_CONF,NCCL_GRAPH_REGISTER,TOKENIZERS_PARALLELISM,TORCH_NCCL_AVOID_RECORD_STREAMS,TORCH_NCCL_HIGH_PRIORITY,TRANSFORMERS_OFFLINE
+for v in NCCL_IB_HCA NCCL_IB_ADDR_FAMILY; do
+  if [[ -n "${!v:-}" ]]; then common_env="${common_env},${v}"; fi
+done
 srun --output="${NVIS_LLAMA_LOG_DIR%/}/llama405b-train-%j.out" --error="${NVIS_LLAMA_LOG_DIR%/}/llama405b-train-%j.err" \
   --kill-on-bad-exit=1 --mpi=pmix --container-image="$RUN_CONF_IMAGE" --container-writable --no-container-mount-home \
   --container-mounts="/dev/infiniband:/dev/infiniband,/home/cmods/workspace/llmb/.cache/huggingface,${PERF_ROOT}:${PERF_ROOT}" \

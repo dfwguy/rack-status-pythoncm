@@ -85,7 +85,14 @@ fi
 echo "NODELIST=$SLURM_JOB_NODELIST WORKSPACE_DIR=${WORKSPACE_DIR} CUDA_HOME=${CUDA_HOME:-} NCCL_PATH=${NCCL_PATH}"
 hosts=($(scontrol show hostname "$SLURM_JOB_NODELIST"))
 
-nic=bond0
+# Bootstrap/UCX TCP netdev from the shared detector (lib/fabric.inc.sh): bond0/bond1 where the MOP's
+# trays have them, else the first up netdev with a global IPv4 (enP22s22f0np0 on GB300 NscaleTX-NC,
+# which has no bond0). NVIS_FABRIC_NS_IFNAME pins it by hand.
+nic=""
+# shellcheck disable=SC1091
+if . "${NVIS_BIN_SCRIPTS}/lib/fabric.inc.sh" 2>/dev/null; then nic="$(nvis_fabric_ns_ifname)"; fi
+nic="${nic:-bond0}"
+echo "mnubergemm_stress: bootstrap/UCX netdev=${nic}"
 GPUS_PER_NODE=4
 
 ## Ref: https://confluence.nvidia.com/pages/viewpage.action?spaceKey=DCGM&title=Mndiag+and+mnubergemm+testing+on+GB200+Colorado+%28Equinix%29+cluster+8x+NVL72
@@ -195,7 +202,6 @@ export NCCL_IB_DISABLE=1
 export UCX_TLS=tcp
 export NCCL_SOCKET_IFNAME=${nic}
 export UCX_NET_DEVICES=${nic}
-export NCCL_IB_HCA=${nic}
 export OMPI_ALLOW_RUN_AS_ROOT=1
 export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
 export OMPI_MCA_pml=ucx

@@ -56,9 +56,19 @@ export NCCL_CUMEM_ENABLE=1
 export NCCL_CUMEM_HOST_ENABLE=0
 export NCCL_IB_DISABLE=1
 export NCCL_MIN_CTAS=64
-export UCX_NET_DEVICES=bond0
+# NSCALETX: the MOP's bond0 is the north-south NIC on the trays it was written for. GB300
+# NscaleTX-NC has no bond0 -- its routable NIC is enP22s22f0np0 -- so NCCL's bootstrap found no
+# socket interface there. Resolve it the way every launcher does (lib/fabric.inc.sh): bond0/bond1
+# when present, so the MOP's own trays are unchanged, else the first up netdev with a global IPv4.
+# NVIS_FABRIC_NS_IFNAME pins it by hand.
+ns_nic=""
+# shellcheck disable=SC1091
+if . "${NVIS_BIN_SCRIPTS:-$PWD}/lib/fabric.inc.sh" 2>/dev/null; then ns_nic="$(nvis_fabric_ns_ifname)"; fi
+ns_nic="${ns_nic:-bond0}"
+echo "mnubergemm: bootstrap/UCX netdev=${ns_nic}"
+export UCX_NET_DEVICES="${ns_nic}"
 export UCX_TLS=tcp
-export NCCL_SOCKET_IFNAME=bond0
+export NCCL_SOCKET_IFNAME="${ns_nic}"
 export NCCL_NVLS_ENABLE=0
 
 hosts=($(scontrol show hostnames $SLURM_JOB_NODELIST))

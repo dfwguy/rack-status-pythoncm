@@ -38,7 +38,7 @@ import {
   saveProject,
 } from "../services/catalogService";
 import { useActiveCluster } from "../context/ActiveClusterContext";
-import type { CatalogVocab, Cluster, Platform, Project } from "../types/catalog";
+import type { CatalogVocab, Cluster, ClusterFabric, Platform, Project } from "../types/catalog";
 import { intOr } from "../lib/catalogForm";
 import { bootstrapProjectScripts, deployScripts } from "../services/setupService";
 
@@ -48,6 +48,11 @@ import { bootstrapProjectScripts, deployScripts } from "../services/setupService
 const SetupWizard = lazy(() =>
   import("../components/setup/SetupWizard").then((m) => ({ default: m.SetupWizard })),
 );
+
+/** All blank: the on-node fabric scan decides. Also the fallback for a cluster stored before the field existed. */
+function emptyFabric(): ClusterFabric {
+  return { scaleout: "", addr_family: "", compute_hca: "" };
+}
 
 function emptyCluster(): Cluster {
   return {
@@ -60,6 +65,7 @@ function emptyCluster(): Cluster {
     site_prefix: "",
     naming: { rack_id_template: "", ct_id_template: "", nvsw_id_template: "", ct_joiner: "-ct", slurm_hostlist: "" },
     geometry: { pods: 1, rows_per_pod: 0, racks_per_row: 0, trays_per_rack: 0 },
+    fabric: emptyFabric(),
     connection: {
       exec_mode: "",
       ssh_host: "",
@@ -186,6 +192,10 @@ export function ProjectsView() {
   const setConn = (patch: Partial<Cluster["connection"]>) =>
     setClusterDraft((d) => (d ? { ...d, cluster: { ...d.cluster, connection: { ...d.cluster.connection, ...patch } } } : d));
   const setSUs = (units: Cluster["scalable_units"]) => setCl({ scalable_units: units });
+  const setFabric = (patch: Partial<ClusterFabric>) =>
+    setClusterDraft((d) =>
+      d ? { ...d, cluster: { ...d.cluster, fabric: { ...(d.cluster.fabric ?? emptyFabric()), ...patch } } } : d,
+    );
   // An SU id must be a slug (backend valid_id: ^[a-z0-9][a-z0-9._-]*$); derive it from the
   // label so the operator only types a human name and the racks.
   const suSlug = (label: string) =>
@@ -360,7 +370,7 @@ export function ProjectsView() {
                               Set active
                             </Button>
                           )}
-                          <Button variant="outlined" size="small" startIcon={<Pencil size={14} />} onClick={() => setClusterDraft({ projectId: p.id, cluster: c, isNew: false })}>
+                          <Button variant="outlined" size="small" startIcon={<Pencil size={14} />} onClick={() => setClusterDraft({ projectId: p.id, cluster: { ...c, fabric: c.fabric ?? emptyFabric() }, isNew: false })}>
                             Edit
                           </Button>
                           <Button variant="outlined" color="error" size="small" startIcon={<Trash2 size={14} />} onClick={() => void onDeleteCluster(p, c)}>
@@ -601,6 +611,44 @@ export function ProjectsView() {
                 value={clusterDraft?.cluster.connection.node_container_dir || ""}
                 onValueChange={(v) => setConn({ node_container_dir: v })}
                 placeholder="Where each compute node caches images (blank = /tmp/containers)"
+              />
+            </FormField>
+          </Box>
+
+          <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>Compute fabric</Text>
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginTop: -4 }}>
+            Blank = detect on each node. Set these only where detection picks the wrong devices or address family.
+          </Text>
+          <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 2 }}>
+            <FormField name="cl-fab-scaleout" slotLabel="Scale-out">
+              <Select
+                items={[
+                  { value: "", children: "Platform default" },
+                  { value: "ib", children: "InfiniBand" },
+                  { value: "roce", children: "RoCE" },
+                ]}
+                value={clusterDraft?.cluster.fabric?.scaleout || ""}
+                onValueChange={(v) => setFabric({ scaleout: v })}
+                placeholder="Platform default"
+              />
+            </FormField>
+            <FormField name="cl-fab-family" slotLabel="RoCE address family">
+              <Select
+                items={[
+                  { value: "", children: "Detect" },
+                  { value: "ipv4", children: "IPv4" },
+                  { value: "ipv6", children: "IPv6" },
+                ]}
+                value={clusterDraft?.cluster.fabric?.addr_family || ""}
+                onValueChange={(v) => setFabric({ addr_family: v })}
+                placeholder="Detect"
+              />
+            </FormField>
+            <FormField name="cl-fab-hca" slotLabel="Compute HCAs">
+              <TextInput
+                value={clusterDraft?.cluster.fabric?.compute_hca || ""}
+                onValueChange={(v) => setFabric({ compute_hca: v })}
+                placeholder="Detect (e.g. roce_vf_r)"
               />
             </FormField>
           </Box>

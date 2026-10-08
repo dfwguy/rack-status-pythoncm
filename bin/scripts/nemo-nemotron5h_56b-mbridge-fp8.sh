@@ -98,7 +98,7 @@ ns_nic=$(select_ns_nic)
 echo "INFO: ns_nic=${ns_nic} (auto: bond0 vs enP22s22f0np0)"
 set -x
 # East-west (compute) rails via the shared classifier (ACTIVE + IB/RoCE + top line
-# rate; excludes slower BlueField-3 storage NICs). Falls back to mlx5_0..3.
+# rate on IB; routable-GID, off-the-default-route ports on RoCE). No mlx5_N fallback.
 # Locate lib/fabric.inc.sh. Slurm spools ONLY this batch script (not lib/), so
 # $(dirname BASH_SOURCE) points at /var/spool/slurmd/... where lib/ does NOT exist —
 # that made the fabric classifier silently no-op and fall back to the naive mlx5_0..3
@@ -118,16 +118,11 @@ if [[ -n "${_nvis_lib}" ]]; then
   echo "INFO: fabric classifier: ${_nvis_lib}"
   . "${_nvis_lib}"
 else
-  echo "WARN: lib/fabric.inc.sh not found (set NVIS_SCRIPTS_DIR); falling back to mlx5_0..3 (may mix IB/RoCE)"
+  echo "WARN: lib/fabric.inc.sh not found (set NVIS_SCRIPTS_DIR); NCCL/UCX will auto-detect the cross-rack plane"
 fi
 if declare -F nvis_fabric_scan >/dev/null 2>&1; then eval "$(nvis_fabric_scan 2>/dev/null)"; fi
 ns_nic="${NVIS_FAB_NS_IFNAME:-$ns_nic}"
 echo "INFO: fabric ns_nic=${ns_nic}"
-if [[ -n "${NVIS_FAB_IB_HCA:-}" ]]; then
-  IFS=',' read -r -a ew_nics <<< "${NVIS_FAB_IB_HCA}"
-else
-  ew_nics=($(echo mlx5_{0..3}))
-fi
 # An IB-disabled preflight can skip enroot's Mellanox hook on nodes without
 # /sys/class/infiniband_mad. Keep the existing default for fabric-backed runs.
 export MELLANOX_VISIBLE_DEVICES="${NVIS_NEMO_MLX:-all}"
@@ -139,8 +134,14 @@ if [ $single_rack -eq 1 ]; then
   export UCX_NET_DEVICES=${ns_nic}
 else
   export UCX_TLS=rc
-  export UCX_NET_DEVICES="$(echo ${ew_nics[@]}|tr ' ' '\n'|xargs -I {} echo {}:1|paste -s -d',')"
-  export NCCL_IB_HCA="=$(echo ${ew_nics[@]}|tr ' ' '\n'|xargs -I {} echo {}|paste -s -d',')"
+  # Cross-rack plane: this node's exact rails (=list), the RoCE address family and the cluster's
+  # stated plane, all from lib/fabric.inc.sh -- never a guessed mlx5_0..3, which mixed IB and RoCE
+  # NICs on one cluster and named no rail at all on GB300 NscaleTX-NC (rails roce_vf_r1..4, IPv6).
+  if declare -F nvis_fabric_export_pinned >/dev/null 2>&1; then
+    nvis_fabric_export_pinned || echo "WARN: no compute rails detected; NCCL/UCX auto-detect the cross-rack plane"
+  else
+    echo "WARN: lib/fabric.inc.sh not loaded; NCCL/UCX auto-detect the cross-rack plane"
+  fi
 fi
 export NCCL_SOCKET_IFNAME=${ns_nic}
 export OMPI_MCA_btl_tcp_if_include=${ns_nic}
