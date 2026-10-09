@@ -287,6 +287,12 @@ fi
   echo "gpu_type: ${GPU_TYPE}"
   echo "node_architecture: ${ARCH}"
   echo "install_method: ${INSTALL_METHOD}"
+  # The shared image folder belongs IN the playfile. v26.06+ headless (--play) builds its config
+  # from the playfile alone and never reads the -i flag, so -i by itself was silently dropped:
+  # the install then looked in <install>/images, found nothing, and srun-imported the NeMo image
+  # on a compute node -- which on an air-gapped fleet fails (enroot exit 7). Both schemas accept
+  # the key; -i is still passed below for the releases that honour it.
+  [[ -n "${IMAGE_FOLDER}" ]] && echo "image_folder: ${IMAGE_FOLDER}"
   echo "selected_workloads:"
   IFS=',' read -ra _wl <<< "${WORKLOADS}"
   for _w in "${_wl[@]}"; do
