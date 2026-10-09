@@ -30,7 +30,6 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from pathlib import Path
 from typing import Any
 
 from config_env import _eget, _env_int
@@ -142,17 +141,19 @@ _bringup = _BringupVerdicts()
 
 
 def node_stages(
-    log_dir: Path,
     nodes: list[tuple[str, str]],
+    node_logs: dict[str, dict[str, dict[str, Any]]],
     *,
     wait_for_bringup: bool = False,
 ) -> dict[str, Any]:
-    """Stage 1 and Stage 2 for each ``(host, rack)`` in *nodes*."""
+    """Stage 1 and Stage 2 for each ``(host, rack)`` in *nodes*.
+
+    *node_logs* is the snapshot's ``node_stage_logs``: host -> stage kind -> newest sub-rack result.
+    """
     import native_status
     import validation_activities
 
     running, times = native_status.load_squeue_jobs_map()
-    node_logs = native_status.node_stage_logs_for_log_dir(log_dir) or {}
     try:
         live = validation_activities.live_stage_jobs_by_node()
     except Exception:  # noqa: BLE001 - the overlay is best-effort, like the rack table's

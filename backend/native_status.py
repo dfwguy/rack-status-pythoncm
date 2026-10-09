@@ -1989,6 +1989,20 @@ class NativeRackTableState:
             self.node_shapes_refreshed_monotonic = now
         return shapes
 
+    def node_stage_logs_payload(self) -> dict[str, dict[str, dict[str, Any]]]:
+        """Per-node stage evidence for the canonical snapshot (``/api/node-stages`` reads it there).
+
+        Carried in the snapshot rather than read from this process, so the answer survives a
+        restart and does not depend on which worker serves the request -- the same reason the
+        rack rows live there.
+        """
+        keep = ("jid", "nccl_ok", "llm_ok", "_path", "_mtime", "_rack")
+        with self.lock:
+            return {
+                host: {kind: {k: rec.get(k) for k in keep} for kind, rec in kinds.items()}
+                for host, kinds in self.by_node_stage_log.items()
+            }
+
     def node_inventory_snapshot(self) -> dict[str, Any]:
         """An explicit null means unavailable; an empty list means confirmed empty."""
         with self.lock:
@@ -2539,28 +2553,8 @@ def live_table_snapshot_for_log_dir(log_dir: Path) -> dict[str, Any] | None:
     }
 
 
-def node_inventory_for_log_dir(log_dir: Path) -> list[dict[str, Any]] | None:
-    """The node inventory ``/api/status`` serves (``id`` = host, ``rack``), or ``None`` before
-    the native workers have run for *log_dir*."""
-    key = native_state_key(log_dir)
-    with _states_lock:
-        st = _states.get(key)
-    if st is None:
-        return None
-    return st.node_inventory_snapshot().get("nodes")
 
 
-def node_stage_logs_for_log_dir(log_dir: Path) -> dict[str, dict[str, dict[str, Any]]] | None:
-    """Per-node stage evidence from sub-rack runs: ``host -> kind -> probe``, or ``None`` before
-    the native workers have run for *log_dir*. The rack table never reads this; see
-    ``_is_full_rack_log``."""
-    key = native_state_key(log_dir)
-    with _states_lock:
-        st = _states.get(key)
-    if st is None:
-        return None
-    with st.lock:
-        return {h: {k: dict(v) for k, v in kinds.items()} for h, kinds in st.by_node_stage_log.items()}
 
 
 def _get_state(key: str, log_dir: Path) -> NativeRackTableState:
@@ -2595,6 +2589,7 @@ def build_native_rack_status(
     rows, summary, footnotes, legend = st.build_table_rows()
     out: dict[str, Any] = {
         **st.node_inventory_snapshot(),
+        "node_stage_logs": st.node_stage_logs_payload(),
         "ok": True,
         "returncode": 0,
         "updated_at": datetime.now(timezone.utc).isoformat(),

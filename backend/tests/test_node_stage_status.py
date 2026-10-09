@@ -203,14 +203,13 @@ def test_stage2_is_the_bringup_verdict(status, state):
 
 def test_node_stages_joins_logs_activities_and_bringup(monkeypatch):
     monkeypatch.setattr(native_status, "load_squeue_jobs_map", lambda: ({"125281"}, {}))
-    monkeypatch.setattr(native_status, "node_stage_logs_for_log_dir",
-                        lambda _d: {HOST: {"nccl": {"nccl_ok": True, "jid": 119310, "_path": "/l/a.txt"}}})
     other = "sys1-gso1-p-phy-gpu100-su21"
     _live("node", [other], rack="Q24", ref="125281")
     verdicts = {HOST: {"llm-pretrain-solo": {"status": "DONE", "reason": ""}},
                 other: {"llm-pretrain-solo": {"status": "FAIL", "reason": "loss diverged"}}}
     monkeypatch.setattr(node_stages._bringup, "get", lambda wait=False: verdicts)
-    out = node_stages.node_stages(PurePosixPath("/logs"), [(HOST, "V20"), (other, "Q24")])
+    logs = {HOST: {"nccl": {"nccl_ok": True, "jid": 119310, "_path": "/l/a.txt"}}}
+    out = node_stages.node_stages([(HOST, "V20"), (other, "Q24")], logs)
     rows = {r["node"]: r for r in out["nodes"]}
     assert rows[HOST]["stage1"]["state"] == "done" and rows[HOST]["stage2"]["state"] == "done"
     assert rows[other]["stage1"] == {"state": "ongoing", "job_id": "125281"}
@@ -220,9 +219,8 @@ def test_node_stages_joins_logs_activities_and_bringup(monkeypatch):
 
 def test_stage2_reads_unknown_until_the_bringup_verdicts_land(monkeypatch):
     monkeypatch.setattr(native_status, "load_squeue_jobs_map", lambda: (set(), {}))
-    monkeypatch.setattr(native_status, "node_stage_logs_for_log_dir", lambda _d: {})
     monkeypatch.setattr(node_stages._bringup, "get", lambda wait=False: None)
-    out = node_stages.node_stages(PurePosixPath("/logs"), [(HOST, "V20")])
+    out = node_stages.node_stages([(HOST, "V20")], {})
     assert out["nodes"][0]["stage2"] == {"state": "unknown"} and out["stage2_loading"] is True
 
 
@@ -243,9 +241,66 @@ def test_a_node_run_submitted_as_another_user_still_reads_as_running(monkeypatch
         running.update(j for j in want if j == "125824")
 
     monkeypatch.setattr(native_status, "augment_running_set_for_job_ids", augment)
-    monkeypatch.setattr(native_status, "node_stage_logs_for_log_dir", lambda _d: {})
     monkeypatch.setattr(node_stages._bringup, "get", lambda wait=False: {})
     _live("node", [HOST], ref="125824")
-    out = node_stages.node_stages(PurePosixPath("/logs"), [(HOST, "V20")])
+    out = node_stages.node_stages([(HOST, "V20")], {})
     assert asked == ["125824"]
     assert out["nodes"][0]["stage1"] == {"state": "ongoing", "job_id": "125824"}
+
+
+def test_the_snapshot_carries_each_nodes_evidence_and_status_does_not_serve_it(monkeypatch):
+    """The per-node evidence rides the canonical snapshot (cross-process, survives restarts)."""
+    one = "cmods-NCCL-1Rack-V20-1N-119310.txt"
+    st, _ = _scan(
+        monkeypatch,
+        [(PurePosixPath(f"/logs/{one}"), 1_000_000_000, 10)],
+        {one: {"nccl_ok": True, "jid": 119310, "nemo_state": "done"}},
+        {one: NCCL_1N},
+    )
+    payload = st.node_stage_logs_payload()
+    assert payload == {HOST: {"nccl": {"jid": 119310, "nccl_ok": True, "llm_ok": None,
+                                       "_path": f"/logs/{one}", "_mtime": 1.0, "_rack": "V20"}}}
+
+
+def test_node_stages_route_reads_the_snapshot(monkeypatch):
+    import app as app_module
+    from api import node_stages as route
+
+    class _Snap:
+        payload = {
+            "nodes": [{"id": HOST, "rack": "V20"}, {"id": "sys1-gso1-p-phy-gpu20-su23", "rack": "V20"},
+                      {"id": "other", "rack": "Q7"}],
+            "node_stage_logs": {HOST: {"nccl": {"nccl_ok": True, "jid": 119310}}},
+        }
+
+    monkeypatch.setattr(route, "get_cluster_snapshot", lambda _d, wait=False: _Snap())
+    monkeypatch.setattr(native_status, "load_squeue_jobs_map", lambda: (set(), {}))
+    monkeypatch.setattr(node_stages._bringup, "get", lambda wait=False: {})
+    monkeypatch.setattr("api.dashboard._ensure_rack_status_background_thread", lambda: None)
+    monkeypatch.setattr("api.dashboard._start_cmsh_rack_list_warm_thread", lambda: None)
+    monkeypatch.setattr(route, "_resolve_log_dir", lambda _raw: PurePosixPath("/logs"))
+    r = app_module.app.test_client().get("/api/node-stages?rack=V20")
+    if r.status_code in (401, 403):
+        pytest.skip("route requires a session in this app configuration")
+    body = r.get_json()
+    assert r.status_code == 200 and body["ok"]
+    assert [n["node"] for n in body["nodes"]] == [HOST, "sys1-gso1-p-phy-gpu20-su23"]
+    assert body["nodes"][0]["stage1"]["state"] == "done"
+
+
+def test_node_stages_route_says_retry_while_the_inventory_loads(monkeypatch):
+    import app as app_module
+    from api import node_stages as route
+
+    class _Empty:
+        payload = None
+
+    monkeypatch.setattr(route, "get_cluster_snapshot", lambda _d, wait=False: _Empty())
+    monkeypatch.setattr("api.dashboard._ensure_rack_status_background_thread", lambda: None)
+    monkeypatch.setattr("api.dashboard._start_cmsh_rack_list_warm_thread", lambda: None)
+    monkeypatch.setattr(route, "_resolve_log_dir", lambda _raw: PurePosixPath("/logs"))
+    r = app_module.app.test_client().get("/api/node-stages")
+    if r.status_code in (401, 403):
+        pytest.skip("route requires a session in this app configuration")
+    assert r.status_code == 503 and r.headers.get("Retry-After") == "30"
+

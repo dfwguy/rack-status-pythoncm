@@ -1213,6 +1213,8 @@ def api_status():
             "physical_rf0": {},
             "native_workers": {"mode": "snapshot_unavailable"},
         }
+    # Per-node stage evidence is /api/node-stages' to serve; it would only bloat the rack table.
+    out.pop("node_stage_logs", None)
     out["snapshot"] = snapshot.metadata()
     out["served_from_cache"] = snapshot.payload is not None
     out["rack_status_background_interval_sec"] = interval
