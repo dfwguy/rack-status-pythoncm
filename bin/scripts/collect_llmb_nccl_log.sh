@@ -15,13 +15,17 @@
 #   "Running test N/24"), and puts the real nccl-tests tables one-per-test under
 #     $LLMB_INSTALL/workloads/microbenchmark_nccl/experiments/*_<jobid>/LOG_*/<test>/rank0_*/stdout.txt
 #   parser.sh + nccl_parse.inc.sh instead scan the dashboard log dir for
-#     <user>-NCCL-1Rack-<rack>-<N>N-<jobid>.txt
+#     <group>-NCCL-1Rack-<rack>-<N>N-<jobid>.txt
 #   and key on "# Collective test starting: <coll>_perf(_mpi)?" blocks -- which llmb's rank0
 #   files already contain verbatim. So no parser change is needed: concatenate the rank0
 #   stdout files under the expected name and the existing parser reads them as-is.
+#   <group> is the writer's group (cmods on Nscale NC), not the operator who happened to launch:
+#   the file belongs to the cluster's shared log dir. The prefix itself cannot go -- the parser
+#   tells the stages apart by "-nccl-1rack-" / "-nemo-1rack-", leading hyphen included.
 #
-# Usage:  collect_llmb_nccl_log.sh [JOBID]      (default: newest experiment dir)
-# Env:    LLMB_INSTALL, RACK_JOB_LOG_DIR / RACK_STATUS_LOG_DIR
+# Usage:  collect_llmb_nccl_log.sh [JOBID [RACK]]   (default: newest experiment dir)
+#         RACK is the rack the run was launched against; run_llmb_nccl.sh passes it.
+# Env:    LLMB_INSTALL, RACK_JOB_LOG_DIR / RACK_STATUS_LOG_DIR, NVIS_RACK (RACK when not given)
 set -uo pipefail
 
 # LLMB_INSTALL under the cluster's workspace (project setting -> NVIS_WORKSPACE_DIR).
@@ -51,10 +55,25 @@ mapfile -t NODES < <(find "${EXP}" -maxdepth 3 -type d -name 'rank*_*' -printf '
                      | sed 's/^rank[0-9]*_//' | sort -u)
 (( ${#NODES[@]} > 0 )) || die "no rank dirs under ${EXP} (job may not have started)"
 NNODES="${#NODES[@]}"
-# ink50-dh01-h03-28 -> ink50-dh01-h03   (strip the trailing tray number)
-RACK="$(printf '%s\n' "${NODES[0]}" | sed -E 's/-[0-9]+$//')"
+# The parser finds this file by the rack id the run was launched against, so that id names it:
+# the launcher passes it as $2 (the backend exports it as NVIS_RACK). Only without it is the rack
+# read off a hostname, which works where the name carries the rack (ink50-dh01-h03-28 ->
+# ink50-dh01-h03, the trailing tray stripped) and not where it does not: on Nscale NC a node is
+# sys1-gso1-p-phy-gpu55-su19 and its rack (U22) lives only in BCM, so the guess named U22's Stage-1
+# result after a node and the parser never found it. A value that is not a plain file-name token
+# is ignored rather than put in a path.
+_safe_token() { [[ "$1" =~ ^[A-Za-z0-9._-]+$ && "$1" != *..* ]]; }
+if _safe_token "${2:-}"; then
+  RACK="$2"
+elif _safe_token "${NVIS_RACK:-}"; then
+  RACK="${NVIS_RACK}"
+else
+  RACK="$(printf '%s\n' "${NODES[0]}" | sed -E 's/-[0-9]+$//')"
+fi
+OWNER="$(id -gn 2>/dev/null)"
+_safe_token "${OWNER}" || OWNER=cmods
 
-OUT="${OUT_DIR%/}/${USER:-cmods}-NCCL-1Rack-${RACK}-${NNODES}N-${JOBID}.txt"
+OUT="${OUT_DIR%/}/${OWNER}-NCCL-1Rack-${RACK}-${NNODES}N-${JOBID}.txt"
 
 # Concatenate rank0 stdout in test order. Test dirs sort as <testset>_<idx>_LOG_<coll>_...
 # so a numeric sort on the two leading fields keeps the sweep in execution order.

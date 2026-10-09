@@ -284,6 +284,12 @@ echo "run_llmb_nccl: workload=${LLMB_WORKLOAD} model_size=${LLMB_MODEL_SIZE} dty
 echo "run_llmb_nccl: nodelist=${NODELIST} (pinned via sbatch --nodelist shim)${RESERVATION:+ reservation=${RESERVATION}}"
 echo "run_llmb_nccl: LLMB_INSTALL=${LLMB_INSTALL} LLMB_RUN=${LLMB_RUN}${NVIS_SHIM_DIR:+ sbatch_shim=${NVIS_SHIM_DIR}/sbatch -> ${LLMB_REAL_SBATCH:-}}"
 [[ -n "${SBATCH_OUTPUT}" ]] && echo "run_llmb_nccl: sbatch stdout -> ${SBATCH_OUTPUT} (under dashboard log dir)"
+# The result log is named at launch, after the rack this run was launched against: the dashboard
+# passes it as NVIS_RACK; a bare CLI run with exactly one rack argument names that rack. It is
+# handed to the collector as an argument rather than left for it to guess from a hostname.
+_result_rack="${NVIS_RACK:-}"
+[[ -z "${_result_rack}" && ${#RACKS[@]} -eq 1 ]] && _result_rack="${RACKS[0]}"
+echo "run_llmb_nccl: result log -> ${JOB_LOG_DIR:-.}/$(id -gn 2>/dev/null || echo cmods)-NCCL-1Rack-${_result_rack:-<rack from hostnames>}-${NNODES}N-<jobid>.txt"
 echo "run_llmb_nccl: fabric: NCCL_IB_HCA=${NCCL_IB_HCA:-<auto>} NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-<auto>} UCX_TLS=${UCX_TLS:-<default>} UCX_NET_DEVICES=${UCX_NET_DEVICES:-<auto>}"
 printf 'run_llmb_nccl: exec:'; printf ' %q' "${cmd[@]}"; echo
 
@@ -293,8 +299,8 @@ cd "${LLMB_INSTALL}" || die "cannot cd to LLMB_INSTALL=${LLMB_INSTALL}"
 # under $LLMB_INSTALL/workloads/*/experiments/*_<jobid>/ when the Slurm job finishes, in a layout
 # parser.sh cannot see. Capture the jobid, then detach a watcher that waits for the job to leave
 # the queue and runs collect_llmb_nccl_log.sh, which writes the aggregated
-# <user>-NCCL-1Rack-<rack>-<N>N-<jobid>.txt into the dashboard log dir.
-# Disable with NVIS_LLMB_AUTOCOLLECT=0 (then run collect_llmb_nccl_log.sh <jobid> by hand).
+# <group>-NCCL-1Rack-<rack>-<N>N-<jobid>.txt into the dashboard log dir.
+# Disable with NVIS_LLMB_AUTOCOLLECT=0 (then run collect_llmb_nccl_log.sh <jobid> <rack> by hand).
 _llmb_out="$(mktemp 2>/dev/null || echo /tmp/nvis_llmb_$$.out)"
 "${cmd[@]}" 2>&1 | tee "${_llmb_out}"
 _rc="${PIPESTATUS[0]}"
@@ -306,7 +312,8 @@ if [[ "${DRY_RUN}" -eq 0 ]]; then
     "${_llmb_out}" \
     "${JOB_LOG_DIR}" \
     "${LLMB_INSTALL}" \
-    "llmb-autocollect" || true
+    "llmb-autocollect" \
+    ${_result_rack:+"${_result_rack}"} || true
 fi
 
 rm -f "${_llmb_out}" 2>/dev/null || true
