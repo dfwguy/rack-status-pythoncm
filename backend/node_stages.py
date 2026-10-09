@@ -151,12 +151,18 @@ def node_stages(
     import native_status
     import validation_activities
 
-    running, _times = native_status.load_squeue_jobs_map()
+    running, times = native_status.load_squeue_jobs_map()
     node_logs = native_status.node_stage_logs_for_log_dir(log_dir) or {}
     try:
         live = validation_activities.live_stage_jobs_by_node()
     except Exception:  # noqa: BLE001 - the overlay is best-effort, like the rack table's
         live = {}
+    # ``squeue -u <service user>`` misses jobs submitted as the operator who launched them, so ask
+    # Slurm about the ones this answer depends on by id, exactly as the rack table does.
+    hosts = {h for h, _ in nodes}
+    want = {str((live.get(h) or {}).get("nccl") or "") for h in hosts}
+    want |= {str(((node_logs.get(h) or {}).get("nccl") or {}).get("jid") or "") for h in hosts}
+    native_status.augment_running_set_for_job_ids(running, times, sorted(j for j in want if j))
     job = stage2_bringup_job()
     verdicts = _bringup.get(wait=wait_for_bringup)
     rows = []

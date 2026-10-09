@@ -50,6 +50,8 @@ def _isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(va, "LEGACY_JOBS_FILE", tmp_path / "multirack_jobs.json")
     monkeypatch.setattr(va, "ACTIVITY_ARCHIVE_DB", tmp_path / "validation_activities.sqlite3")
     monkeypatch.setattr(va, "_archive_sync_signature", None)
+    # Never ask a real Slurm; tests that care install their own answer.
+    monkeypatch.setattr(native_status, "augment_running_set_for_job_ids", lambda *_a: None)
 
 
 # ---------------------------------------------------------------- which logs speak for a rack
@@ -229,3 +231,21 @@ def test_the_stage2_job_is_a_setting(monkeypatch):
     assert node_stages.stage2_bringup_job() == "llm-pretrain"
     monkeypatch.delenv("RACK_NODE_STAGE2_BRINGUP_JOB")
     assert node_stages.stage2_bringup_job() == "llm-pretrain-solo"
+
+
+def test_a_node_run_submitted_as_another_user_still_reads_as_running(monkeypatch):
+    """The service's own squeue misses the operator's jobs; the node view asks Slurm by job id."""
+    monkeypatch.setattr(native_status, "load_squeue_jobs_map", lambda: (set(), {}))
+    asked = []
+
+    def augment(running, _times, want):
+        asked.extend(want)
+        running.update(j for j in want if j == "125824")
+
+    monkeypatch.setattr(native_status, "augment_running_set_for_job_ids", augment)
+    monkeypatch.setattr(native_status, "node_stage_logs_for_log_dir", lambda _d: {})
+    monkeypatch.setattr(node_stages._bringup, "get", lambda wait=False: {})
+    _live("node", [HOST], ref="125824")
+    out = node_stages.node_stages(PurePosixPath("/logs"), [(HOST, "V20")])
+    assert asked == ["125824"]
+    assert out["nodes"][0]["stage1"] == {"state": "ongoing", "job_id": "125824"}
