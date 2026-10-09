@@ -24,9 +24,14 @@ from core import is_valid_node_hostname
 
 
 def _compute_node_records(
-    records: object, *, provider: str, rack_field: str = "", ip_field: str = "",
+    records: object, *, provider: str, rack_field: str = "", ip_field: str = "", unit_field: str = "",
 ) -> list[dict[str, str | None]]:
-    """Validate manager inventory without deriving hostnames or requiring rack membership."""
+    """Validate manager inventory without deriving hostnames or requiring rack membership.
+
+    ``unit_field`` names the provider's position-in-rack attribute (BCM's rack unit). It is
+    carried as ``rack_unit`` only when the provider reports one: it is placement data the cluster
+    manager owns, so nothing here derives it from the hostname or the tray template.
+    """
     if not isinstance(records, list):
         # This is a failed external query, rather than a caller passing a wrong Python type.
         raise RuntimeError(f"{provider} node inventory must contain a list of devices")  # noqa: TRY004
@@ -46,6 +51,9 @@ def _compute_node_records(
             "ip": ip.strip() if isinstance(ip, str) else "",
             "scheduler_state": "",
         }
+        unit = record.get(unit_field) if unit_field else None
+        if isinstance(unit, (str, int)) and str(unit).strip():
+            nodes[hostname]["rack_unit"] = str(unit).strip()
     return list(nodes.values())
 
 

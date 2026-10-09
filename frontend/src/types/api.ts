@@ -347,6 +347,10 @@ export interface NodeInventoryEntry {
   status: "up" | "down" | "inst" | "unknown";
   ip: string;
   scheduler_state?: string;
+  /** Position in the rack as the cluster manager places it (BCM ``U20:11`` -> ``"11"``). Present only
+   * for a node that resolved to a rack and whose provider reports a unit; never derived from the
+   * hostname. */
+  rack_unit?: string;
   /** GPUs on this node, from the scheduler (Slurm GRES) or an nvidia-smi sample. Shape is
    * orthogonal to placement: a pool-mode node with no rack still carries a count. Absent = unknown. */
   gpu_count?: number;

@@ -18,6 +18,7 @@ import { ArrowLeft } from "lucide-react";
 import { RackOverview } from "../components/rack/RackOverview";
 import { NodeSelector, type NodeInfo } from "../components/rack/NodeSelector";
 import { parseNodesFromRack } from "../lib/parseNodesFromRack";
+import { rackNodesFromInventory } from "../lib/rackNodesFromInventory";
 import { RackLastOutputDot } from "../components/rack/RackLastOutputDot";
 import { RackPendingTags } from "../components/rack/RackPendingTags";
 import { ValidationTab } from "../components/rack/ValidationTab";
@@ -43,7 +44,7 @@ import { NodeIssueHistoryDialog } from "../components/rack/NodeIssueHistoryDialo
 import { getContent } from "../content";
 import { useActiveCluster } from "../context/ActiveClusterContext";
 import { fetchPostRunNodeReport } from "../services/nodeIssuesService";
-import type { NodeIssue, NodeIssueRollup, NodeIssuesResponse, RackRow } from "../types/api";
+import type { NodeInventoryEntry, NodeIssue, NodeIssueRollup, NodeIssuesResponse, RackRow } from "../types/api";
 import type { NvisNamingSchema } from "../types/naming";
 
 const RACK_DETAIL_HELP = getContent("rackDetail");
@@ -53,12 +54,14 @@ interface RackDetailViewProps {
   row: RackRow | undefined;
   comment: string;
   physicalRf0: Record<string, string>;
+  /** The server's resolved node inventory (``/api/status`` ``nodes``); rack membership comes from it. */
+  inventory?: NodeInventoryEntry[] | null;
   naming?: NvisNamingSchema;
   logDir?: string;
   onBack: () => void;
 }
 
-export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir, onBack }: RackDetailViewProps) {
+export function RackDetailView({ rack, row, comment, physicalRf0, inventory, naming, logDir, onBack }: RackDetailViewProps) {
   const [tabIndex, setTabIndex] = useState(0);
   const [selectedNodes, setSelectedNodes] = useState<Set<string>>(new Set());
   const [parserOpen, setParserOpen] = useState(false);
@@ -70,9 +73,13 @@ export function RackDetailView({ rack, row, comment, physicalRf0, naming, logDir
     activeCluster?.geometry?.trays_per_rack || activePlatform?.geometry?.trays_per_rack || 18;
 
   const nodes = useMemo(() => {
+    // The server's inventory first: it placed each real host by the cluster's mapping mode and
+    // templates. The ct_down_unk expansion remains only for servers that do not send it.
+    const fromInventory = rackNodesFromInventory(rack, inventory, physicalRf0);
+    if (fromInventory) return fromInventory;
     if (!row) return [];
     return parseNodesFromRack(rack, row.ct_down_unk, physicalRf0, traysPerRack, naming);
-  }, [rack, row, physicalRf0, naming, traysPerRack]);
+  }, [rack, row, inventory, physicalRf0, naming, traysPerRack]);
 
   /** Default selection = all trays; re-seed when rack or the tray id set changes (not on every row poll with same ids). */
   const selectionSeedRef = useRef<string>("");

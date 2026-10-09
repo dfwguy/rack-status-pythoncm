@@ -33,6 +33,7 @@ class BCMProvider(PlatformProvider):
             raise RuntimeError(f"BCM node inventory failed: {reason or 'query unsuccessful'}")
         return _compute_node_records(
             result.get("data"), provider="BCM", rack_field="rack_id", ip_field="bmc_ip",
+            unit_field="rack_unit",
         )
 
     def list_racks_cmd(self) -> list[str]:

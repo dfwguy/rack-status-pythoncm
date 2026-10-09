@@ -1,0 +1,65 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: LicenseRef-NvidiaProprietary
+ *
+ * NVIDIA CORPORATION, its affiliates and licensors retain all intellectual
+ * property and proprietary rights in and to this material, related
+ * documentation and any modifications thereto. Any use, reproduction,
+ * disclosure or distribution of this material and related documentation
+ * without an express license agreement from NVIDIA CORPORATION or
+ * its affiliates is strictly prohibited.
+ */
+import { describe, expect, it } from "vitest";
+import { rackNodesFromInventory } from "./rackNodesFromInventory";
+import type { NodeInventoryEntry } from "../types/api";
+
+// Nscale NC shape: rack U20 holds sys1-gso1-p-phy-gpu19..36-su19, placed by BCM at rack units.
+const inv: NodeInventoryEntry[] = [
+  { id: "sys1-gso1-p-phy-gpu20-su19", rack: "U20", rack_unit: "12", status: "up", ip: "10.10.171.243" },
+  { id: "sys1-gso1-p-phy-gpu36-su19", rack: "U20", rack_unit: "37", status: "down", ip: "" },
+  { id: "sys1-gso1-p-phy-gpu19-su19", rack: "U20", rack_unit: "11", status: "up", ip: "10.10.171.244" },
+  { id: "sys1-gso1-p-phy-gpu1-su19", rack: "U19", rack_unit: "11", status: "up", ip: "10.10.171.28" },
+  { id: "appserver-nc", rack: null, status: "up", ip: "" },
+];
+
+describe("rackNodesFromInventory", () => {
+  it("takes the rack's real hosts from the inventory, ordered by rack unit", () => {
+    const nodes = rackNodesFromInventory("U20", inv)!;
+    expect(nodes.map((n) => n.id)).toEqual([
+      "sys1-gso1-p-phy-gpu19-su19",
+      "sys1-gso1-p-phy-gpu20-su19",
+      "sys1-gso1-p-phy-gpu36-su19",
+    ]);
+    expect(nodes.map((n) => n.label)).toEqual(["U20:11", "U20:12", "U20:37"]);
+    expect(nodes.every((n) => n.hostname === n.id)).toBe(true);
+    expect(nodes.map((n) => n.status)).toEqual(["up", "up", "down"]);
+  });
+
+  it("never synthesises a <rack>-ctNN name", () => {
+    const nodes = rackNodesFromInventory("u20", inv)!;
+    expect(nodes.some((n) => /-ct\d/.test(n.id))).toBe(false);
+  });
+
+  it("fills a missing BMC address from physical_rf0", () => {
+    const nodes = rackNodesFromInventory("U20", inv, { "SYS1-GSO1-P-PHY-GPU36-SU19": "10.10.171.227" })!;
+    expect(nodes.find((n) => n.id.endsWith("gpu36-su19"))?.ip).toBe("10.10.171.227");
+    expect(nodes.find((n) => n.id.endsWith("gpu19-su19"))?.ip).toBe("10.10.171.244");
+  });
+
+  it("labels a placed node with its hostname when the provider reports no unit", () => {
+    const nodes = rackNodesFromInventory("p5-r01", [
+      { id: "p5-r01-ct02", rack: "p5-r01", status: "up", ip: "" },
+      { id: "p5-r01-ct01", rack: "p5-r01", status: "up", ip: "" },
+    ])!;
+    expect(nodes.map((n) => [n.label, n.hostname])).toEqual([
+      ["p5-r01-ct01", "p5-r01-ct01"],
+      ["p5-r01-ct02", "p5-r01-ct02"],
+    ]);
+  });
+
+  it("returns null without inventory or members, so the caller keeps the legacy path", () => {
+    expect(rackNodesFromInventory("U20", undefined)).toBeNull();
+    expect(rackNodesFromInventory("U20", null)).toBeNull();
+    expect(rackNodesFromInventory("Z9", inv)).toBeNull();
+  });
+});

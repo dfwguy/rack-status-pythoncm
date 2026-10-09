@@ -36,9 +36,14 @@ function redfishHttpsHref(host: string): string | null {
 }
 
 export interface NodeInfo {
+  /** Selection and action target. For an inventory-backed rack this is the real hostname. */
   id: string;
   status: "up" | "down" | "inst" | "unknown";
   ip?: string;
+  /** Resolvable compute hostname (Slurm/DNS), shown in its own column. Defaults to ``id``. */
+  hostname?: string;
+  /** Where the node sits in the rack, e.g. the cluster manager's ``U20:11``. Defaults to ``id``. */
+  label?: string;
 }
 
 interface NodeSelectorProps {
@@ -148,6 +153,7 @@ export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTermina
                 />
               </TableCell>
               <TableCell>Node</TableCell>
+              <TableCell>Hostname</TableCell>
               <TableCell>Status</TableCell>
               {(issueNodes || onOpenIssues) && <TableCell>Issue trend</TableCell>}
               <TableCell>RedFish IP</TableCell>
@@ -167,7 +173,12 @@ export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTermina
                 </TableCell>
                 <TableCell>
                   <Text kind="body/regular/md" style={{ fontFamily: "monospace" }}>
-                    {node.id}
+                    {node.label ?? node.id}
+                  </Text>
+                </TableCell>
+                <TableCell>
+                  <Text kind="body/regular/sm" style={{ fontFamily: "monospace" }}>
+                    {node.hostname ?? node.id}
                   </Text>
                 </TableCell>
                 <TableCell>

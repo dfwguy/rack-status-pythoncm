@@ -1159,6 +1159,12 @@ def build_node_inventory(
             "id": host, "rack": rack, "status": device_states.get(host.casefold(), state),
             "scheduler_state": scheduler_state, "ip": detail.get("ip", ""),
         }
+        # Position in the rack, as the cluster manager places it (BCM "U20:11" -> "11"). Only for a
+        # node that resolved to a rack, and never derived from the hostname: the SPA shows it as the
+        # node's placement instead of synthesising a <rack>-ctNN label that names no real host.
+        unit = str(detail.get("rack_unit") or "").strip()
+        if rack is not None and unit:
+            node_rec["rack_unit"] = unit
         shape = shape_by_host.get(host.casefold())
         if shape:
             count = shape.get("gpu_count")

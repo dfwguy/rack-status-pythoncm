@@ -185,6 +185,7 @@ function RackDetailRoute({
       row={row}
       comment={data?.comments[rack] || ""}
       physicalRf0={data?.physical_rf0 || {}}
+      inventory={data?.nodes}
       naming={data?.naming}
       logDir={data?.log_dir}
       onBack={onBack}

@@ -110,6 +110,57 @@ class TestRackMappingMode:
         assert inv[0]["rack"] == "p1-r5"
 
 
+class TestRackUnitPlacement:
+    """The rack page shows where the cluster manager placed each node. That position travels as
+    ``rack_unit`` from the provider record -- never parsed out of a hostname or a tray template.
+    """
+
+    def test_bcm_records_carry_the_rack_unit_when_reported(self):
+        from platforms.base import _compute_node_records
+
+        rows = _compute_node_records(
+            [
+                {"hostname": "sys1-gso1-p-phy-gpu19-su19", "rack_id": "U20", "rack_unit": "11", "bmc_ip": "10.0.0.1"},
+                {"hostname": "sys1-gso1-p-phy-gpu20-su19", "rack_id": "U20", "rack_unit": 12, "bmc_ip": ""},
+                {"hostname": "sys1-gso1-p-phy-gpu21-su19", "rack_id": "U20", "rack_unit": "", "bmc_ip": ""},
+            ],
+            provider="BCM", rack_field="rack_id", ip_field="bmc_ip", unit_field="rack_unit",
+        )
+        assert [r.get("rack_unit") for r in rows] == ["11", "12", None]
+        assert "rack_unit" not in rows[2]
+
+    def test_without_a_unit_field_records_are_unchanged(self):
+        from platforms.base import _compute_node_records
+
+        rows = _compute_node_records(
+            [{"hostname": "n1", "rack_id": "R1", "rack_unit": "7"}], provider="X", rack_field="rack_id",
+        )
+        assert rows == [{"id": "n1", "rack": "R1", "status": "unknown", "ip": "", "scheduler_state": ""}]
+
+    def test_translate_inventory_carries_the_provider_unit_for_placed_nodes(self, monkeypatch):
+        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        nodes = {"sys1-gso1-p-phy-gpu19-su19": "idle", "sys1-gso1-p-phy-gpu99-su19": "idle"}
+        records = [
+            {"id": "sys1-gso1-p-phy-gpu19-su19", "rack": "U20", "ip": "10.0.0.1", "rack_unit": "11"},
+            {"id": "sys1-gso1-p-phy-gpu99-su19", "rack": None, "ip": "", "rack_unit": "5"},
+        ]
+        inv = {n["id"]: n for n in ns.build_node_inventory(nodes, ["U20"], records=records)}
+        assert inv["sys1-gso1-p-phy-gpu19-su19"]["rack"] == "U20"
+        assert inv["sys1-gso1-p-phy-gpu19-su19"]["rack_unit"] == "11"
+        # Unplaced: a unit with no rack locates nothing, so it is not published.
+        assert "rack_unit" not in inv["sys1-gso1-p-phy-gpu99-su19"]
+
+    def test_bcm_provider_asks_for_the_unit(self, monkeypatch):
+        from platforms import bcm
+
+        monkeypatch.setattr(
+            bcm.bcm_query, "nodes",
+            lambda: {"ok": True, "data": [{"hostname": "h1", "rack_id": "U20", "rack_unit": "11", "bmc_ip": "1.2.3.4"}]},
+        )
+        rows = bcm.BCMProvider().compute_node_inventory()
+        assert rows[0]["rack"] == "U20" and rows[0]["rack_unit"] == "11" and rows[0]["ip"] == "1.2.3.4"
+
+
 class TestProviderRackCounts:
     """A BCM/pythoncm cluster has no sinfo, so the rack tiles' node totals must come from the
     placed roster. Without this every provider rack showed 0/0 even with 18 nodes enumerated.
