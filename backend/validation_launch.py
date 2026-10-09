@@ -59,7 +59,14 @@ from activity_hydration import _update_validation_activity
 from catalog import context as catalog_context
 from catalog import models
 from catalog.store import TABLE_TOOLS, get_repo
-from config_env import _eget, _eget_int, _env_int, _job_env_int, _subprocess_env
+from config_env import (
+    _eget,
+    _eget_int,
+    _env_int,
+    _job_env_int,
+    _nvis_workspace_dir_effective,
+    _subprocess_env,
+)
 from core import is_valid_node_hostname
 from core import rpath as _rpath
 from flask import jsonify
@@ -894,6 +901,14 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
     if preset.id == "mnubergemm-26.03-v1.17":
         checks += ["MNUberGEMM payload duration=3300 seconds", "Slurm TimeLimit=01:00:00"]
     summary = f"{preset.label}: {len(nodes)} exact node(s), storage={options['storage']}, rsync={str(options['rsync_to_local']).lower()}"
+    # The cluster's workspace lives in the catalog overlay, not in this process's environment, so
+    # the launcher only sees it when the plan hands it over, as every other launcher's plan does.
+    # Without it the host-toolchain presets reach the node and stop at "no workspace configured".
+    workspace = _nvis_workspace_dir_effective()
+    env_updates = {"NVIS_PREPARED_NODE_COUNT": str(len(nodes)),
+                   "NVIS_PRESET_SCOPE_MULTIRACK": "1" if scope == "multirack" else "0"}
+    if workspace:
+        env_updates["NVIS_WORKSPACE_DIR"] = workspace
     plan = {
         "preset_id": preset.id,
         "validation": preset.kind,
@@ -924,14 +939,14 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         "cmd": cmd,
         "log_dir": str(log_dir),
         "timeout": max(120, _job_env_int("RACK_VALIDATION_PRESET_TIMEOUT", 28800)),
-        "env_updates": {"NVIS_PREPARED_NODE_COUNT": str(len(nodes)),
-                        "NVIS_PRESET_SCOPE_MULTIRACK": "1" if scope == "multirack" else "0"},
+        "workspace": workspace,
+        "env_updates": env_updates,
         "image_override_note": ("DGXC recipe v26.06.01 with audited NeMo 26.04.01 image override" if preset.id == "exemplar-system-info" else None),
     }
     plan["plan_hash"] = plan_digest({key: plan[key] for key in (
         "preset_id", "scope", "nodes", "node_groups", "racks", "campaign", "storage", "rsync_to_local",
         "local_container_dir", "container_profile", "cuda_version", "nccl_version", "max_steps",
-        "max_runtime_minutes", "artifact", "log_dir",
+        "max_runtime_minutes", "artifact", "log_dir", "workspace",
     )})
     return plan, None
 

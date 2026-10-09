@@ -130,6 +130,47 @@ class TestTheLlmbResolver:
         assert "Projects -> cluster -> Workspace" in r.stderr
 
 
+class TestTheValidationPresetsHandItOver:
+    """The workspace sits in the catalog overlay, not this process's environment: a launcher only
+    passes it on when its plan says so. Every legacy launcher's plan did; the preset plan did not, so
+    the NCCL Acceptance Sweep on Nscale NC (2026-10-09, gpu108-su21) reached its sbatch and stopped at
+    "no workspace configured for this cluster" while Stage-1 ran fine on the same cluster."""
+
+    NODE = "ink50-dh01-d01-11"
+
+    def _prepare(self, monkeypatch, tmp_path, workspace):
+        import app as app_module
+        import validation_launch
+
+        monkeypatch.setattr(validation_launch, "_nvis_workspace_dir_effective", lambda: workspace)
+        monkeypatch.setattr(validation_launch, "_resolve_log_dir", lambda _raw=None: tmp_path)
+        monkeypatch.setattr(validation_launch, "_script_exists", lambda _path: True)
+        monkeypatch.setattr(validation_launch, "_all_slurm_nodenames", lambda: [self.NODE])
+        monkeypatch.setattr(validation_launch, "_validation_node_eligibility",
+                            lambda raw: (dict.fromkeys(raw, "idle"), []))
+        with app_module.app.app_context():
+            plan, err = validation_launch._prepare_validation_preset({
+                "preset_id": "nccl-2.31.2", "scope": "node", "nodes": [self.NODE], "storage": "nfs",
+            })
+        assert err is None, err
+        return plan
+
+    def test_the_preset_plan_carries_the_cluster_workspace(self, monkeypatch, tmp_path):
+        plan = self._prepare(monkeypatch, tmp_path, "/home/cmods/workspace")
+        assert plan["env_updates"]["NVIS_WORKSPACE_DIR"] == "/home/cmods/workspace"
+        assert plan["workspace"] == "/home/cmods/workspace"
+
+    def test_no_workspace_is_left_for_the_script_to_refuse(self, monkeypatch, tmp_path):
+        """No setting means no variable, never an empty one: the script's own refusal names the setting."""
+        plan = self._prepare(monkeypatch, tmp_path, "")
+        assert "NVIS_WORKSPACE_DIR" not in plan["env_updates"]
+
+    def test_a_changed_workspace_invalidates_the_reviewed_plan(self, monkeypatch, tmp_path):
+        a = self._prepare(monkeypatch, tmp_path, "/home/cmods/workspace")
+        b = self._prepare(monkeypatch, tmp_path, "/scratch/workspace")
+        assert a["plan_hash"] != b["plan_hash"]
+
+
 # Code lines only: comments may tell the history of a path, code may not carry one.
 _HOME_LITERAL = re.compile(r"/home/(?:\*|[a-z_][a-z0-9_-]*)/")
 
