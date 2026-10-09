@@ -885,11 +885,21 @@ def _require_dashboard_auth():
 
     # The claims, not just the subject, and verified ONCE. `authenticated_principal` is a thin
     # wrapper over this, so calling both would verify the same token twice.
-    claims = web_auth.verified_claims(request.headers, request.cookies)
+    #
+    # Renewal and logout authenticate with the refresh cookie (`web_auth.REFRESH_CREDENTIAL_ENDPOINTS`
+    # says why), and on those two routes it is judged FIRST: the route acts on the refresh token, so
+    # the subject the gate records and authorizes must be that token's — the gate judging one
+    # credential while the handler acts on another is identity-auth-traps §10. The access token is
+    # the fallback there (a logout with only a live access cookie) and the only credential elsewhere.
+    claims = web_auth.verified_refresh_claims(request.endpoint, request.cookies)
+    auth_method = "refresh"
+    if not claims:
+        claims = web_auth.verified_claims(request.headers, request.cookies)
+        auth_method = "token"
     principal = str(claims.get("sub") or "")
     if principal:
         g.auth_principal = principal
-        g.auth_method = "token"
+        g.auth_method = auth_method
 
         # **When the operator authenticated, which is not now.** `/oidc/authorize` stamps this onto
         # the code it issues, and it was reading `g.auth_time` from a gate that never set it — so

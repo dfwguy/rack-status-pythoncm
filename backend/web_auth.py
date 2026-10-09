@@ -45,6 +45,33 @@ _logger = logging.getLogger(__name__)
 #: (core-designs.mdc §0), and the gate importing a route module would invert it.
 ACCESS_COOKIE = "nvis_access"
 
+#: The cookie carrying the refresh token. Duplicated from ``api/auth_srp`` for the same reason.
+REFRESH_COOKIE = "nvis_refresh"
+
+#: The routes whose credential is the **refresh token**, and the only places the gate accepts one.
+#:
+#: Renewal exists for the moment the access token has gone, so a gate that demands a live access
+#: token before renewal can run demands the one credential renewal replaces. That is how these two
+#: routes behaved until 2026-10-09: the SPA renews on a timer ahead of expiry and never noticed,
+#: while `nvrs` renews after a 401 and was refused every time — a 7-day refresh token that lasted
+#: one hour. Logout was worse, silently: past the hour it was refused before it could revoke the
+#: refresh token, so "logged out" left a renewable credential behind.
+#:
+#: **Accepted here rather than exempted.** Listing these in :data:`AUTH_BYPASS_ENDPOINTS` would also
+#: have worked, but would make them reachable with no credential at all and audit every renewal as
+#: `anonymous`. This keeps every request authenticated, records the real subject, and throttles per
+#: principal — the same shape as flask-jwt-extended's ``@jwt_required(refresh=True)``.
+#:
+#: **Only here, and only from the cookie.** A refresh token honoured on any other route would be a
+#: 7-day access token, which is the type confusion ``tokens.verify``'s mandatory ``expect_type``
+#: exists to prevent (FR-5c). And never from ``Authorization``: the browser cannot read its HttpOnly
+#: refresh cookie to put it in a header, and the cookie's ``Path=/api/auth`` keeps the longest-lived
+#: credential off every other request and out of header logs.
+REFRESH_CREDENTIAL_ENDPOINTS: frozenset[str] = frozenset({
+    "auth_srp.refresh_session",
+    "auth_srp.logout_session",
+})
+
 
 def bearer_token(headers: object) -> str:
     """The token from an ``Authorization: Bearer`` header, or empty.
@@ -122,6 +149,35 @@ def verified_claims(headers: object, cookies: object = None) -> dict:
         if str(claims.get("sub") or "").strip():
             return dict(claims)
     return {}
+
+
+def verified_refresh_claims(endpoint: str | None, cookies: object = None) -> dict:
+    """The verified refresh-token claims for a route in :data:`REFRESH_CREDENTIAL_ENDPOINTS`, or ``{}``.
+
+    The gate asks this only after :func:`verified_claims` found no access token. Every other
+    endpoint gets ``{}`` without the cookie being read, so a refresh token can never stand in for
+    an access token anywhere else. Verified as ``TOKEN_REFRESH`` — signature, issuer, audience,
+    expiry, type and revocation, exactly as the route itself verifies it — so this admits nothing
+    the route would not.
+    """
+    if endpoint not in REFRESH_CREDENTIAL_ENDPOINTS:
+        return {}
+    from identity import tokens  # local, as in verified_claims
+
+    try:
+        raw = cookies.get(REFRESH_COOKIE) if cookies is not None else None  # type: ignore[union-attr]
+    except (AttributeError, TypeError):
+        raw = None
+    if not raw:
+        return {}
+    try:
+        claims = tokens.verify(str(raw), tokens.TOKEN_REFRESH)
+    except tokens.TokenError:
+        return {}  # uniform, for the reason given in verified_claims
+    except Exception:
+        _logger.exception("refresh token verification raised; treating as unauthenticated")
+        return {}
+    return dict(claims) if str(claims.get("sub") or "").strip() else {}
 
 
 # --- Removed 2026-09-01: shared-token and PAM authentication (FR-18) ------------------------------

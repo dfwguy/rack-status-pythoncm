@@ -368,5 +368,32 @@ class TestTheLoginRoutesAreReachableWithoutACredential:
         assert "WWW-Authenticate" not in resp.headers, "the gate refused a bypassed route"
 
     def test_refresh_is_not_in_the_bypass_set(self, gated):
-        """It authenticates with the refresh cookie and must be refused without one."""
+        """It authenticates with the refresh cookie and must be refused without one.
+
+        Still true, and now by the gate itself: renewal and logout accept the refresh cookie as
+        their credential (`REFRESH_CREDENTIAL_ENDPOINTS`) instead of being exempted from the gate,
+        so neither may ever appear in the bypass set.
+        """
+        import web_auth
+
         assert gated.post("/api/auth/refresh").status_code == 401
+        for endpoint in web_auth.REFRESH_CREDENTIAL_ENDPOINTS:
+            assert endpoint not in web_auth.AUTH_BYPASS_ENDPOINTS, endpoint
+
+    def test_the_refresh_credential_endpoints_are_real_routes(self, gated):
+        """A misspelt entry would silently restore the defect it exists to fix."""
+        import web_auth
+        from app import app
+
+        known = {rule.endpoint for rule in app.url_map.iter_rules()}
+        assert web_auth.REFRESH_CREDENTIAL_ENDPOINTS <= known
+
+    def test_a_refresh_token_is_ignored_off_the_refresh_routes(self, gated):
+        import web_auth
+
+        principal = "user:admin"
+        refresh = tokens_mod.mint(principal, tokens_mod.TOKEN_REFRESH)
+        jar = {web_auth.REFRESH_COOKIE: refresh}
+        assert web_auth.verified_refresh_claims("auth_srp.refresh_session", jar)["sub"] == principal
+        assert web_auth.verified_refresh_claims("status.api_status", jar) == {}
+        assert web_auth.verified_refresh_claims(None, jar) == {}

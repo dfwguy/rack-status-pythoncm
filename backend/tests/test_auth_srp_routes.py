@@ -34,10 +34,13 @@ that the cookie is gone.
 
 from __future__ import annotations
 
+import json
+import logging
 import time
 
 import pytest
 import srp as srp_lib
+from audit import sink as audit_sink
 from identity import bootstrap, rate_limit, revocation
 from identity import srp as srp_mod
 from identity import tokens as tokens_mod
@@ -356,8 +359,6 @@ class TestFR5bRenewal:
         whichever it saw last — and a deadline reported on only one of the two leaves a window where
         the client is flying blind and falls back to the costlier reactive path.
         """
-        import time
-
         _u, login_resp = _login(client, *admin)
         now = time.time()
         login_expiry = login_resp.get_json()["access_expires_at"]
@@ -380,6 +381,115 @@ class TestFR5bRenewal:
         _u, _r = _login(client, *admin)
         revocation.revoke_subject(f"user:{bootstrap.ADMIN_LOGIN}")
         assert client.post("/api/auth/refresh").status_code == 401
+
+
+@pytest.fixture
+def anonymous():
+    """A client that presents only the cookies the exchange itself set — never a minted bearer.
+
+    The suite's default `client` mints a fresh access token for *every* request, which is exactly
+    what hid the defect below: renewal was gated on a valid access token, and a client that always
+    has one cannot notice. Renewal exists for the moment the access token is gone, so it has to be
+    tested from that moment.
+    """
+    from app import app
+    from identity import testing
+
+    with testing.unauthenticated_client(app) as c:
+        yield c
+
+
+class TestFR5bRenewalOutlivesTheAccessToken:
+    """Renewal must work once the access token has expired — that is the only time it is needed.
+
+    The gate demanded a valid *access* token before the route could read its refresh cookie. The
+    SPA renews on a timer ahead of expiry and never noticed; `nvrs` renews after a 401, i.e. with an
+    expired access token, and was refused every time with a 401 audited as `anonymous` — a 7-day
+    refresh token that worked for one hour. The gate now accepts the refresh cookie as the
+    credential on this route (`web_auth.REFRESH_CREDENTIAL_ENDPOINTS`) rather than exempting it.
+    """
+
+    def test_renewal_with_only_the_refresh_cookie(self, anonymous, admin):
+        """The browser case: the access cookie's `Max-Age` has lapsed, so it is simply not sent."""
+        _u, login_resp = _login(anonymous, *admin)
+        assert login_resp.status_code == 200
+        anonymous.delete_cookie("nvis_access", path="/")
+
+        resp = anonymous.post("/api/auth/refresh")
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+        assert resp.get_json()["principal"] == f"user:{bootstrap.ADMIN_LOGIN}"
+        renewed = anonymous.get_cookie("nvis_access")
+        assert renewed is not None, "renewal must issue a new access cookie"
+        # And the renewed token is a working credential, not merely a cookie.
+        assert tokens_mod.verify(renewed.value, tokens_mod.TOKEN_ACCESS)["sub"] == (
+            f"user:{bootstrap.ADMIN_LOGIN}"
+        )
+
+    def test_renewal_alongside_an_expired_bearer(self, anonymous, admin):
+        """The CLI case: it still sends its stale access token as `Authorization: Bearer`."""
+        _u, _r = _login(anonymous, *admin)
+        anonymous.delete_cookie("nvis_access", path="/")
+        expired = tokens_mod.mint(
+            f"user:{bootstrap.ADMIN_LOGIN}", tokens_mod.TOKEN_ACCESS, ttl_seconds=1
+        )
+        time.sleep(1.5)
+        with pytest.raises(tokens_mod.TokenError):
+            tokens_mod.verify(expired, tokens_mod.TOKEN_ACCESS)
+
+        resp = anonymous.post(
+            "/api/auth/refresh", headers={"Authorization": f"Bearer {expired}"}
+        )
+        assert resp.status_code == 200, resp.get_data(as_text=True)
+
+    def test_without_any_credential_the_gate_refuses(self, anonymous):
+        """Accepted, not exempted: with no credential the request never reaches the route."""
+        resp = anonymous.post("/api/auth/refresh")
+        assert resp.status_code == 401
+        assert resp.get_json()["error"] == "authentication required", "the gate, not the route"
+        assert resp.headers.get("WWW-Authenticate", "").startswith("Bearer")
+
+    def test_the_renewal_is_audited_as_the_refresh_tokens_subject(self, anonymous, admin, caplog):
+        """Not `anonymous` — the line that made this defect so hard to read on NC."""
+        _u, _r = _login(anonymous, *admin)
+        anonymous.delete_cookie("nvis_access", path="/")
+        with caplog.at_level(logging.INFO, logger=audit_sink.AUDIT_LOGGER):
+            assert anonymous.post("/api/auth/refresh").status_code == 200
+        events = [
+            json.loads(r.getMessage())
+            for r in caplog.records
+            if r.name == audit_sink.AUDIT_LOGGER and '"auth:refresh"' in r.getMessage()
+        ]
+        assert events, "the renewal left no audit record"
+        assert events[-1]["principal"] == f"user:{bootstrap.ADMIN_LOGIN}"
+        assert events[-1]["auth_method"] == "refresh"
+        assert events[-1]["result"] != "refused"
+
+    @pytest.mark.parametrize("path", ["/api/auth-check", "/api/status"])
+    def test_a_refresh_token_is_not_a_credential_anywhere_else(self, anonymous, admin, path):
+        """FR-5c: honoured outside renewal and logout, it would be a 7-day access token."""
+        _u, _r = _login(anonymous, *admin)
+        refresh = anonymous.get_cookie("nvis_refresh", path="/api/auth")
+        assert refresh is not None
+        anonymous.delete_cookie("nvis_access", path="/")
+        anonymous.set_cookie("nvis_refresh", refresh.value, path="/")  # sent everywhere
+        assert anonymous.get(path).status_code == 401
+        assert anonymous.get(
+            path, headers={"Authorization": f"Bearer {refresh.value}"}
+        ).status_code == 401
+
+    def test_a_revoked_refresh_token_is_still_refused(self, anonymous, admin):
+        _u, _r = _login(anonymous, *admin)
+        anonymous.delete_cookie("nvis_access", path="/")
+        revocation.revoke_all_for(f"user:{bootstrap.ADMIN_LOGIN}")
+        assert anonymous.post("/api/auth/refresh").status_code == 401
+
+    def test_an_access_token_in_the_refresh_cookie_is_still_refused(self, anonymous, admin):
+        _u, _r = _login(anonymous, *admin)
+        access = anonymous.get_cookie("nvis_access")
+        assert access is not None
+        anonymous.delete_cookie("nvis_access", path="/")
+        anonymous.set_cookie("nvis_refresh", access.value, path="/api/auth")
+        assert anonymous.post("/api/auth/refresh").status_code == 401
 
 
 class TestFR6LogoutRevokes:
@@ -405,6 +515,37 @@ class TestFR6LogoutRevokes:
     def test_logout_without_a_session_is_not_an_error(self, client):
         """A caller on their way out should not be handed a failure they cannot act on."""
         assert client.post("/api/auth/logout").status_code == 200
+
+
+class TestLogoutOutlivesTheAccessToken:
+    """Logout past the access token's hour must still revoke the refresh token.
+
+    Gated on a valid access token, it was refused before it could revoke anything, and both clients
+    treat a 401 on the way out as success — so "logged out" left a renewable credential behind.
+    """
+
+    def test_the_refresh_token_is_revoked_after_the_access_token_lapsed(self, anonymous, admin):
+        _u, _r = _login(anonymous, *admin)
+        refresh = anonymous.get_cookie("nvis_refresh", path="/api/auth")
+        assert refresh is not None
+        anonymous.delete_cookie("nvis_access", path="/")
+
+        assert anonymous.post("/api/auth/logout").status_code == 200
+
+        with pytest.raises(tokens_mod.TokenError):
+            tokens_mod.verify(refresh.value, tokens_mod.TOKEN_REFRESH)
+        anonymous.set_cookie("nvis_refresh", refresh.value, path="/api/auth")
+        assert anonymous.post("/api/auth/refresh").status_code == 401
+
+    def test_without_any_credential_the_gate_refuses_and_revokes_nothing(self, anonymous, admin):
+        principal = f"user:{bootstrap.ADMIN_LOGIN}"
+        bystander = tokens_mod.mint(principal, tokens_mod.TOKEN_REFRESH)
+
+        resp = anonymous.post("/api/auth/logout")
+        assert resp.status_code == 401
+        assert resp.get_json()["error"] == "authentication required"
+
+        assert tokens_mod.verify(bystander, tokens_mod.TOKEN_REFRESH)["sub"] == principal
 
 
 class TestTheChallengeIsSingleUse:
