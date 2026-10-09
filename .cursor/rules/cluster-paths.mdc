@@ -1,0 +1,65 @@
+---
+description: Every fix and new feature — cluster paths (scripts, logs, workspace, images, published config) come from the project/cluster record via one resolver, never a literal or default in a script; how to add a path and fix the next path/prefix bug
+alwaysApply: true
+---
+
+# Cluster paths reach scripts from the project record — never from the script
+
+Full reasoning, incident history and host-visibility map: `docs/explanation/how-cluster-paths-reach-scripts.md`.
+Read it before touching any path, prefix, `*_DIR`, `LLMB_*`, workspace, log or container-image
+location in `bin/scripts/` or the backend.
+
+> **Status on `main`:** the rule applies now, to every change. The fields and resolvers named below
+> (`workspace_dir`, `shared_container_dir`/`node_container_dir`, `lib/llmb_paths.inc.sh`,
+> `lib/node_images.inc.sh`, `lib/node_config.inc.sh`, the `test_cluster_workspace.py` guard) were
+> built on `nscale-nc-app` (commits 563d7aa, 299175d) and arrive here with its merge. Until then, a
+> change on `main` that needs one of those roots adds it the way step 3 below describes, or builds
+> on `nscale-nc-app` — never with a literal path as a stopgap.
+
+**This applies to every fix and every new feature, not only to path bugs.** A new script, tool,
+installer, launcher, preset or setting that reads or writes anything on a cluster host takes its
+location from the cluster record from day one. A "quick" literal to unblock a run is the bug this
+rule exists to stop: it is how six incidents happened (2026-10, Nscale NC) and how four different
+`/home` users came to coexist in one tree. If you are unsure which root a path belongs to, ask —
+and check earlier sessions' transcripts for a decision already made — rather than guessing a path.
+
+**The rule.** A path is a site fact: it lives in the cluster record (`ClusterConnection`), is
+exported by `catalog.context.high_overlay()` as an `NVIS_*`/`RACK_*` variable (those forward over
+SSH), and is turned into concrete paths by exactly ONE shell resolver. Changing a project/cluster
+setting must move everything; a new deployment must never need a script edit.
+
+| Root | Cluster field | Env | Resolver |
+|---|---|---|---|
+| scripts | `remote_base_path` | `RACK_REMOTE_BASE_PATH` | `script_tree.py`; scripts self-locate, batch scripts use `NVIS_SCRIPTS_DIR` |
+| logs | `log_dir` | `NVIS_LOG_DIR` / launch cwd / `RACK_JOB_LOG_DIR` | `${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}` |
+| workspace | `workspace_dir` | `NVIS_WORKSPACE_DIR` | `bin/scripts/workspace-dir-common.sh` (root, HPC-X/CUDA/NCCL); `bin/scripts/lib/llmb_paths.inc.sh` → `LLMB_INSTALL`=`<ws>/llmb` (explicit wins, complete alone), `LLMB_VENV` |
+| shared images | `shared_container_dir` | `RACK_VALIDATION_CONTAINER_ROOT` | `validation_presets.shared_container_root()` |
+| node image cache | `node_container_dir` | `NVIS_NODE_CONTAINER_DIR` (+`NVIS_NODE_IMAGES_P2P`) | `bin/scripts/lib/node_images.inc.sh` |
+| published settings | (follows scripts) | — | `bin/scripts/lib/node_config.inc.sh` → `<scripts>/config/` |
+
+Scripts, logs and workspace are the three roots agreed 2026-10-08, to be consolidated under one
+cluster home (`docs/explanation/the-cluster-home-directory.md`).
+
+## Never
+
+- a `/home/<user>/...` literal or a `/home/*/` glob in script code (CI guard:
+  `backend/tests/test_cluster_workspace.py::test_no_script_carries_a_user_home`);
+- `${X:-/some/site/path}` defaults repeated per script — derive in the root's resolver, once;
+- a backend/script fallback to another site's directory (the old `/home/cmsupport/workspace`) —
+  unset must be an error that names the setting ("Projects → cluster → Workspace");
+- stat-ing a shared store from the launch host (NC's BCM head mounts only `/home`; `/cluster` is
+  app-server-only; `/opt/containers` is node-local) — check node data on the nodes via `pdsh`;
+- writing into a shipped layer (`multi-platform/`) except published `config/` files, or creating a
+  script layer as a side effect;
+- "fixing" it on the host (editing a deployed script, exporting in a shell) — fix the setting.
+
+## Fixing a path bug — in order
+
+1. Name the root. 2. If it exists, add the suffix to that root's resolver and source the resolver.
+3. If none fits, add a root properly: `ClusterConnection` field (validated with `valid_data_dir`)
+→ `high_overlay()` export → fallback setting + `docs/settings-hints.toml` (regenerate the settings
+reference) → cluster-editor field in `ProjectsView.tsx` + `types/catalog.ts` → resolver lib → the
+doc's table. 4. Fail loudly when unset. 5. Check every hop: overlay, SSH forwarding (prefix or
+`env_extra`), Slurm `--export`, `NVIS_SCRIPTS_DIR` in batch scripts. 6. Check which host resolves
+it. 7. Test the way it runs (`test_cluster_workspace.py`, `test_node_config.py`,
+`test_cluster_container_dirs.py`) in the CI images via `bin/ci-local.sh`.

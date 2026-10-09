@@ -46,6 +46,9 @@ Read these before doing any work — they apply to every task:
   paradigms already in use, and why "put it in a SQL table" is usually the wrong default
 - @.cursor/claude-rules/local-vs-ci-tree.md — why "it passes locally" says nothing about CI: untracked
   files, missing tools, and the unbuilt frontend (`static/spa/`)
+- @.cursor/claude-rules/cluster-paths.md — **every fix and feature: cluster paths come from the
+  project/cluster record** (scripts, logs, workspace, images) through one resolver each — never a
+  literal or default in a script; the procedure for adding a path and fixing the next path bug
 
 ## Read when relevant (task-scoped)
 
