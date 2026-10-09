@@ -309,7 +309,12 @@ impl Client {
 
     fn status_error(&self, status: StatusCode, text: String) -> Error {
         match status {
-            StatusCode::UNAUTHORIZED => Error::Unauthorized,
+            StatusCode::UNAUTHORIZED => Error::Unauthorized {
+                message: serde_json::from_str::<Value>(&text)
+                    .ok()
+                    .as_ref()
+                    .and_then(envelope::extract_error),
+            },
             StatusCode::TOO_MANY_REQUESTS => Error::RateLimited { retry_after: None },
             _ => {
                 let msg = serde_json::from_str::<Value>(&text)

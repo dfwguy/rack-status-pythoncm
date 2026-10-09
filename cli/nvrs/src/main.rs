@@ -358,7 +358,8 @@ fn exit_code_for(err: &anyhow::Error) -> i32 {
         return match e {
             nvrs_auth::AuthError::Client(c) => c.exit_code(),
             nvrs_auth::AuthError::InvalidCredentials
-            | nvrs_auth::AuthError::SessionExpired
+            | nvrs_auth::AuthError::RefreshRefused { .. }
+            | nvrs_auth::AuthError::LogoutRefused { .. }
             | nvrs_auth::AuthError::ServerAuthFailed => 77,
             _ => 1,
         };

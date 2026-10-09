@@ -171,7 +171,11 @@ pub async fn change_password(
 }
 
 /// Renew the access token using the refresh token (sent as a cookie, which is what the endpoint
-/// reads). Returns the fresh access token. A rejected refresh means the session is genuinely gone.
+/// reads). Returns the fresh access token.
+///
+/// A refusal is reported with the server's own words and the refresh token's own expiry, never as a
+/// bare "session expired": a refresh token that has not expired and is refused anyway is a
+/// server-side decision the operator needs to see, not a timeout to shrug at.
 pub async fn refresh(client: &Client, refresh_token: &str) -> Result<String, AuthError> {
     let resp = client
         .send_json_with_cookies(
@@ -182,7 +186,10 @@ pub async fn refresh(client: &Client, refresh_token: &str) -> Result<String, Aut
         )
         .await
         .map_err(|e| match e {
-            ClientError::Unauthorized => AuthError::SessionExpired,
+            ClientError::Unauthorized { message } => AuthError::RefreshRefused {
+                server: message,
+                expires_at: crate::store::unverified_expiry(refresh_token),
+            },
             other => AuthError::Client(other),
         })?;
 
@@ -191,7 +198,11 @@ pub async fn refresh(client: &Client, refresh_token: &str) -> Result<String, Aut
 }
 
 /// End the session server-side, revoking the presented tokens by `jti`. Sends both tokens as cookies
-/// (the route reads them). An already-gone session is not an error.
+/// (the route reads them).
+///
+/// A 401 means the server revoked nothing. Usually that is because both tokens were already dead,
+/// but against a server that gates logout on a live access token it also happens with a refresh
+/// token that is still valid — so it is returned as [`AuthError::LogoutRefused`], not swallowed.
 pub async fn logout(client: &Client, tokens: &Tokens) -> Result<(), AuthError> {
     match client
         .send_json_with_cookies(
@@ -205,7 +216,10 @@ pub async fn logout(client: &Client, tokens: &Tokens) -> Result<(), AuthError> {
         )
         .await
     {
-        Ok(_) | Err(ClientError::Unauthorized) => Ok(()),
+        Ok(_) => Ok(()),
+        Err(ClientError::Unauthorized { message }) => {
+            Err(AuthError::LogoutRefused { server: message })
+        }
         Err(other) => Err(AuthError::Client(other)),
     }
 }
@@ -215,7 +229,7 @@ pub async fn logout(client: &Client, tokens: &Tokens) -> Result<(), AuthError> {
 /// genuine transport/server fault the operator should see verbatim.
 fn map_login_error(e: ClientError) -> AuthError {
     match e {
-        ClientError::Unauthorized => AuthError::InvalidCredentials,
+        ClientError::Unauthorized { .. } => AuthError::InvalidCredentials,
         other => AuthError::Client(other),
     }
 }

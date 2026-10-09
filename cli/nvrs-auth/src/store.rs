@@ -164,9 +164,66 @@ pub fn token_from_cookies(set_cookies: &[String], name: &str) -> Option<String> 
     None
 }
 
+/// A token's own `exp` claim, read **without verifying the signature**.
+///
+/// For diagnosis only — saying "this refresh token had six days left" when the server refuses it.
+/// Nothing may be *decided* on this value: the server is the only party that can verify the token,
+/// and an unverified claim is whatever the bytes say. Returns `None` for anything that is not a
+/// three-segment JWT with a numeric `exp`.
+pub fn unverified_expiry(token: &str) -> Option<std::time::SystemTime> {
+    use base64::Engine as _;
+    let mut parts = token.split('.');
+    let (_header, payload, _sig) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() {
+        return None;
+    }
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .ok()?;
+    let exp = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()?
+        .get("exp")?
+        .as_f64()?;
+    if !exp.is_finite() || exp < 0.0 {
+        return None;
+    }
+    Some(std::time::UNIX_EPOCH + std::time::Duration::from_secs_f64(exp))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn jwt_with_payload(json: &str) -> String {
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        format!(
+            "{}.{}.sig",
+            b64.encode(r#"{"alg":"ES256"}"#),
+            b64.encode(json)
+        )
+    }
+
+    #[test]
+    fn expiry_is_read_from_the_payload() {
+        let t = jwt_with_payload(r#"{"exp":1760000000.25,"sub":"user:op"}"#);
+        let got = unverified_expiry(&t).unwrap();
+        assert_eq!(
+            got.duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis(),
+            1_760_000_000_250
+        );
+    }
+
+    #[test]
+    fn expiry_of_a_non_jwt_is_none() {
+        assert!(unverified_expiry("opaque").is_none());
+        assert!(unverified_expiry("a.b").is_none());
+        assert!(unverified_expiry("a.b.c.d").is_none());
+        assert!(unverified_expiry(&jwt_with_payload(r#"{"sub":"user:op"}"#)).is_none());
+        assert!(unverified_expiry(&jwt_with_payload(r#"{"exp":"soon"}"#)).is_none());
+    }
 
     fn store() -> (tempfile::TempDir, TokenStore) {
         let dir = tempfile::tempdir().unwrap();

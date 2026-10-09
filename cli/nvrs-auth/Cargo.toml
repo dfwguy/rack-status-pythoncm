@@ -21,6 +21,8 @@ num-bigint = "0.4"
 num-traits = "0.2"
 sha2 = "0.10"
 hex = "0.4"
+# Reading a stored token's own `exp` for diagnostics (never to trust it): JWT segments are base64url.
+base64 = "0.22"
 # CSPRNG for the ephemeral private exponent `a`.
 rand = "0.8"
 
@@ -28,3 +30,4 @@ rand = "0.8"
 tokio = { workspace = true, features = ["rt", "macros"] }
 tempfile = "3"
 url = "2"
+base64 = "0.22"

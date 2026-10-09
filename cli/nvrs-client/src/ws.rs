@@ -86,7 +86,7 @@ pub async fn connect_terminal(
         Err(tokio_tungstenite::tungstenite::Error::Http(resp))
             if resp.status() == StatusCode::UNAUTHORIZED =>
         {
-            Err(Error::Unauthorized)
+            Err(Error::Unauthorized { message: None })
         }
         Err(e) => Err(Error::WebSocket(e.to_string())),
     }

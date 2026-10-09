@@ -23,8 +23,13 @@ pub enum Error {
 
     /// HTTP 401 — the credential is missing, expired, or withdrawn. The server deliberately does not
     /// say which (FR-4b), so neither do we — the remedy is always "authenticate", after one refresh.
-    #[error("not authenticated (401) — run `nvrs login`, or the session expired")]
-    Unauthorized,
+    ///
+    /// `message` is the server's own `error` text, kept verbatim. It does not name the credential
+    /// problem, but it does say *who* refused: the access gate answers "authentication required"
+    /// before a route runs, while an auth route answers "authentication failed" itself. Dropping it
+    /// is what made a renewal refused by the gate indistinguishable from a revoked refresh token.
+    #[error("not authenticated (401{}) — run `nvrs login`, or the session expired", .message.as_deref().map(|m| format!(": {m}")).unwrap_or_default())]
+    Unauthorized { message: Option<String> },
 
     /// HTTP 403 — authenticated but refused by policy. Carries the server's message, which names the
     /// action or the disabled feature.
@@ -65,14 +70,14 @@ impl Error {
     /// Whether a fresh access token might make this call succeed. Only a bare 401 qualifies: a 403
     /// is a policy decision that refreshing cannot change, and a 429 needs time, not a new token.
     pub fn is_unauthorized(&self) -> bool {
-        matches!(self, Error::Unauthorized)
+        matches!(self, Error::Unauthorized { .. })
     }
 
     /// The process exit code this error should map to. Distinct codes let a shell script branch on
     /// *why* a call failed without scraping stderr.
     pub fn exit_code(&self) -> i32 {
         match self {
-            Error::Unauthorized => 77, // EX_NOPERM-ish: authenticate first
+            Error::Unauthorized { .. } => 77, // EX_NOPERM-ish: authenticate first
             Error::Forbidden(_) => 77,
             Error::RateLimited { .. } => 75, // EX_TEMPFAIL: try again later
             Error::Transport(_) | Error::Url(_) => 69, // EX_UNAVAILABLE

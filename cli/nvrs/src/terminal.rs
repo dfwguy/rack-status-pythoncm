@@ -90,7 +90,7 @@ async fn connect_with_refresh(
     };
 
     match connect_terminal(base_url, &profile.tls.to_trust()?, query, token.as_deref()).await {
-        Err(nvrs_client::Error::Unauthorized) if refresh.is_some() => {
+        Err(nvrs_client::Error::Unauthorized { .. }) if refresh.is_some() => {
             let new = crate::auth::refresh_and_store(
                 cfg,
                 profile,

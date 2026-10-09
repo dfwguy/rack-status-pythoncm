@@ -129,7 +129,7 @@ async fn load_with_auth(
     let client = client_for(cfg, profile, token)?;
     match nvrs_openapi::load(&client, base_url, refresh, DEFAULT_MAX_AGE).await {
         Ok(loaded) => Ok(loaded),
-        Err(nvrs_openapi::OpenApiError::Client(nvrs_client::Error::Unauthorized))
+        Err(nvrs_openapi::OpenApiError::Client(nvrs_client::Error::Unauthorized { .. }))
             if refresh_token.is_some() =>
         {
             let new = crate::auth::refresh_and_store(

@@ -147,7 +147,7 @@ pub async fn call_json(
     };
     let client = client_for(cfg, profile, token)?;
     match client.send_json(method.clone(), path, query, body).await {
-        Err(nvrs_client::Error::Unauthorized) if refresh.is_some() => {
+        Err(nvrs_client::Error::Unauthorized { .. }) if refresh.is_some() => {
             let new = crate::auth::refresh_and_store(
                 cfg,
                 profile,
@@ -186,7 +186,7 @@ pub async fn stream_call(
     };
     let client = client_for(cfg, profile, token)?;
     let resp = match client.send_raw(method.clone(), path, query, body).await {
-        Err(nvrs_client::Error::Unauthorized) if refresh.is_some() => {
+        Err(nvrs_client::Error::Unauthorized { .. }) if refresh.is_some() => {
             let new = crate::auth::refresh_and_store(
                 cfg,
                 profile,
@@ -235,7 +235,7 @@ pub async fn run(
             .send_raw(method.clone(), &args.path, &query, body.as_ref())
             .await
         {
-            Err(nvrs_client::Error::Unauthorized) if refresh.is_some() => {
+            Err(nvrs_client::Error::Unauthorized { .. }) if refresh.is_some() => {
                 let new = crate::auth::refresh_and_store(
                     cfg,
                     profile,
@@ -258,7 +258,7 @@ pub async fn run(
         .send_json(method.clone(), &args.path, &query, body.as_ref())
         .await
     {
-        Err(nvrs_client::Error::Unauthorized) if refresh.is_some() => {
+        Err(nvrs_client::Error::Unauthorized { .. }) if refresh.is_some() => {
             let new = crate::auth::refresh_and_store(
                 cfg,
                 profile,
@@ -298,15 +298,21 @@ pub async fn whoami(
     let mut result = client
         .send_json(Method::GET, "/api/auth-check", &[], None)
         .await;
-    if matches!(result, Err(nvrs_client::Error::Unauthorized)) {
+    // Why renewal failed, when it did. This used to be an `if let Ok(..)`, which threw the reason
+    // away and printed a plain "not authenticated" — so a 7-day refresh token refused after one
+    // hour looked exactly like a session that had run out. The reason is the whole diagnosis.
+    let mut refresh_failure: Option<anyhow::Error> = None;
+    if matches!(result, Err(nvrs_client::Error::Unauthorized { .. })) {
         if let Some(refresh_token) = &refresh {
-            if let Ok(new) =
-                crate::auth::refresh_and_store(cfg, profile, profile_name, &store, refresh_token)
-                    .await
+            match crate::auth::refresh_and_store(cfg, profile, profile_name, &store, refresh_token)
+                .await
             {
-                result = client_for(cfg, profile, Some(new))?
-                    .send_json(Method::GET, "/api/auth-check", &[], None)
-                    .await;
+                Ok(new) => {
+                    result = client_for(cfg, profile, Some(new))?
+                        .send_json(Method::GET, "/api/auth-check", &[], None)
+                        .await;
+                }
+                Err(e) => refresh_failure = Some(e),
             }
         }
     }
@@ -325,12 +331,20 @@ pub async fn whoami(
             }
             Ok(())
         }
-        Err(nvrs_client::Error::Unauthorized) => {
-            // The normal "logged out" answer, not an error worth a backtrace.
-            println!(
-                "profile {profile_name:?} at {}: not authenticated — run `nvrs login`",
-                client.base_url()
-            );
+        Err(nvrs_client::Error::Unauthorized { .. }) => {
+            // The normal "logged out" answer, not an error worth a backtrace — but when a stored
+            // session failed to renew, say why, because that is not the normal answer.
+            match refresh_failure {
+                Some(e) => println!(
+                    "profile {profile_name:?} at {}: not authenticated — renewing the stored \
+                     session failed: {e:#}",
+                    client.base_url()
+                ),
+                None => println!(
+                    "profile {profile_name:?} at {}: not authenticated — run `nvrs login`",
+                    client.base_url()
+                ),
+            }
             Ok(())
         }
         Err(e) => Err(e.into()),
