@@ -18,7 +18,7 @@
  * offers both. The SU toggle appears only where the cluster actually models SUs.
  */
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { RackFloorView } from "./RackFloorView";
 import type { RackRow, StatusScalableUnit } from "../types/api";
 
@@ -38,6 +38,9 @@ const UNITS: StatusScalableUnit[] = [
 ];
 
 describe("RackFloorView grouping", () => {
+  // The grouping choice is persisted, so each test must start from a clean slate.
+  beforeEach(() => localStorage.clear());
+
   it("draws rows by default and offers no SU toggle without an SU model", () => {
     // Rows stay the default: it is what somebody walking the floor needs.
     render(<RackFloorView rows={ROWS} />);
@@ -96,5 +99,14 @@ describe("RackFloorView grouping", () => {
     expect(byRow).toBe(ROWS.length);
     fireEvent.click(screen.getByRole("button", { name: /by su/i }));
     expect(countTiles()).toBe(byRow);
+  });
+
+  it("restores the last grouping after the view is unmounted and remounted", () => {
+    // Navigating to another page and back unmounts the floor view; By SU must survive.
+    const first = render(<RackFloorView rows={ROWS} scalableUnits={UNITS} />);
+    fireEvent.click(screen.getByRole("button", { name: /by su/i }));
+    first.unmount();
+    render(<RackFloorView rows={ROWS} scalableUnits={UNITS} />);
+    expect(screen.getByText("SU12")).toBeInTheDocument();
   });
 });

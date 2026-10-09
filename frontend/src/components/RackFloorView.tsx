@@ -178,6 +178,16 @@ function LegendSwatch({ color, label }: { color: string; label: string }) {
   );
 }
 
+const GROUP_BY_STORAGE_KEY = "nvis.singlerack.floor.groupBy";
+
+function loadGroupBy(): "row" | "su" {
+  try {
+    return localStorage.getItem(GROUP_BY_STORAGE_KEY) === "su" ? "su" : "row";
+  } catch {
+    return "row";
+  }
+}
+
 /** Datacenter floor view: racks grouped by section (hall) -> row, each a tile with a tray micro-grid. */
 export function RackFloorView({
   rows,
@@ -202,7 +212,15 @@ export function RackFloorView({
   );
   // Rows stay the default: it is where the racks physically are, which is what somebody
   // walking the floor needs. SU is the fabric view, offered only where one is modelled.
-  const [groupBy, setGroupBy] = useState<"row" | "su">("row");
+  const [groupBy, setGroupBy] = useState<"row" | "su">(loadGroupBy);
+  const changeGroupBy = (mode: "row" | "su") => {
+    setGroupBy(mode);
+    try {
+      localStorage.setItem(GROUP_BY_STORAGE_KEY, mode);
+    } catch {
+      /* ignore persistence errors */
+    }
+  };
   const showSu = suGroups.length > 0 && groupBy === "su";
   const multiSection = sections.length > 1 || (sections[0]?.key ?? "") !== "";
 
@@ -220,7 +238,7 @@ export function RackFloorView({
                 key={mode}
                 kind={groupBy === mode ? "primary" : "secondary"}
                 size="tiny"
-                onClick={() => setGroupBy(mode)}
+                onClick={() => changeGroupBy(mode)}
               >
                 {mode === "row" ? "By row" : "By SU"}
               </Button>
