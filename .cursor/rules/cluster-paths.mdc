@@ -1,5 +1,5 @@
 ---
-description: Cluster paths (scripts, logs, workspace, images) come from the project/cluster record via one resolver — never a literal in a script; how to fix the next path/prefix bug
+description: Every fix and new feature — cluster paths (scripts, logs, workspace, images, published config) come from the project/cluster record via one resolver, never a literal or default in a script; how to add a path and fix the next path/prefix bug
 alwaysApply: true
 ---
 
@@ -8,6 +8,13 @@ alwaysApply: true
 Full reasoning, incident history and host-visibility map: `docs/explanation/how-cluster-paths-reach-scripts.md`.
 Read it before touching any path, prefix, `*_DIR`, `LLMB_*`, workspace, log or container-image
 location in `bin/scripts/` or the backend.
+
+**This applies to every fix and every new feature, not only to path bugs.** A new script, tool,
+installer, launcher, preset or setting that reads or writes anything on a cluster host takes its
+location from the cluster record from day one. A "quick" literal to unblock a run is the bug this
+rule exists to stop: it is how six incidents happened (2026-10, Nscale NC) and how four different
+`/home` users came to coexist in one tree. If you are unsure which root a path belongs to, ask —
+and check earlier sessions' transcripts for a decision already made — rather than guessing a path.
 
 **The rule.** A path is a site fact: it lives in the cluster record (`ClusterConnection`), is
 exported by `catalog.context.high_overlay()` as an `NVIS_*`/`RACK_*` variable (those forward over
