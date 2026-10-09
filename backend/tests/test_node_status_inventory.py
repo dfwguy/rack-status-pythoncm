@@ -161,6 +161,36 @@ class TestRackUnitPlacement:
         assert rows[0]["rack"] == "U20" and rows[0]["rack_unit"] == "11" and rows[0]["ip"] == "1.2.3.4"
 
 
+class TestTrayNumbering:
+    """Trays are numbered 1..N per rack in natural hostname order -- the site's install order --
+    because the cluster manager places nodes at rack units, not trays."""
+
+    def test_nc_rack_numbers_by_gpu_sequence_not_by_string_order(self, monkeypatch):
+        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        hosts = [f"sys1-gso1-p-phy-gpu{i}-su19" for i in (36, 19, 100, 9, 20)]
+        records = [{"id": h, "rack": "U20", "ip": "", "rack_unit": str(i)} for i, h in enumerate(hosts)]
+        inv = ns.build_node_inventory({h: "idle" for h in hosts}, ["U20"], records=records)
+        trays = {n["id"]: n["tray"] for n in inv}
+        assert [trays[f"sys1-gso1-p-phy-gpu{i}-su19"] for i in (9, 19, 20, 36, 100)] == [1, 2, 3, 4, 5]
+
+    def test_each_rack_numbers_from_one_and_unplaced_nodes_get_none(self, monkeypatch):
+        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        records = [
+            {"id": "a2", "rack": "R1", "ip": ""}, {"id": "a1", "rack": "R1", "ip": ""},
+            {"id": "b7", "rack": "R2", "ip": ""}, {"id": "loose", "rack": None, "ip": ""},
+        ]
+        inv = {n["id"]: n for n in ns.build_node_inventory({r["id"]: "idle" for r in records}, ["R1", "R2"], records=records)}
+        assert (inv["a1"]["tray"], inv["a2"]["tray"], inv["b7"]["tray"]) == (1, 2, 1)
+        assert "tray" not in inv["loose"]
+
+    def test_tray_hostnames_keep_their_own_numbers(self, monkeypatch):
+        """Direct mode on a cluster whose hostnames are tray ids: numbering reproduces them."""
+        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "direct")
+        nodes = {f"p5-r01-ct{i:02d}": "idle" for i in (3, 1, 10, 2)}
+        inv = ns.build_node_inventory(nodes, ["p5-r01"], records=[])
+        assert {n["id"]: n["tray"] for n in inv} == {"p5-r01-ct01": 1, "p5-r01-ct02": 2, "p5-r01-ct03": 3, "p5-r01-ct10": 4}
+
+
 class TestProviderRackCounts:
     """A BCM/pythoncm cluster has no sinfo, so the rack tiles' node totals must come from the
     placed roster. Without this every provider rack showed 0/0 even with 18 nodes enumerated.
@@ -363,7 +393,7 @@ def test_nonslurm_worker_uses_provider_inventory_and_keeps_unassigned_node_ip(mo
     assert state.node_inventory_snapshot() == {
         "nodes": [
             {"id": "RTX6000-01", "rack": None, "ip": "10.0.0.1", "scheduler_state": "", "status": "up"},
-            {"id": "RTX6000-02", "rack": "p5-r01", "ip": "10.0.0.2", "scheduler_state": "", "status": "down"},
+            {"id": "RTX6000-02", "rack": "p5-r01", "ip": "10.0.0.2", "scheduler_state": "", "status": "down", "tray": 1},
             {"id": "RTX6000-03", "rack": None, "ip": "", "scheduler_state": "", "status": "unknown"},
         ],
         "node_inventory_error": "",

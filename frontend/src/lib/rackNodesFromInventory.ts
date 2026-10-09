@@ -24,28 +24,37 @@
  */
 import type { NodeInfo } from "../components/rack/NodeSelector";
 import type { NodeInventoryEntry } from "../types/api";
+import type { NvisNamingSchema } from "../types/naming";
 
+/**
+ * ``tray`` is the server's number (natural hostname order within the rack); the label renders it
+ * with the cluster's own tray joiner, as the dashboard names trays (``U20`` + ``-ct`` + ``01``).
+ */
 export function rackNodesFromInventory(
   rack: string,
   inventory: NodeInventoryEntry[] | null | undefined,
   physicalRf0: Record<string, string> = {},
+  naming?: NvisNamingSchema,
 ): NodeInfo[] | null {
   if (!Array.isArray(inventory)) return null;
   const rackKey = rack.trim().toLowerCase();
   const members = inventory.filter((n) => (n.rack ?? "").trim().toLowerCase() === rackKey);
   if (members.length === 0) return null;
   const rfByHost = new Map(Object.entries(physicalRf0).map(([h, ip]) => [h.toLowerCase(), ip]));
-  const unitNum = (n: NodeInventoryEntry) => {
-    const v = Number.parseInt(n.rack_unit ?? "", 10);
-    return Number.isNaN(v) ? Number.POSITIVE_INFINITY : v;
-  };
+  const joiner = naming?.ct_joiner ?? "-ct";
+  const trayNum = (n: NodeInventoryEntry) =>
+    typeof n.tray === "number" && n.tray > 0 ? n.tray : Number.POSITIVE_INFINITY;
   return [...members]
-    .sort((a, b) => unitNum(a) - unitNum(b) || a.id.localeCompare(b.id, undefined, { numeric: true }))
-    .map((n) => ({
-      id: n.id,
-      hostname: n.id,
-      label: n.rack_unit ? `${n.rack ?? rack}:${n.rack_unit}` : n.id,
-      status: n.status,
-      ip: n.ip || rfByHost.get(n.id.toLowerCase()) || "",
-    }));
+    .sort((a, b) => trayNum(a) - trayNum(b) || a.id.localeCompare(b.id, undefined, { numeric: true }))
+    .map((n) => {
+      const rackId = n.rack ?? rack;
+      return {
+        id: n.id,
+        hostname: n.id,
+        label: typeof n.tray === "number" && n.tray > 0 ? `${rackId}${joiner}${String(n.tray).padStart(2, "0")}` : n.id,
+        placement: n.rack_unit ? `${rackId}:${n.rack_unit}` : undefined,
+        status: n.status,
+        ip: n.ip || rfByHost.get(n.id.toLowerCase()) || "",
+      };
+    });
 }

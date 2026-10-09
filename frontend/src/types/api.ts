@@ -351,6 +351,9 @@ export interface NodeInventoryEntry {
    * for a node that resolved to a rack and whose provider reports a unit; never derived from the
    * hostname. */
   rack_unit?: string;
+  /** Tray number 1..N within the rack: the node's place in natural hostname order (the site's
+   * install order), numbered by the server so every view agrees. Absent for an unplaced node. */
+  tray?: number;
   /** GPUs on this node, from the scheduler (Slurm GRES) or an nvidia-smi sample. Shape is
    * orthogonal to placement: a pool-mode node with no rack still carries a count. Absent = unknown. */
   gpu_count?: number;

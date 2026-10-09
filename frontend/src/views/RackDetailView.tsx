@@ -75,7 +75,7 @@ export function RackDetailView({ rack, row, comment, physicalRf0, inventory, nam
   const nodes = useMemo(() => {
     // The server's inventory first: it placed each real host by the cluster's mapping mode and
     // templates. The ct_down_unk expansion remains only for servers that do not send it.
-    const fromInventory = rackNodesFromInventory(rack, inventory, physicalRf0);
+    const fromInventory = rackNodesFromInventory(rack, inventory, physicalRf0, naming);
     if (fromInventory) return fromInventory;
     if (!row) return [];
     return parseNodesFromRack(rack, row.ct_down_unk, physicalRf0, traysPerRack, naming);

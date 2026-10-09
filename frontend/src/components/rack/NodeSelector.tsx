@@ -42,8 +42,10 @@ export interface NodeInfo {
   ip?: string;
   /** Resolvable compute hostname (Slurm/DNS), shown in its own column. Defaults to ``id``. */
   hostname?: string;
-  /** Where the node sits in the rack, e.g. the cluster manager's ``U20:11``. Defaults to ``id``. */
+  /** The node's tray id in the rack, e.g. ``U20-ct01``. Defaults to ``id``. */
   label?: string;
+  /** Where the cluster manager placed it, e.g. BCM's ``U20:11``; shown on hover. */
+  placement?: string;
 }
 
 interface NodeSelectorProps {
@@ -172,7 +174,11 @@ export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTermina
                   <Checkbox checked={selected.has(node.id)} />
                 </TableCell>
                 <TableCell>
-                  <Text kind="body/regular/md" style={{ fontFamily: "monospace" }}>
+                  <Text
+                    kind="body/regular/md"
+                    style={{ fontFamily: "monospace" }}
+                    title={node.placement ? `Placed at ${node.placement}` : undefined}
+                  >
                     {node.label ?? node.id}
                   </Text>
                 </TableCell>

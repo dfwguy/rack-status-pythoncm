@@ -14,7 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 import { NodeSelector, type NodeInfo } from "./NodeSelector";
 
 const nodes: NodeInfo[] = [
-  { id: "sys1-gso1-p-phy-gpu19-su19", hostname: "sys1-gso1-p-phy-gpu19-su19", label: "U20:11", status: "up", ip: "10.10.171.244" },
+  { id: "sys1-gso1-p-phy-gpu19-su19", hostname: "sys1-gso1-p-phy-gpu19-su19", label: "U20-ct01", placement: "U20:11", status: "up", ip: "10.10.171.244" },
   { id: "p5-r01-ct01", status: "unknown" },
 ];
 
@@ -22,7 +22,9 @@ describe("NodeSelector", () => {
   it("shows the placement and the hostname in separate columns", () => {
     render(<NodeSelector nodes={nodes} selected={new Set()} onSelectionChange={vi.fn()} onOpenTerminal={vi.fn()} />);
     expect(screen.getByRole("columnheader", { name: "Hostname" })).toBeTruthy();
-    const row = screen.getByText("U20:11").closest("tr")!;
+    const cell = screen.getByText("U20-ct01");
+    expect(cell.getAttribute("title")).toBe("Placed at U20:11");
+    const row = cell.closest("tr")!;
     expect(within(row).getByText("sys1-gso1-p-phy-gpu19-su19")).toBeTruthy();
     expect(within(row).getByText("UP")).toBeTruthy();
     expect(within(row).getByText("10.10.171.244")).toBeTruthy();

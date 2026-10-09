@@ -1174,7 +1174,31 @@ def build_node_inventory(
             if isinstance(gpu_type, str) and gpu_type.strip():
                 node_rec["gpu_type"] = gpu_type.strip()
         result.append(node_rec)
+    _number_trays(result)
     return result
+
+
+def _natural_key(name: str) -> list[tuple[int, int | str]]:
+    """Sort key that orders the digit runs in a name numerically (gpu9 before gpu10)."""
+    return [(0, int(part)) if part.isdigit() else (1, part) for part in re.split(r"(\d+)", name.casefold()) if part]
+
+
+def _number_trays(inventory: list[dict[str, Any]]) -> None:
+    """Give every placed node its tray number: its place in its rack by natural hostname order.
+
+    The cluster manager does not number trays -- BCM places a node at a rack *unit* (U20:11 ..
+    U20:37, with gaps for the switch trays) -- and the dashboard's tray ids are 1..N. Hostname order
+    is the site's install order (Nscale NC: sys1-gso1-p-phy-gpu19..36-su19 is U20's ct01..ct18), and
+    on a cluster whose hostnames already are tray ids (p5-r01-ct01..) it reproduces those numbers.
+    Numbered here, once, so every consumer of the inventory agrees; unplaced nodes get none.
+    """
+    by_rack: dict[str, list[dict[str, Any]]] = {}
+    for rec in inventory:
+        if rec.get("rack"):
+            by_rack.setdefault(rec["rack"], []).append(rec)
+    for members in by_rack.values():
+        for tray, rec in enumerate(sorted(members, key=lambda r: _natural_key(str(r["id"]))), start=1):
+            rec["tray"] = tray
 
 
 def shlex_split_safe(s: str) -> list[str]:
