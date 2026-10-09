@@ -105,6 +105,12 @@ The auth programme. See [auth/AUTH_PROGRAMME_SCOPE.md](auth/AUTH_PROGRAMME_SCOPE
 
 ## 7. Bringup automation
 - **Bringup automation integration** — *Planned/In flight.* [bringup/BRINGUP_AUTOMATION_INTEGRATION.md](bringup/BRINGUP_AUTOMATION_INTEGRATION.md).
+- **Deterministic container selection in bringup jobs** — *Planned.* `llm-pretrain` and
+  `llm-pretrain-solo` call `nemo_image()`, which takes the first `nvidia+nemo+*.sqsh` that isn't the
+  other architecture. The image they run is whichever name sorts first: on Nscale NC (2026-10-09)
+  that is `…-arm-nccl2.30.7.sqsh`, picked by accident, and adding a NeMo image that sorts earlier
+  silently changes it. Jobs should name the image they need (a catalog entry, not a glob) and fail
+  when it is absent.
 
 ## 8. NVIS-P2P
 - **Dragonfly P2P console as a per-project capability** — *Later.* Merging INTO Rack Status (one
