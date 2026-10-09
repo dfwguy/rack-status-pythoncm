@@ -33,8 +33,8 @@
 # --dtype <dtype> --scale <gpus> [-d]`.
 #
 # Environment (override per site):
-#   LLMB_VENV       venv to activate            (default /home/nvis/llmb_venv)
-#   LLMB_INSTALL    dgxc-benchmarking WORKSPACE (default /home/nvis/dgxc-benchmarking)
+#   LLMB_VENV       venv to activate            (default <workspace>/llmb_venv)
+#   LLMB_INSTALL    dgxc-benchmarking WORKSPACE (default <workspace>/llmb; workspace = the cluster's workspace_dir)
 #   LLMB_REPO       dgxc-benchmarking repo dir holding llmb-run (optional; auto-detected)
 #   LLMB_RUN        llmb-run binary (optional; resolved from LLMB_REPO/LLMB_INSTALL)
 #   GPUS_PER_NODE   GPUs per compute node       (default 4)
@@ -48,9 +48,12 @@ set -uo pipefail
 # both, the launch working directory ($PWD), which the app sets to the cluster's log_dir.
 JOB_LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 
-LLMB_VENV="${LLMB_VENV:-/home/nvis/llmb_venv}"
-LLMB_INSTALL="${LLMB_INSTALL:-/home/nvis/dgxc-benchmarking}"
-LLMB_INSTALL="${LLMB_INSTALL%/}"
+# LLMB_INSTALL / LLMB_VENV default under the cluster's workspace (project setting
+# connection.workspace_dir -> NVIS_WORKSPACE_DIR), exactly where install-dgxc-benchmarking-workspace.sh
+# puts them; an explicit LLMB_INSTALL / LLMB_VENV still wins. lib/llmb_paths.inc.sh fails with the
+# setting's name when it needs a workspace and none is configured.
+# shellcheck source=lib/llmb_paths.inc.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/llmb_paths.inc.sh" || exit 2
 LLMB_REPO="${LLMB_REPO:-}"
 LLMB_REPO="${LLMB_REPO%/}"
 LLMB_RUN="${LLMB_RUN:-}"

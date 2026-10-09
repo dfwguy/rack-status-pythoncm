@@ -18,7 +18,7 @@
 # PASS/FAIL. all-reduce is run first as a fabric sanity check.
 #
 # RUN: sbatch -N36 -w <valid-topology pair, e.g. a07+a08 nodes> --ntasks-per-node=4 \
-#        --export=ALL,NVIS_SCRIPTS_DIR=/home/cmods/nvis-rack-status/bin/scripts \
+#        --export=ALL,NVIS_SCRIPTS_DIR=<scripts dir> \
 #        --output=/home/cmods/workspace/nccl_alltoall_ab-%j.log nccl_alltoall_ab.sbatch
 #SBATCH --job-name=nccl-a2a-ab
 #SBATCH --exclusive
@@ -29,8 +29,10 @@
 set -uo pipefail
 
 CONT="${NVIS_NEMO_CONT:-${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}/nemo-25.11.01.sqsh}"
-SCR="${NVIS_SCRIPTS_DIR:-/home/cmods/nvis-rack-status/bin/scripts}"
-PRELOAD_SRC="${NVIS_NCCL_PRELOAD_SRC:-/home/cmods/workspace/nccl/bins}"
+SCR="${NVIS_SCRIPTS_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+# shellcheck source=workspace-dir-common.sh
+. "${SCR}/workspace-dir-common.sh" || exit 2
+PRELOAD_SRC="${NVIS_NCCL_PRELOAD_SRC:-${WORKSPACE_DIR}/nccl/bins}"
 PRELOAD_LIB="$(ls "${PRELOAD_SRC}"/libnccl.so.2.* 2>/dev/null | sort -V | tail -1 | xargs -r basename)"
 SIZES="-b 8 -e 512M -f 2 -g 1 --iters 5"     # bug hits at init; small sweep = fast
 

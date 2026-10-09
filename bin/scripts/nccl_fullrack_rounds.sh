@@ -32,7 +32,10 @@ set -uo pipefail
 # Ensure /usr/bin (mpirun/orted) is on PATH — a detached/nohup shell may inherit a minimal PATH.
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
 
-NCCL="${NCCL_WS:-/home/cmods/workspace/nccl}"
+# Host NCCL under the cluster's workspace (project setting -> NVIS_WORKSPACE_DIR).
+# shellcheck source=workspace-dir-common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspace-dir-common.sh" || exit 2
+NCCL="${NCCL_WS:-${WORKSPACE_DIR}/nccl}"
 LAUNCH="${NCCL_LAUNCH:-$NCCL/nccl_portable.sh}"
 HOSTS_IN="${1:?usage: nccl_fullrack_rounds.sh <hosts|slurm-nodelist> [rounds] [beg] [end] [rack]}"
 ROUNDS="${2:-5}"; BEG="${3:-1K}"; END="${4:-16G}"

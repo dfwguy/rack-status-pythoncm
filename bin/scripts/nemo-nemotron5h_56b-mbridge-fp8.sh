@@ -110,7 +110,7 @@ for _cand in \
   "${NVIS_SCRIPTS_DIR:-}/lib/fabric.inc.sh" \
   "${SLURM_SUBMIT_DIR:-}/lib/fabric.inc.sh" \
   "$(dirname "${BASH_SOURCE[0]}")/lib/fabric.inc.sh" \
-  "${RACK_REMOTE_BASE_PATH:-/home/cmsupport/nvis-rack-status}/bin/scripts/lib/fabric.inc.sh"; do
+  "${RACK_REMOTE_BASE_PATH:+${RACK_REMOTE_BASE_PATH}/bin/scripts/lib/fabric.inc.sh}"; do
   [[ -n "${_cand}" && -f "${_cand}" ]] && { _nvis_lib="${_cand}"; break; }
 done
 # shellcheck disable=SC1090
@@ -223,7 +223,7 @@ EXPORT_ARG="ALL"
 if [ "${NVIS_NCCL_PRELOAD_DISABLE:-0}" = 1 ]; then
   echo "INFO: NCCL preload DISABLED (NVIS_NCCL_PRELOAD_DISABLE=1) — using the container's own NCCL (expected with the vetted image)"
 else
-  NCCL_PRELOAD_SRC="${NVIS_NCCL_PRELOAD_SRC:-/home/cmods/workspace/nccl/bins}"
+  NCCL_PRELOAD_SRC="${NVIS_NCCL_PRELOAD_SRC:-${NVIS_WORKSPACE_DIR:+${NVIS_WORKSPACE_DIR%/}/nccl/bins}}"
   NCCL_PRELOAD_LIB="${NVIS_NCCL_PRELOAD_LIB:-}"
   if [ -z "$NCCL_PRELOAD_LIB" ] && [ -d "$NCCL_PRELOAD_SRC" ]; then
     NCCL_PRELOAD_LIB=$(ls "$NCCL_PRELOAD_SRC"/libnccl.so.2.* 2>/dev/null | sort -V | tail -1 | xargs -r basename)

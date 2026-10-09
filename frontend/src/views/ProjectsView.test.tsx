@@ -165,7 +165,7 @@ describe("compute fabric", () => {
       geometry: { pods: 1, rows_per_pod: 0, racks_per_row: 0, trays_per_rack: 0 },
       connection: {
         exec_mode: "", ssh_host: "", ssh_user: "", ssh_key: "", remote_base_path: "",
-        log_dir: "", shared_container_dir: "", node_container_dir: "",
+        log_dir: "", workspace_dir: "", shared_container_dir: "", node_container_dir: "",
       },
       scalable_units: [],
       campaigns: [],

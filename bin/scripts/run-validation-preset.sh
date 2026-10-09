@@ -185,9 +185,18 @@ stage_image() {
 # same reason: its install paths already were, and leaving only the image absolute meant the
 # one hard-coded path left in this preset.
 llmb_image_root="${LLMB_IMAGE_ROOT:-/cluster/llmb/images}"; llmb_image_root="${llmb_image_root%/}"
-llmb_install="${LLMB_INSTALL:-/home/cmods/workspace/llmb}"
-llmb_repo="${LLMB_REPO:-${llmb_install}/llmb_repo}"
-llmb_run="${LLMB_RUN:-${NVIS_LLMB_RUN:-/home/cmods/workspace/llmb_venv/bin/llmb-run}}"
+# The LLMB install lives under the cluster's workspace (project setting connection.workspace_dir ->
+# NVIS_WORKSPACE_DIR; workspace-dir-common.sh derives it). Resolved only by the presets that use it,
+# so a preset with no LLMB dependency still runs on a cluster that has no workspace configured.
+llmb_install=""; llmb_repo=""; llmb_run=""
+_llmb_paths() {
+  # shellcheck source=lib/llmb_paths.inc.sh
+  . "${script_dir}/lib/llmb_paths.inc.sh" || exit 2
+  llmb_install="${LLMB_INSTALL}"
+  llmb_repo="${LLMB_REPO:-${llmb_install}/llmb_repo}"
+  llmb_run="${LLMB_RUN:-${NVIS_LLMB_RUN:-${LLMB_VENV:+${LLMB_VENV}/bin/llmb-run}}}"
+  llmb_run="${llmb_run:-${llmb_install}/llmb-run}"
+}
 
 case "$preset" in
   nccl-2.31.2)
@@ -214,6 +223,7 @@ case "$preset" in
     ;;
 
   gpt-oss-cpu)
+    _llmb_paths
     (( node_count >= 1 && node_count <= 256 )) || { echo "ERROR: GPT-OSS CPU fan-out requires 1-256 exact nodes; got ${node_count}" >&2; exit 2; }
     source_image="${llmb_image_root}/tensorrt-llm+release+1.1.0rc5.sqsh"
     local_image="${local_container_dir}/tensorrt-llm+release+1.1.0rc5.sqsh"
@@ -259,6 +269,7 @@ case "$preset" in
     ;;
 
   exemplar-system-info)
+    _llmb_paths
     [[ -d "${llmb_repo}/microbenchmarks/system_info" || "$dry_run" == 1 ]] || {
       echo "ERROR: v26.06.01 system_info recipe missing under LLMB_REPO=${llmb_repo}" >&2; exit 2;
     }

@@ -225,6 +225,9 @@ def high_overlay(
     # global RACK_STATUS_LOG_DIR) so the active cluster's own directory is authoritative and
     # switching clusters switches the log location with it. Read by paths._default_log_dir().
     _put(out, "NVIS_LOG_DIR", c.log_dir)
+    # The cluster's workspace (installed toolchains, the LLMB install). Scripts derive every
+    # workspace path from it via workspace-dir-common.sh; see how-cluster-paths-reach-scripts.md.
+    _put(out, "NVIS_WORKSPACE_DIR", c.workspace_dir)
     # Where this cluster's container images live: the shared store the launch host reads, and
     # the per-node cache the jobs run from. Both are mount points, so both are per-cluster; the
     # launchers read them from the environment (NVIS_/RACK_ prefixes forward over SSH). A P2P

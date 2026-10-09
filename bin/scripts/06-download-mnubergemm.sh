@@ -86,7 +86,9 @@ for t in tags:
   exit 0
 fi
 
-DEST_DIR="${1:-/home/cmods/bringup/containers}"
+# Into the cluster's shared image store (project setting connection.shared_container_dir ->
+# RACK_VALIDATION_CONTAINER_ROOT) unless a destination is given.
+DEST_DIR="${1:-${RACK_VALIDATION_CONTAINER_ROOT:?pass a destination dir or configure the Shared image store of the cluster}}"
 TAG="${2:-tensorrt-26.03-v1.17-arm}"
 ARCH="${3:-arm64}"
 

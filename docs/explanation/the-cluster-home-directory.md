@@ -86,6 +86,15 @@ Three properties make this a consolidation rather than a rename:
 The sweep's `/home/*/workspace/...` wildcard then becomes a resolution of the configured workspace,
 which is both more honest and the thing that lets an error say *which* directory it looked in.
 
+## Where this stands
+
+The three roots this page names — scripts, logs and the workspace — are now all cluster settings
+(`remote_base_path`, `log_dir`, and `workspace_dir`, added 2026-10-09), and every script derives
+its paths from them through one resolver per root, with no fallback to another site's directory.
+[How cluster paths reach scripts](how-cluster-paths-reach-scripts.md) describes that design and
+the procedure for fixing the next path bug. What remains is the consolidation itself: one cluster
+home the three derive from by default, shown on one screen.
+
 ## What this is not
 
 It is not a demand that every cluster use `/home/cmods`, nor that the three existing users collapse

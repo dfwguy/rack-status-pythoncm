@@ -1063,6 +1063,13 @@ class ClusterConnection:
     #: ``RACK_STATUS_LOG_DIR`` env var this supersedes). Blank falls back to that deprecated env var,
     #: then to ``remote_base_path/var/logs``.
     log_dir: str = ""
+    #: The cluster's workspace: what is built or installed ON the cluster for its tests -- HPC-X,
+    #: CUDA, host NCCL + nccl-tests, nvloom, the dgxc-benchmarking/LLMB install. Installers write
+    #: under it and launchers derive their paths from it (bin/scripts/workspace-dir-common.sh), so
+    #: the two cannot disagree. One of the cluster's three roots beside remote_base_path (scripts)
+    #: and log_dir (logs); see docs/explanation/how-cluster-paths-reach-scripts.md. Exported as
+    #: NVIS_WORKSPACE_DIR. Blank falls back to that env setting; there is no built-in default.
+    workspace_dir: str = ""
     #: Where this cluster keeps its shared container images, as the launch host sees the mount.
     #: A mount point is a site fact (Nscale mounts ``/cluster/containers``; other sites differ),
     #: so it lives on the cluster rather than in a script. Only the directory is configurable --
@@ -1088,6 +1095,7 @@ class ClusterConnection:
             ssh_key=_as_str(d.get("ssh_key")),
             remote_base_path=_as_str(d.get("remote_base_path")),
             log_dir=_as_str(d.get("log_dir")),
+            workspace_dir=_as_str(d.get("workspace_dir")),
             shared_container_dir=_as_str(d.get("shared_container_dir")),
             node_container_dir=_as_str(d.get("node_container_dir")),
             endpoints=[Endpoint.from_dict(x) for x in _as_dict_list(d.get("endpoints"))],
@@ -1131,7 +1139,7 @@ class ClusterConnection:
                 problems.append(f"role {r.id!r}: unknown endpoint {r.endpoint!r}")
         if self.endpoints and "control" not in role_ids:
             problems.append("a 'control' role is required once endpoints are declared")
-        for name in ("shared_container_dir", "node_container_dir"):
+        for name in ("workspace_dir", "shared_container_dir", "node_container_dir"):
             value = getattr(self, name)
             if value and not valid_data_dir(value):
                 problems.append(f"{name} must be an absolute path of plain path characters: {value!r}")

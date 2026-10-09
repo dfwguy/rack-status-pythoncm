@@ -104,9 +104,18 @@ def main() -> int:
         expect = [w.strip() for w in args[i + 1].split(",") if w.strip()] if i + 1 < len(args) else []
         del args[i:i + 2]
 
-    install_path = args[0] if args else "/home/cmods/workspace/llmb"
+    # Defaults follow the cluster's workspace (project setting -> NVIS_WORKSPACE_DIR), the same
+    # derivation as workspace-dir-common.sh: <workspace>/llmb and <workspace>/llmb_venv.
+    workspace = (os.environ.get("NVIS_WORKSPACE_DIR") or os.environ.get("RACK_WORKSPACE_DIR") or "").rstrip("/")
+    install_path = args[0] if args else (os.environ.get("LLMB_INSTALL") or (f"{workspace}/llmb" if workspace else ""))
+    if not install_path:
+        print("ERROR: no LLMB install path: pass it, or configure the cluster's workspace "
+              "(Projects -> cluster -> Workspace) / export NVIS_WORKSPACE_DIR", flush=True)
+        return 2
     timeout = int(args[1]) if len(args) > 1 else 14400
-    venv_bin = os.environ.get("LLMB_VENV_BIN", "/home/cmods/workspace/llmb_venv/bin")
+    venv_bin = os.environ.get("LLMB_VENV_BIN") or (
+        f"{os.environ['LLMB_VENV']}/bin" if os.environ.get("LLMB_VENV")
+        else f"{workspace}/llmb_venv/bin" if workspace else "")
 
     if not os.path.isdir(install_path):
         print(f"ERROR: install path does not exist: {install_path}", flush=True)

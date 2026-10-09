@@ -20,7 +20,11 @@ set -euo pipefail
 export PDSH_SSH_ARGS_APPEND="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=quiet -o CheckHostIP=no"
 export PDSH_RCMD_TYPE=ssh
 
-TOPDIR="${1:-/home/cmsupport/workspace}"
+# Workspace = the explicit argument, else the cluster's workspace (project setting
+# connection.workspace_dir -> NVIS_WORKSPACE_DIR); workspace-dir-common.sh fails naming the setting.
+WORKSPACE_DIR="${1:-}"
+# shellcheck source=workspace-dir-common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspace-dir-common.sh" || exit 2
 CUDA_MAJ="${2:-13}"
 ARCH="${3:-aarch64}"
 INSTALL_CUDA="${NVIS_INSTALL_CUDA_TOOLKIT:-0}"

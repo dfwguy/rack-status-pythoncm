@@ -46,9 +46,12 @@
 set -uo pipefail
 
 GPUS_PER_NODE="${GPUS_PER_NODE:-4}"
-LLMB_VENV="${LLMB_VENV:-/home/nvis/llmb_venv}"
-LLMB_INSTALL="${LLMB_INSTALL:-/home/nvis/dgxc-benchmarking}"
-LLMB_INSTALL="${LLMB_INSTALL%/}"
+# LLMB_INSTALL / LLMB_VENV default under the cluster's workspace (project setting
+# connection.workspace_dir -> NVIS_WORKSPACE_DIR), exactly where install-dgxc-benchmarking-workspace.sh
+# puts them; an explicit LLMB_INSTALL / LLMB_VENV still wins. lib/llmb_paths.inc.sh fails with the
+# setting's name when it needs a workspace and none is configured.
+# shellcheck source=lib/llmb_paths.inc.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/llmb_paths.inc.sh" || exit 2
 LLMB_REPO="${LLMB_REPO:-}"
 LLMB_REPO="${LLMB_REPO%/}"
 LLMB_RUN="${LLMB_RUN:-}"

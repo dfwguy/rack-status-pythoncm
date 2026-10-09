@@ -143,6 +143,17 @@ def _no_execution(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: _Proc(), raising=True)
 
 
+@pytest.fixture(autouse=True)
+def _configured_workspace(monkeypatch, tmp_path):
+    """A cluster with its workspace set, as a deployed one has.
+
+    The workspace endpoints refuse to run without one (there is no fallback path any more -- see
+    docs/explanation/how-cluster-paths-reach-scripts.md). Configure it so a smoke request gets past
+    that guard into the code that does the work, which is the point of this module.
+    """
+    monkeypatch.setenv("NVIS_WORKSPACE_DIR", str(tmp_path / "workspace"))
+
+
 @pytest.fixture
 def client():
     flask_app.config["TESTING"] = True

@@ -12,12 +12,16 @@
 # For optional NVIDIA CUDA toolkit and NCCL build, use install-cuda-nccl-workspace.sh (after HPC-X is present for NCCL).
 #
 # Usage: install-hpcx-workspace.sh [TOPDIR] [CUDA_MAJOR] [ARCH]
-#   TOPDIR default: /home/cmsupport/workspace
+#   TOPDIR default: the cluster's workspace (NVIS_WORKSPACE_DIR)
 #   CUDA_MAJOR: 12 | 13
 #   ARCH: aarch64 only
 set -euo pipefail
 
-TOPDIR="${1:-/home/cmsupport/workspace}"
+# Workspace = the explicit argument, else the cluster's workspace (project setting
+# connection.workspace_dir -> NVIS_WORKSPACE_DIR); workspace-dir-common.sh fails naming the setting.
+WORKSPACE_DIR="${1:-}"
+# shellcheck source=workspace-dir-common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspace-dir-common.sh" || exit 2
 CUDA_MAJ="${2:-13}"
 ARCH="${3:-aarch64}"
 

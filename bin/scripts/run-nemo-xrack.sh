@@ -146,7 +146,7 @@ echo "run-nemo-xrack: ${_nracks} distinct rack(s) -> NVIS_NEMO_XRACK=${NVIS_NEMO
 # NCCL_IGNORE_COLLNET_MISMATCH=1 (set below + in the batch script) to tolerate the stale HPC-X SHARP
 # plugin's asymmetric CollNet device count while KEEPING SHARP (job 208 all-pass). See
 # VALIDATION_TRACKER "Cross-rack alltoall". Override the path with NVIS_NEMO_VETTED_SQSH.
-_vetted="${NVIS_NEMO_VETTED_SQSH:-/home/cmods/workspace/images/nemo-nccl2.30.7.sqsh}"
+_vetted="${NVIS_NEMO_VETTED_SQSH:-${NVIS_WORKSPACE_DIR:+${NVIS_WORKSPACE_DIR%/}/images/nemo-nccl2.30.7.sqsh}}"
 if [[ "${NVIS_NEMO_USE_VETTED:-1}" == "1" && -f "${_vetted}" ]]; then
   echo "run-nemo-xrack: using NCCL 2.30.7 image ${_vetted} (matched NCCL baked in; LD_PRELOAD off; IGNORE_COLLNET_MISMATCH keeps HPC-X/SHARP)"
   NEMO_SQSH_SRC="${_vetted}"

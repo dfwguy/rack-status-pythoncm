@@ -121,8 +121,12 @@ if [ -n "$bad_state" ]; then
   exit 2
 fi
 
-llmb_install="${LLMB_INSTALL:-/home/cmods/workspace/llmb}"
-llmb_run="${NVIS_LLMB_RUN:-/home/cmods/workspace/llmb_venv/bin/llmb-run}"
+# Under the cluster's workspace (project setting -> NVIS_WORKSPACE_DIR; workspace-dir-common.sh).
+# shellcheck source=lib/llmb_paths.inc.sh
+. "${script_dir}/lib/llmb_paths.inc.sh" || exit 2
+llmb_install="${LLMB_INSTALL}"
+llmb_run="${NVIS_LLMB_RUN:-${LLMB_VENV:+${LLMB_VENV}/bin/llmb-run}}"
+llmb_run="${llmb_run:-${llmb_install}/llmb-run}"
 [ -x "$llmb_run" ] || { echo "ERROR: llmb-run not executable: $llmb_run" >&2; exit 2; }
 [ -f "$llmb_install/cluster_config.yaml" ] || {
   echo "ERROR: cluster_config.yaml missing under LLMB_INSTALL=$llmb_install" >&2

@@ -73,6 +73,7 @@ function emptyCluster(): Cluster {
       ssh_key: "",
       remote_base_path: "",
       log_dir: "",
+      workspace_dir: "",
       shared_container_dir: "",
       node_container_dir: "",
     },
@@ -596,6 +597,15 @@ export function ProjectsView() {
                   value={clusterDraft?.cluster.connection.log_dir || ""}
                   onValueChange={(v) => setConn({ log_dir: v })}
                   placeholder="Where this cluster's nodes write logs (blank = remote base path /var/logs)"
+                />
+              </FormField>
+            </Box>
+            <Box sx={{ gridColumn: "span 2" }}>
+              <FormField name="cl-workspace" slotLabel="Workspace">
+                <TextInput
+                  value={clusterDraft?.cluster.connection.workspace_dir || ""}
+                  onValueChange={(v) => setConn({ workspace_dir: v })}
+                  placeholder="Installed toolchains + LLMB on the cluster, e.g. /home/cmods/workspace (scripts derive LLMB, HPC-X, NCCL paths from it)"
                 />
               </FormField>
             </Box>

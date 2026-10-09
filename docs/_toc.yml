@@ -76,6 +76,7 @@ subtrees:
       - file: explanation/how-a-script-path-is-chosen
         title: How a script path is chosen
       - file: explanation/the-cluster-home-directory
+      - file: explanation/how-cluster-paths-reach-scripts
         title: The cluster home directory
       - file: explanation/geometry-and-hostnames
         title: Geometry and hostnames

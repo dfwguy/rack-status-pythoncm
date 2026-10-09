@@ -157,7 +157,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-nvis-up-tail-chars"></a>`NVIS_UP_TAIL_CHARS` | environment | `4000` | — | `backend/universal_parser.py` |
 | <a id="s-nvis-var-dir"></a>`NVIS_VAR_DIR` | ladder |  | The `var/` directory. Exported to scripts and launchers so they never derive it from their own location. | `backend/script_tree.py` |
 | <a id="s-nvis-vault-master-key"></a>`NVIS_VAULT_MASTER_KEY` | environment |  | See `docs/ENVIRONMENT.md` | `backend/token_vault.py` |
-| <a id="s-nvis-workspace-dir"></a>`NVIS_WORKSPACE_DIR` | ladder |  | Shared workspace on the cluster where tools are installed. Defaults to `/home/cmsupport/workspace`. | `backend/config_env.py` |
+| <a id="s-nvis-workspace-dir"></a>`NVIS_WORKSPACE_DIR` | ladder |  | Fallback for the cluster's workspace -- set it per cluster as `connection.workspace_dir` (Projects -> cluster -> Workspace) instead. Installers write under it; launchers derive `LLMB_INSTALL` (`<ws>/llmb`), `LLMB_VENV`, HPC-X, CUDA and NCCL paths from it via `workspace-dir-common.sh`. No default: unset is an error that names the setting. | `backend/config_env.py` |
 | <a id="s-nvlmapper-password"></a>`NVLMAPPER_PASSWORD` | ladder |  | Password for the NVLink mapper appliance. | `backend/api/dashboard.py` |
 | <a id="s-nvlmapper-rc"></a>`NVLMAPPER_RC` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py` |
 | <a id="s-nvlmapper-username"></a>`NVLMAPPER_USERNAME` | ladder |  | Account for the NVLink mapper appliance. | `backend/api/dashboard.py` |

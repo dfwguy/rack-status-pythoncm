@@ -169,6 +169,25 @@ def _tools_check_destination_allowed(p: Path) -> None:
                 )
 
 
+#: What an operator sees when a workspace tool runs on a cluster that has no workspace configured.
+_NO_WORKSPACE = (
+    "no workspace is configured for this cluster: set it under Projects -> cluster -> Workspace "
+    "(or pass one for this run)"
+)
+
+
+def _resolve_workspace(body: dict) -> Path:
+    """The workspace a tool installs into: the request's, else the cluster's (``workspace_dir``).
+
+    There is no fallback path. The old one, /home/cmsupport/workspace, existed on no current
+    cluster, so an install landed where the launchers never looked.
+    """
+    raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
+    if not raw:
+        raise ValueError(_NO_WORKSPACE)
+    return _resolve_tools_destination(raw)
+
+
 def _resolve_tools_destination(raw: str) -> Path:
     """Validate an absolute destination **directory** for Tools (e.g. enroot import output).
 
@@ -763,9 +782,8 @@ def api_tools_install_hpcx_workspace():
                 "error": 'arch must be "aarch64" (matches aihpc_val installation/03-build-nccl.sh).',
             }
         ), 400
-    ws_raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
     try:
-        ws = _resolve_tools_destination(ws_raw)
+        ws = _resolve_workspace(body)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     script = script_tree.resolve_path("install-hpcx-workspace.sh")
@@ -827,9 +845,8 @@ def api_tools_install_hpcx_workspace_stream():
                 "error": 'arch must be "aarch64" (matches aihpc_val installation/03-build-nccl.sh).',
             }
         ), 400
-    ws_raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
     try:
-        ws = _resolve_tools_destination(ws_raw)
+        ws = _resolve_workspace(body)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     script = script_tree.resolve_path("install-hpcx-workspace.sh")
@@ -905,9 +922,8 @@ def _parse_dcgm_body(body: dict) -> tuple[dict | None, str | None]:
     version = str(body.get("version") or "").strip()
     if version and not _DCGM_VERSION_RE.match(version):
         return None, "version pin has invalid characters"
-    ws_raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
     try:
-        ws = _resolve_tools_destination(ws_raw)
+        ws = _resolve_workspace(body)
     except ValueError as e:
         return None, str(e)
     return {"cuda_major": cuda_major, "arch": arch, "distro": distro, "version": version, "ws": ws}, None
@@ -1080,9 +1096,8 @@ def api_tools_install_cuda_nccl_workspace():
     if bh_err is not None:
         return jsonify({"ok": False, "error": bh_err}), 400
     assert build_host is not None
-    ws_raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
     try:
-        ws = _resolve_tools_destination(ws_raw)
+        ws = _resolve_workspace(body)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     script = script_tree.resolve_path("install-cuda-nccl-workspace.sh")
@@ -1165,9 +1180,8 @@ def api_tools_install_cuda_nccl_workspace_stream():
     if bh_err is not None:
         return jsonify({"ok": False, "error": bh_err}), 400
     assert build_host is not None
-    ws_raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
     try:
-        ws = _resolve_tools_destination(ws_raw)
+        ws = _resolve_workspace(body)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     script = script_tree.resolve_path("install-cuda-nccl-workspace.sh")
@@ -1237,9 +1251,8 @@ def api_tools_install_nvloom_workspace():
     if bh_err is not None:
         return jsonify({"ok": False, "error": bh_err}), 400
     assert build_host is not None
-    ws_raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
     try:
-        ws = _resolve_tools_destination(ws_raw)
+        ws = _resolve_workspace(body)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     script = script_tree.resolve_path("install-nvloom-workspace.sh")
@@ -1300,9 +1313,8 @@ def api_tools_install_nvloom_workspace_stream():
     if bh_err is not None:
         return jsonify({"ok": False, "error": bh_err}), 400
     assert build_host is not None
-    ws_raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
     try:
-        ws = _resolve_tools_destination(ws_raw)
+        ws = _resolve_workspace(body)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     script = script_tree.resolve_path("install-nvloom-workspace.sh")
@@ -1447,9 +1459,8 @@ def api_tools_install_dgxc_benchmarking_workspace():
     if err is not None:
         return jsonify({"ok": False, "error": err}), 400
     assert extra_env is not None and meta is not None
-    ws_raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
     try:
-        ws = _resolve_tools_destination(ws_raw)
+        ws = _resolve_workspace(body)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     script = script_tree.resolve_path("install-dgxc-benchmarking-workspace.sh")
@@ -1508,9 +1519,8 @@ def api_tools_install_dgxc_benchmarking_workspace_stream():
     if err is not None:
         return jsonify({"ok": False, "error": err}), 400
     assert extra_env is not None and meta is not None
-    ws_raw = (body.get("workspace") or "").strip() or _nvis_workspace_dir_effective()
     try:
-        ws = _resolve_tools_destination(ws_raw)
+        ws = _resolve_workspace(body)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     script = script_tree.resolve_path("install-dgxc-benchmarking-workspace.sh")

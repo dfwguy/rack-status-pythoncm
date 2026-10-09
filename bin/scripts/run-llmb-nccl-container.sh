@@ -96,9 +96,10 @@ export NVIS_LLMB_AUDITED_CONTAINER=1 NVIS_FORCE_EXPORT_VARS="RUN_CONF_IMAGE PMIX
 # allocation already checked the runtime and IB devices, so never perform the
 # legacy head-node SSH fabric probe or rewrite the shared LLMB recipe config.
 export NVIS_FABRIC_SKIP=1 NVIS_LLMB_TESTSET_APPLY=0 NVIS_LLMB_KEEP_UCX_ENV=0
-export LLMB_INSTALL="${LLMB_INSTALL:-/home/cmods/workspace/llmb}"
+# LLMB_INSTALL / LLMB_VENV under the cluster's workspace (project setting -> NVIS_WORKSPACE_DIR).
+# shellcheck source=lib/llmb_paths.inc.sh
+. "${script_dir}/lib/llmb_paths.inc.sh" || exit 2
 export LLMB_REPO="${LLMB_REPO:-${LLMB_INSTALL}/llmb_repo}"
-export LLMB_VENV="${LLMB_VENV:-/home/cmods/workspace/llmb_venv}"
 export RACK_JOB_LOG_DIR="$log_dir"
 
 set +e

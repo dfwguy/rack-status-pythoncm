@@ -28,7 +28,11 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${script_dir}/lib/nodes.inc.sh"
 nvis_nodes_resolve --nodelist "$nodelist"
 mapfile -t nodes < <(scontrol show hostnames "$NVIS_NODELIST")
-launch="${LLMB_REPO:-/home/cmods/workspace/llmb/llmb_repo}/microbenchmarks/system_info/launch.sh"
+# LLMB_INSTALL under the cluster's workspace (project setting -> NVIS_WORKSPACE_DIR).
+# shellcheck source=lib/llmb_paths.inc.sh
+. "${script_dir}/lib/llmb_paths.inc.sh" || exit 2
+LLMB_REPO="${LLMB_REPO:-${LLMB_INSTALL}/llmb_repo}"
+launch="${LLMB_REPO}/microbenchmarks/system_info/launch.sh"
 [[ -r "$launch" ]] || { echo "ERROR: official v26.06.01 system_info launch missing" >&2; exit 2; }
 mkdir -p "$log_dir"
 declare -a job_ids=() job_nodes=() job_outputs=()
@@ -37,7 +41,7 @@ for node in "${nodes[@]}"; do
   output="${log_dir%/}/exemplar-system-info-${node}-%j.out"
   cmd=(sbatch --parsable --no-requeue --nodes=1 --nodelist="$node" --output="$output")
   [[ -n "$dependency" ]] && cmd+=("$dependency")
-  cmd+=(--export="ALL,RUN_CONF_IMAGE=${image},MELLANOX_VISIBLE_DEVICES=all,GPU_TYPE=gb300,LLMB_INSTALL=${LLMB_INSTALL:-/home/cmods/workspace/llmb},LLMB_REPO=${LLMB_REPO:-/home/cmods/workspace/llmb/llmb_repo}" "$launch")
+  cmd+=(--export="ALL,RUN_CONF_IMAGE=${image},MELLANOX_VISIBLE_DEVICES=all,GPU_TYPE=gb300,LLMB_INSTALL=${LLMB_INSTALL},LLMB_REPO=${LLMB_REPO}" "$launch")
   set +e; submitted="$("${cmd[@]}" 2>&1)"; rc=$?; set -e
   job_id="${submitted%%;*}"
   if (( rc != 0 )) || [[ ! "$job_id" =~ ^[0-9]+$ ]]; then

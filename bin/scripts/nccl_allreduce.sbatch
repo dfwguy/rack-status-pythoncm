@@ -54,7 +54,13 @@ _pick_first() {
     fi
   done
 }
-HPCX_DIR="${NVIS_HPCX_DIR:-$(_pick_first '/home/*/workspace/hpcx-*cuda*' '/home/*/workspace/hpcx-*' '/opt/hpcx*')}"
+# Every toolchain path is under the cluster's workspace (project setting connection.workspace_dir ->
+# NVIS_WORKSPACE_DIR, exported to this job by run_nccl_mpi.sh's --export=ALL). This used to glob
+# /home/*/workspace -- a wildcard standing in for a setting nobody had made -- which matched any
+# user's workspace and, when none had the version, failed naming a literal "*".
+# shellcheck source=workspace-dir-common.sh
+. "${_D}/workspace-dir-common.sh" || exit 2
+HPCX_DIR="${NVIS_HPCX_DIR:-$(_pick_first "${WORKSPACE_DIR}/hpcx-*cuda*" "${WORKSPACE_DIR}/hpcx-*" '/opt/hpcx*')}"
 # --- NCCL version selection -----------------------------------------------------
 # nccl-tests dynamically links libnccl.so.2, so the runtime NCCL version is chosen by
 # which vetted lib dir is first on LD_LIBRARY_PATH (all NCCL 2.x share the soname
@@ -65,8 +71,8 @@ HPCX_DIR="${NVIS_HPCX_DIR:-$(_pick_first '/home/*/workspace/hpcx-*cuda*' '/home/
 # Override the resolved dir with NVIS_NCCL_LIB, or the test binary with NVIS_NCCL_TESTS_BIN.
 NVIS_NCCL_VERSION="${NVIS_NCCL_VERSION:-2.30.7}"
 case "${NVIS_NCCL_VERSION}" in
-  system|default|2.28.9) _nccl_lib_glob='/home/*/workspace/nccl/build/lib/libnccl.so.2' ;;
-  *)                     _nccl_lib_glob="/home/*/workspace/nccl-${NVIS_NCCL_VERSION}/nccl/build/lib/libnccl.so.2" ;;
+  system|default|2.28.9) _nccl_lib_glob="${WORKSPACE_DIR}/nccl/build/lib/libnccl.so.2" ;;
+  *)                     _nccl_lib_glob="${WORKSPACE_DIR}/nccl-${NVIS_NCCL_VERSION}/nccl/build/lib/libnccl.so.2" ;;
 esac
 if [ -n "${NVIS_NCCL_LIB:-}" ]; then
   NCCL_LIB="${NVIS_NCCL_LIB}"
@@ -80,11 +86,11 @@ fi
 if [ -z "${NVIS_NCCL_TESTS_BIN:-}" ]; then
   case "${NVIS_NCCL_VERSION}" in
     system|default|2.28.9) : ;;
-    *) _vt="$(ls -t /home/*/workspace/nccl-${NVIS_NCCL_VERSION}/nccl-tests/build/all_reduce_perf 2>/dev/null | head -1)"; [ -n "${_vt}" ] && NVIS_NCCL_TESTS_BIN="${_vt}" ;;
+    *) _vt="$(ls -t "${WORKSPACE_DIR}/nccl-${NVIS_NCCL_VERSION}/nccl-tests/build/all_reduce_perf" 2>/dev/null | head -1)"; [ -n "${_vt}" ] && NVIS_NCCL_TESTS_BIN="${_vt}" ;;
   esac
 fi
-NCCL_TESTS_BIN="${NVIS_NCCL_TESTS_BIN:-$(ls -t /home/*/workspace/nccl/nccl-tests/build/all_reduce_perf 2>/dev/null | head -1)}"
-CUDA_LIB="${NVIS_CUDA_LIB:-$(_pick_first '/home/*/workspace/cuda*/targets/*/lib' '/usr/local/cuda*/targets/*/lib')}"
+NCCL_TESTS_BIN="${NVIS_NCCL_TESTS_BIN:-$(ls -t "${WORKSPACE_DIR}/nccl/nccl-tests/build/all_reduce_perf" 2>/dev/null | head -1)}"
+CUDA_LIB="${NVIS_CUDA_LIB:-$(_pick_first "${WORKSPACE_DIR}/cuda*/targets/*/lib" '/usr/local/cuda*/targets/*/lib')}"
 
 [ -n "${NCCL_TESTS_BIN}" ] && [ -x "${NCCL_TESTS_BIN}" ] || { echo "nccl_allreduce: all_reduce_perf not found (set NVIS_NCCL_TESTS_BIN)"; exit 2; }
 [ -n "${HPCX_DIR}" ] && [ -d "${HPCX_DIR}" ] || { echo "nccl_allreduce: HPC-X not found (set NVIS_HPCX_DIR)"; exit 2; }

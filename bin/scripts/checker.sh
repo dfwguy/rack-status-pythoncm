@@ -426,8 +426,8 @@ f_check_nvbandwidth(){
     NVB_RUN="nvbandwidth"; NVB_MODE="binary"
   else
     for sq in ${NVIS_NVBANDWIDTH_SQSH:-} \
-              /home/cmods/bringup/containers/nvbandwidth-v0.9-arm.sqsh \
-              /home/cmods/bringup/containers/nvbandwidth*.sqsh \
+              "${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}"/nvbandwidth-v0.9-arm.sqsh \
+              "${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}"/nvbandwidth*.sqsh \
               /cm/shared/containers/nvbandwidth*.sqsh \
               /cm/shared/apps/llmb/images/nvbandwidth*.sqsh; do
       [[ -s "${sq}" ]] && { ctr="${sq}"; break; }

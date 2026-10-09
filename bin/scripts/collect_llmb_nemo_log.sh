@@ -35,7 +35,7 @@ RACK="${2:-}"
 [[ -n "${JID}" ]] || { echo "usage: $0 <jobid> [rack]" >&2; exit 2; }
 
 LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
-LLMB_INSTALL="${LLMB_INSTALL:-/home/cmods/workspace/llmb}"
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MARKER="### NVIS: llmb inner log for job ${JID} appended below ###"
 
 mkdir -p "${LOG_DIR}" || { echo "collect_llmb_nemo: cannot create log directory: ${LOG_DIR}" >&2; exit 2; }
@@ -59,7 +59,7 @@ fi
 # canonical shell trace.  That path is authoritative: LLMB_INSTALL is the code
 # checkout, while sites may independently relocate experiment data (as happened
 # when runs moved to /cluster/benchmark/... and every watcher searched the old
-# /home/cmods/workspace/llmb tree).  Only accept a trace target whose basename
+# $LLMB_INSTALL tree).  Only accept a trace target whose basename
 # carries this exact job id.
 inner=""
 while IFS= read -r candidate; do
@@ -93,7 +93,13 @@ if [[ -z "${inner}" ]]; then
     search_roots+=("${LLMB_EXPERIMENTS_ROOT%/}")
     search_roots+=("${LLMB_EXPERIMENTS_ROOT%/}/workloads/pretrain_nemotron-h/experiments")
   fi
-  search_roots+=("${LLMB_INSTALL%/}/workloads/pretrain_nemotron-h/experiments")
+  # Last resort, and the only use of LLMB_INSTALL here: resolved lazily (lib/llmb_paths.inc.sh --
+  # explicit, else <cluster workspace>/llmb) so a re-run that is already collected, or a trace
+  # that names its output, never needs an LLMB location at all.
+  # shellcheck source=lib/llmb_paths.inc.sh
+  if . "${_SCRIPT_DIR}/lib/llmb_paths.inc.sh" 2>/dev/null; then
+    search_roots+=("${LLMB_INSTALL%/}/workloads/pretrain_nemotron-h/experiments")
+  fi
   for root in "${search_roots[@]}"; do
     [[ -n "${root}" ]] || continue
     searched+=("${root}")

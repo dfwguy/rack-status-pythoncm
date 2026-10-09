@@ -24,7 +24,9 @@
 # Env:    LLMB_INSTALL, RACK_JOB_LOG_DIR / RACK_STATUS_LOG_DIR
 set -uo pipefail
 
-LLMB_INSTALL="${LLMB_INSTALL:-/home/cmods/workspace/llmb}"
+# LLMB_INSTALL under the cluster's workspace (project setting -> NVIS_WORKSPACE_DIR).
+# shellcheck source=lib/llmb_paths.inc.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/llmb_paths.inc.sh" || exit 2
 OUT_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 EXP_ROOT="${LLMB_INSTALL%/}/workloads/microbenchmark_nccl/experiments"
 JOBID="${1:-}"

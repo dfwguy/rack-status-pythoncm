@@ -25,7 +25,7 @@
 # NSCALETX [1/3]: the MOP pins CONT to a 25.08 image under /home/nvis. NscaleTX stages the
 # 26.03 image in the AAT container dir; run_mnubergemm_stress.sh exports NVIS_MNUBERGEMM_CONT
 # after its pre-req check so the driver and a hand-run sbatch resolve identically.
-CONT="${NVIS_MNUBERGEMM_CONT:-/home/cmods/bringup/containers/mnubergemm-26.03-v1.17-arm.sqsh}"
+CONT="${NVIS_MNUBERGEMM_CONT:-${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}/mnubergemm-26.03-v1.17-arm.sqsh}"
 
 echo "#######################":
 echo "HOSTLIST: $(scontrol show hostname $SLURM_NODELIST | paste -s -d,)"

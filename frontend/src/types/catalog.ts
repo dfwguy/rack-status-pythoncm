@@ -213,6 +213,9 @@ export interface ClusterConnection {
   // Where this cluster's nodes write the logs Rack Status ingests. Per-cluster so each project
   // reads its own cluster's logs; supersedes the deprecated global RACK_STATUS_LOG_DIR env var.
   log_dir: string;
+  // The cluster's workspace: installed toolchains and the LLMB install. Scripts derive their
+  // workspace paths from it (NVIS_WORKSPACE_DIR); blank = the Settings fallback, no built-in default.
+  workspace_dir: string;
   // Where this cluster keeps its container images: the shared store the launch host reads, and
   // the per-node cache jobs run from. Mount points, so per-cluster; blank = deployment default.
   shared_container_dir: string;

@@ -35,7 +35,7 @@
 #   NGC_API_KEY                 NGC key (nvapi-…). Settings -> External connections.
 #   RACK_MNUBERGEMM_CONT        override the container path
 #   RACK_MNUBERGEMM_TAG         image tag        (default tensorrt-26.03-v1.17-arm)
-#   RACK_MNUBERGEMM_IMAGE_DIR   staging dir      (default /home/cmods/bringup/containers)
+#   RACK_MNUBERGEMM_IMAGE_DIR   staging dir      (default: the cluster's shared image store, RACK_VALIDATION_CONTAINER_ROOT)
 #   RACK_MNUBERGEMM_PARTITION   optional sbatch -p
 #   RACK_MNUBERGEMM_TIME        optional shorter walltime (hard maximum 01:00:00)
 #   NVIS_SLURM_HOSTLIST         explicit comma-separated NodeName list (skips expansion)
@@ -70,7 +70,12 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="${RACK_JOB_LOG_DIR:-${RACK_STATUS_LOG_DIR:-$PWD}}"
 
 TAG="${RACK_MNUBERGEMM_TAG:-tensorrt-26.03-v1.17-arm}"
-IMAGE_DIR="${RACK_MNUBERGEMM_IMAGE_DIR:-/home/cmods/bringup/containers}"
+# shellcheck source=lib/node_images.inc.sh
+source "${_SCRIPT_DIR}/lib/node_images.inc.sh"
+# Where a non-P2P cluster keeps the image for every tray to read: the cluster's shared image store
+# (project setting connection.shared_container_dir -> RACK_VALIDATION_CONTAINER_ROOT). On a P2P
+# cluster the image is already in each node's cache instead -- see the P2P branch of STEP 2.
+IMAGE_DIR="${RACK_MNUBERGEMM_IMAGE_DIR:-${RACK_VALIDATION_CONTAINER_ROOT:-}}"
 # MOP/AAT naming: the 'tensorrt-' prefix is dropped in the .sqsh filename, i.e.
 #   tag tensorrt-26.03-v1.17-arm  ->  mnubergemm-26.03-v1.17-arm.sqsh
 CONT="${RACK_MNUBERGEMM_CONT:-${IMAGE_DIR}/mnubergemm-${TAG#tensorrt-}.sqsh}"
@@ -199,9 +204,20 @@ fi
 # STEP 2 — container pre-req: present? else pull with the NGC key; else fail loudly
 # ---------------------------------------------------------------------------
 log "--- container pre-req ---"
+
+if nvis_node_images_p2p && [[ -z "${RACK_MNUBERGEMM_CONT:-}" ]]; then
+  # P2P distributes the image into every node's cache; the launch host may not see any image
+  # store at all (NC's BCM head mounts only /home). Check each node's copy against the published
+  # image catalog -- never pull from the head.
+  nvis_stage_node_image run_mnubergemm_stress "${WLIST}" "mnubergemm-${TAG#tensorrt-}.sqsh" \
+    || die "image not ready on every node -- nothing was submitted"
+  CONT="${NVIS_NEMO_CONT}"
+elif [[ -z "${IMAGE_DIR}" && -z "${RACK_MNUBERGEMM_CONT:-}" ]]; then
+  die "no image store configured: set the cluster's Shared image store (Projects -> cluster) or RACK_MNUBERGEMM_IMAGE_DIR"
+fi
 log "expected image: ${CONT}"
 
-if [[ -s "${CONT}" ]]; then
+if [[ -s "${CONT}" ]] || nvis_node_images_p2p; then
   log "image PRESENT ($(du -h "${CONT}" 2>/dev/null | cut -f1)) — no download needed"
 else
   log "image MISSING at ${CONT}"
@@ -244,8 +260,9 @@ else
   log "image STAGED ($(du -h "${CONT}" 2>/dev/null | cut -f1))"
 fi
 
-# The trays mount this over NFS — a local-only path would fail on every rank but one.
-case "${CONT}" in
+# The trays mount this over NFS — a local-only path would fail on every rank but one. (A P2P
+# node-cache path is local by design and was verified on every node above.)
+nvis_node_images_p2p || case "${CONT}" in
   /cm/shared/*|/home/*) : ;;
   *) log "WARNING: ${CONT} may not be on a shared filesystem; every tray must be able to read it." ;;
 esac

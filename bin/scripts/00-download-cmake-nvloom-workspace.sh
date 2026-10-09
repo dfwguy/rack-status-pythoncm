@@ -15,7 +15,11 @@
 # Usage: 00-download-cmake-nvloom-workspace.sh [TOPDIR]
 set -euo pipefail
 
-TOPDIR="${1:-/home/cmsupport/workspace}"
+# Workspace = the explicit argument, else the cluster's workspace (project setting
+# connection.workspace_dir -> NVIS_WORKSPACE_DIR); workspace-dir-common.sh fails naming the setting.
+WORKSPACE_DIR="${1:-}"
+# shellcheck source=workspace-dir-common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspace-dir-common.sh" || exit 2
 
 CMAKE_VER="3.28.1"
 CMAKE_TAR="cmake-${CMAKE_VER}-linux-aarch64.tar.gz"

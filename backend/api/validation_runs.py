@@ -125,6 +125,11 @@ from ._common import operator_from_request as _operator_from_request
 
 _logger = logging.getLogger(__name__)
 
+#: A launch that needs the cluster's workspace (HPC-X, nvloom, LLMB...) on a cluster without one.
+_NO_WORKSPACE = (
+    "no workspace is configured for this cluster: set it under Projects -> cluster -> Workspace"
+)
+
 # Empty prefix: routes keep the paths they had in app.py, so the move cannot change a URL.
 bp = Blueprint("validation_runs", __name__, url_prefix="")
 
@@ -361,10 +366,10 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
             "cmd": cmd,
             "display_cmd": display_cmd,
             "timeout": timeout,
-            # Settings -> job env values must reach run_llmb_nccl.sh, which otherwise falls back
-            # to its built-in defaults (/home/nvis/dgxc-benchmarking, /home/nvis/llmb_venv) —
-            # the wrong user on this cluster, and paths that do not exist. Mirrors how the
-            # ClusterKit prepare pulls its RACK_CLUSTERKIT_* keys via _eget.
+            # run_llmb_nccl.sh derives LLMB_INSTALL / LLMB_VENV from the cluster's workspace
+            # (connection.workspace_dir -> NVIS_WORKSPACE_DIR, workspace-dir-common.sh); explicit
+            # LLMB_* Settings values still override. Over SSH only these env_extra keys and the
+            # NVIS_/RACK_ prefixed overlay reach the script, so they are passed explicitly.
             "env_updates": {
                 **{
                     k: v
@@ -922,6 +927,8 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
     display_cmd = "./" + script.name + " " + shlex.quote(target)
     timeout = max(120, _env_int("RACK_MNUBERGEMM_STRESS_TIMEOUT", 86400))
     ws = _nvis_workspace_dir_effective()
+    if not ws:
+        return None, (jsonify({"ok": False, "error": _NO_WORKSPACE}), 400)
     cuda_m = (_eget("RACK_MNUBERGEMM_CUDA_MAJOR") or _eget("RACK_NVLOOM_CUDA_MAJOR") or _eget("CUDA_MAJ") or "13").strip()
     if cuda_m not in ("12", "13"):
         cuda_m = "13"
@@ -1115,6 +1122,8 @@ def _prepare_run_nvloom_singlerack(body: dict) -> tuple[dict | None, tuple[objec
     display_cmd = "./" + script.name + " " + shlex.quote(target)
     timeout = max(120, _env_int("RACK_NVLOOM_SINGLERACK_TIMEOUT", 10800))
     ws = _nvis_workspace_dir_effective()
+    if not ws:
+        return None, (jsonify({"ok": False, "error": _NO_WORKSPACE}), 400)
     cuda_m = (_eget("RACK_NVLOOM_CUDA_MAJOR") or _eget("CUDA_MAJ") or "13").strip()
     if cuda_m not in ("12", "13"):
         cuda_m = "13"
@@ -1177,6 +1186,8 @@ def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[o
     display_cmd = "./" + script.name + " " + shlex.quote(target)
     timeout = max(120, _job_env_int("RACK_CLUSTERKIT_TIMEOUT", 14400))
     ws = _nvis_workspace_dir_effective()
+    if not ws:
+        return None, (jsonify({"ok": False, "error": _NO_WORKSPACE}), 400)
     cuda_m = (_eget("RACK_CLUSTERKIT_CUDA_MAJOR") or _eget("RACK_NVLOOM_CUDA_MAJOR") or _eget("CUDA_MAJ") or "13").strip()
     if cuda_m not in ("12", "13"):
         cuda_m = "13"

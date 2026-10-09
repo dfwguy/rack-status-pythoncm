@@ -32,7 +32,11 @@ set -euo pipefail
 : "${NVIS_LLAMA_SCRIPTS_DIR:?}"
 readonly IMAGE_BYTES=42477232128
 readonly IMAGE_SHA256=0829d0c77f38db54848afd095862093a7c62e98778b0b8664b8edff69e273747
-readonly PERF_ROOT=/home/cmods/workspace/llmb/workloads/pretrain_llama3.1/Megatron-Bridge/scripts/performance
+# The LLMB install under the cluster's workspace (project setting connection.workspace_dir ->
+# NVIS_WORKSPACE_DIR, carried here by --export=ALL); lib/llmb_paths.inc.sh derives LLMB_INSTALL.
+# shellcheck source=lib/llmb_paths.inc.sh
+. "${NVIS_LLAMA_SCRIPTS_DIR}/lib/llmb_paths.inc.sh" || exit 2
+readonly PERF_ROOT=${LLMB_INSTALL}/workloads/pretrain_llama3.1/Megatron-Bridge/scripts/performance
 
 mapfile -t assigned_nodes < <(scontrol show hostnames "${SLURM_JOB_NODELIST}" | sort)
 [[ "${#assigned_nodes[@]}" -eq 1024 ]] || { echo "ALLOCATION_GATE_FAIL nodes=${#assigned_nodes[@]} expected=1024" >&2; exit 10; }
@@ -114,7 +118,7 @@ mkdir -p "$NVIS_LLAMA_LOG_DIR"
 export PYTHONUNBUFFERED=1 SLURM_UNBUFFEREDIO=1 TORCHX_MAX_RETRIES=0
 export TRANSFORMERS_OFFLINE=1 TOKENIZERS_PARALLELISM=False NCCL_NVLS_ENABLE=0 NCCL_DEBUG=WARN
 export TORCH_NCCL_HIGH_PRIORITY=1 TORCH_NCCL_AVOID_RECORD_STREAMS=1 HF_HUB_OFFLINE=1
-export HF_HOME=/home/cmods/workspace/llmb/.cache/huggingface HF_HUB_CACHE=/home/cmods/workspace/llmb/.cache/huggingface/hub
+export HF_HOME=${LLMB_INSTALL}/.cache/huggingface HF_HUB_CACHE=${LLMB_INSTALL}/.cache/huggingface/hub
 export CUDA_DEVICE_MAX_CONNECTIONS=32 NVTE_FWD_LAYERNORM_SM_MARGIN=16 NVTE_BWD_LAYERNORM_SM_MARGIN=16
 export NVTE_NORM_FWD_USE_CUDNN=1 NVTE_NORM_BWD_USE_CUDNN=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True NCCL_GRAPH_REGISTER=0
 # The training ranks' compute plane (lib/fabric.inc.sh). On a RoCE cluster NCCL must be kept off
@@ -130,6 +134,6 @@ for v in NCCL_IB_HCA NCCL_IB_ADDR_FAMILY; do
 done
 srun --output="${NVIS_LLAMA_LOG_DIR%/}/llama405b-train-%j.out" --error="${NVIS_LLAMA_LOG_DIR%/}/llama405b-train-%j.err" \
   --kill-on-bad-exit=1 --mpi=pmix --container-image="$RUN_CONF_IMAGE" --container-writable --no-container-mount-home \
-  --container-mounts="/dev/infiniband:/dev/infiniband,/home/cmods/workspace/llmb/.cache/huggingface,${PERF_ROOT}:${PERF_ROOT}" \
+  --container-mounts="/dev/infiniband:/dev/infiniband,${LLMB_INSTALL}/.cache/huggingface,${PERF_ROOT}:${PERF_ROOT}" \
   --container-env="$common_env" bash -euo pipefail -c \
-  'numactl --cpunodebind=$((SLURM_LOCALID/2)) --membind=$((SLURM_LOCALID/2)) python '"$PERF_ROOT"'/run_script.py --model_family_name llama --model_recipe_name llama31_405b --gpu gb300 --container_image "$RUN_CONF_IMAGE" --num_gpus 4096 --gpus_per_node 4 --offline --dump_env -E RUN_CONF_IMAGE="$RUN_CONF_IMAGE" -E NCCL_NVLS_ENABLE=0 --max_steps=50 --custom_mounts=/home/cmods/workspace/llmb/.cache/huggingface --compute_dtype fp8_cs --enable_pct_binding false --config_variant v2 --account default --partition defq --log_dir /home/cmods/workspace/llmb/workloads/pretrain_llama3.1 --time_limit 02:00:00 --packager none --micro_batch_size 1 --global_batch_size 6144 --tensor_model_parallel_size 4 --pipeline_model_parallel_size 8 --context_parallel_size 1 --virtual_pipeline_model_parallel_size 4 train.manual_gc=true train.manual_gc_interval=100'
+  'numactl --cpunodebind=$((SLURM_LOCALID/2)) --membind=$((SLURM_LOCALID/2)) python '"$PERF_ROOT"'/run_script.py --model_family_name llama --model_recipe_name llama31_405b --gpu gb300 --container_image "$RUN_CONF_IMAGE" --num_gpus 4096 --gpus_per_node 4 --offline --dump_env -E RUN_CONF_IMAGE="$RUN_CONF_IMAGE" -E NCCL_NVLS_ENABLE=0 --max_steps=50 --custom_mounts='"${LLMB_INSTALL}"'/.cache/huggingface --compute_dtype fp8_cs --enable_pct_binding false --config_variant v2 --account default --partition defq --log_dir '"${LLMB_INSTALL}"'/workloads/pretrain_llama3.1 --time_limit 02:00:00 --packager none --micro_batch_size 1 --global_batch_size 6144 --tensor_model_parallel_size 4 --pipeline_model_parallel_size 8 --context_parallel_size 1 --virtual_pipeline_model_parallel_size 4 train.manual_gc=true train.manual_gc_interval=100'

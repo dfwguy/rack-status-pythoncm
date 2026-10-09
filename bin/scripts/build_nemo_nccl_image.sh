@@ -50,10 +50,13 @@
 #   NVIS_CONTAINER_CUDA_HOME in-image CUDA     (default /usr/local/cuda)
 set -euo pipefail
 
-NCCL_SRC="${1:-${NVIS_NCCL_SRC:-/home/cmods/workspace/nccl-2.30.7/nccl}}"
-NCCL_TESTS_SRC="${2:-${NVIS_NCCL_TESTS_SRC:-/home/cmods/workspace/nccl-2.30.7/nccl-tests}}"
-BASE_SQSH="${3:-${NVIS_NEMO_BASE_SQSH:-/home/cmods/nemo-25.11.01.sqsh}}"
-OUT_SQSH="${4:-${NVIS_NEMO_OUT_SQSH:-/home/cmods/workspace/images/nemo-nccl2.30.7.sqsh}}"
+# Sources and output under the cluster's workspace (project setting -> NVIS_WORKSPACE_DIR).
+# shellcheck source=workspace-dir-common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspace-dir-common.sh" || exit 2
+NCCL_SRC="${1:-${NVIS_NCCL_SRC:-${WORKSPACE_DIR}/nccl-2.30.7/nccl}}"
+NCCL_TESTS_SRC="${2:-${NVIS_NCCL_TESTS_SRC:-${WORKSPACE_DIR}/nccl-2.30.7/nccl-tests}}"
+BASE_SQSH="${3:-${NVIS_NEMO_BASE_SQSH:?pass the base .sqsh (arg 3) or set NVIS_NEMO_BASE_SQSH}}"
+OUT_SQSH="${4:-${NVIS_NEMO_OUT_SQSH:-${WORKSPACE_DIR}/images/nemo-nccl2.30.7.sqsh}}"
 ARCH_LIBDIR="${NVIS_CONTAINER_LIBDIR:-/usr/lib/aarch64-linux-gnu}"
 CONT_MPI_HOME="${NVIS_CONTAINER_MPI_HOME:-/opt/hpcx/ompi}"
 CONT_CUDA_HOME="${NVIS_CONTAINER_CUDA_HOME:-/usr/local/cuda}"

@@ -27,13 +27,17 @@
 #   -> publishes <ws>/nccl-<VER>/nccl/build/lib/libnccl.so.2  (+ nccl-tests/build/*_perf)
 #
 # Usage:   build_nccl_host.sh [VERSION]      (default 2.30.7)
-# Env:     NVIS_WS (default /home/cmods/workspace), CUDA_HOME, HPCX_DIR,
+# Env:     NVIS_WS (default: the cluster's workspace, NVIS_WORKSPACE_DIR), CUDA_HOME, HPCX_DIR,
 #          NVIS_NVCC_GENCODE (default sm_100 + PTX for GB200/GB300), JOBS (default nproc),
 #          NVIS_LOCAL_BUILD (node-local build dir, default /tmp/nccl-build-<VER>-<pid>).
 set -euo pipefail
 
 VER="${1:-2.30.7}"
-WS="${NVIS_WS:-/home/cmods/workspace}"
+# The cluster's workspace (project setting -> NVIS_WORKSPACE_DIR); NVIS_WS still overrides.
+WORKSPACE_DIR="${NVIS_WS:-}"
+# shellcheck source=workspace-dir-common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspace-dir-common.sh" || exit 2
+WS="${WORKSPACE_DIR}"
 SRC="${WS}/nccl-${VER}"
 JOBS="${JOBS:-$(nproc)}"
 CUDA_HOME="${CUDA_HOME:-$(ls -d "${WS}"/cuda13 "${WS}"/cuda 2>/dev/null | head -1)}"

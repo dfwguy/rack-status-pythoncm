@@ -22,7 +22,7 @@
 # stress sbatch (bin/scripts/mnubergemm_stress.sbatch honors that override).
 #
 # Usage: install-dcgm-workspace.sh [WORKSPACE] [CUDA_MAJOR] [ARCH]
-#   WORKSPACE    shared workspace root (default: /home/cmsupport/workspace)
+#   WORKSPACE    shared workspace root (default: the cluster's workspace, NVIS_WORKSPACE_DIR)
 #   CUDA_MAJOR   12 | 13   selects datacenter-gpu-manager-4-cudaXX (default: 13)
 #   ARCH         TARGET COMPUTE-NODE arch — NOT this head node's arch:
 #                  aarch64 (GBx00 / Grace-Blackwell, ARM)  [default]
@@ -35,7 +35,12 @@
 #   NVIS_DCGM_FORCE    0 | 1   re-extract even if already present  (default: 0)
 set -euo pipefail
 
-WORKSPACE="${1:-/home/cmsupport/workspace}"
+# Workspace = the explicit argument, else the cluster's workspace (project setting
+# connection.workspace_dir -> NVIS_WORKSPACE_DIR); workspace-dir-common.sh fails naming the setting.
+WORKSPACE_DIR="${1:-}"
+# shellcheck source=workspace-dir-common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspace-dir-common.sh" || exit 2
+WORKSPACE="${WORKSPACE_DIR}"
 CUDA_MAJ="${2:-13}"
 ARCH_IN="${3:-aarch64}"
 DISTRO_IN="${NVIS_DCGM_DISTRO:-dgx}"

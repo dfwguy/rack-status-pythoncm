@@ -38,16 +38,19 @@
 set -euo pipefail
 
 BASE_SQSH="${1:-${NVIS_NEMO_BASE_SQSH:-${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}/nemo-25.11.01.sqsh}}"
-OUT_SQSH="${2:-${NVIS_NEMO_VETTED_SQSH:-/home/cmods/workspace/images/nemo-vetted-nccl2.28.9.sqsh}}"
-VETTED_NCCL_LIB="${3:-${NVIS_VETTED_NCCL_LIB:-/home/cmods/workspace/nccl/bins/libnccl.so.2.28.9}}"
+# Outputs and inputs under the cluster's workspace (project setting -> NVIS_WORKSPACE_DIR).
+# shellcheck source=workspace-dir-common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspace-dir-common.sh" || exit 2
+OUT_SQSH="${2:-${NVIS_NEMO_VETTED_SQSH:-${WORKSPACE_DIR}/images/nemo-vetted-nccl2.28.9.sqsh}}"
+VETTED_NCCL_LIB="${3:-${NVIS_VETTED_NCCL_LIB:-${WORKSPACE_DIR}/nccl/bins/libnccl.so.2.28.9}}"
 ARCH_LIBDIR="${NVIS_CONTAINER_LIBDIR:-/usr/lib/aarch64-linux-gnu}"
 
 # Inputs for rebuilding the in-image nccl-tests against the SAME NCCL (so *_perf_mpi binaries and
 # the runtime libnccl match — fixes the alltoall/allgather bootstrap ABI mismatch). Set
 # NVIS_REBUILD_NCCL_TESTS=0 to only swap the .so (legacy behavior).
 REBUILD_NCCL_TESTS="${NVIS_REBUILD_NCCL_TESTS:-1}"
-NCCL_BUILD_DIR="${NVIS_NCCL_BUILD_DIR:-/home/cmods/workspace/nccl/build}"        # 2.28.9 headers+lib (NCCL_HOME)
-NCCL_TESTS_SRC="${NVIS_NCCL_TESTS_SRC:-/home/cmods/workspace/nccl/nccl-tests}"   # nccl-tests source tree
+NCCL_BUILD_DIR="${NVIS_NCCL_BUILD_DIR:-${WORKSPACE_DIR}/nccl/build}"        # 2.28.9 headers+lib (NCCL_HOME)
+NCCL_TESTS_SRC="${NVIS_NCCL_TESTS_SRC:-${WORKSPACE_DIR}/nccl/nccl-tests}"   # nccl-tests source tree
 CONT_MPI_HOME="${NVIS_CONTAINER_MPI_HOME:-/opt/hpcx/ompi}"                       # in-image MPI (HPC-X OpenMPI)
 CONT_CUDA_HOME="${NVIS_CONTAINER_CUDA_HOME:-/usr/local/cuda}"                    # in-image CUDA toolkit
 

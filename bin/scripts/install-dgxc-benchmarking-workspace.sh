@@ -67,7 +67,11 @@
 #   NVIS_EXEMPLAR_CONFIG_PATH    where to write the config      (default REPO_DIR/nvis-llmb-config.yaml)
 set -uo pipefail
 
-TOPDIR="${1:-${NVIS_WORKSPACE_DIR:-/home/cmsupport/workspace}}"
+# Workspace = the explicit argument, else the cluster's workspace (project setting
+# connection.workspace_dir -> NVIS_WORKSPACE_DIR); workspace-dir-common.sh fails naming the setting.
+WORKSPACE_DIR="${1:-}"
+# shellcheck source=workspace-dir-common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspace-dir-common.sh" || exit 2
 TOPDIR="${TOPDIR%/}"
 
 MODE="${NVIS_EXEMPLAR_MODE:-record}"

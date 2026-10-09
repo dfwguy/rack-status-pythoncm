@@ -241,6 +241,8 @@ export function toCluster(draft: WizardDraft): Cluster {
       // The wizard does not ask for a log directory: blank falls back to remote_base_path/var/logs,
       // and a site whose logs live elsewhere sets it per cluster in the editor afterward.
       log_dir: "",
+      // Nor for a workspace: set it per cluster in the editor once the site's layout is known.
+      workspace_dir: "",
       // Nor for image locations: blank uses the deployment defaults (/cluster/containers shared,
       // /tmp/containers per node); a site that mounts them elsewhere sets them in the editor.
       shared_container_dir: "",

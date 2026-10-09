@@ -76,8 +76,15 @@ def set_materialize_hook(fn) -> None:
 
 
 def _nvis_workspace_dir_effective() -> str:
-    """Default workspace root for HPC-X / CUDA / nvloom install layout (same as bin/scripts/workspace-dir-common.sh)."""
-    return (_eget("NVIS_WORKSPACE_DIR") or _eget("RACK_WORKSPACE_DIR") or "").strip() or "/home/cmsupport/workspace"
+    """The cluster's workspace root, or "" when none is configured.
+
+    Resolved like bin/scripts/workspace-dir-common.sh: the cluster's ``connection.workspace_dir``
+    (projected as NVIS_WORKSPACE_DIR by the catalog overlay, which outranks Settings), then the
+    RACK_WORKSPACE_DIR alias. There is deliberately no fallback path: the old one,
+    /home/cmsupport/workspace, existed on no current cluster, so installers wrote where launchers
+    never looked. Callers turn "" into an error that names the setting.
+    """
+    return (_eget("NVIS_WORKSPACE_DIR") or _eget("RACK_WORKSPACE_DIR") or "").strip()
 
 
 JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
@@ -179,7 +186,7 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "section": "jobs_cluster",
         "key": "LLMB_INSTALL",
         "label": "LLMB workspace (LLMB_INSTALL)",
-        "description": "dgxc-benchmarking / Exemplar WORKSPACE directory on the head node (e.g. /home/<user>/workspace/llmb) — the dir llmb-run reads/writes (.cache, workloads, experiments). Forwarded over SSH to run_llmb_nccl.sh (NCCL microbenchmark). Set this to override any stale LLMB_INSTALL inherited from the launching shell.",
+        "description": "Override only. Defaults to <cluster Workspace>/llmb (Projects -> cluster -> Workspace), where the Exemplar installer puts it -- the dir llmb-run reads/writes (.cache, workloads, experiments). Set it only when an install lives outside the cluster's workspace.",
     },
     {
         "section": "jobs_cluster",
@@ -627,7 +634,7 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "section": "jobs_cluster",
         "key": "NVIS_WORKSPACE_DIR",
         "label": "Workspace root (HPC-X / CUDA / nvloom)",
-        "description": "Absolute path; default /home/cmsupport/workspace. Used by nvloom singlerack, MNUBERGEMM stress, and install scripts (TOPDIR).",
+        "description": "Fallback for the cluster's Workspace (Projects -> cluster -> Workspace wins). Absolute path; no default. Installers write under it and launchers derive LLMB_INSTALL (<ws>/llmb), LLMB_VENV (<ws>/llmb_venv), HPC-X, CUDA and NCCL paths from it.",
     },
     {
         "section": "jobs_cluster",

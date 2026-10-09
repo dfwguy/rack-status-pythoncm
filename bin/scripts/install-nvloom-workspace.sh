@@ -17,7 +17,11 @@
 # Usage: install-nvloom-workspace.sh [TOPDIR] [CUDA_MAJOR]
 set -euo pipefail
 
-TOPDIR="${1:-/home/cmsupport/workspace}"
+# Workspace = the explicit argument, else the cluster's workspace (project setting
+# connection.workspace_dir -> NVIS_WORKSPACE_DIR); workspace-dir-common.sh fails naming the setting.
+WORKSPACE_DIR="${1:-}"
+# shellcheck source=workspace-dir-common.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/workspace-dir-common.sh" || exit 2
 CUDA_MAJ="${2:-13}"
 HOST="${NVIS_NVLOOM_BUILD_HOST:-}"
 
