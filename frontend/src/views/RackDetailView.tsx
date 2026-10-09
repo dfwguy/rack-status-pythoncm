@@ -44,7 +44,15 @@ import { NodeIssueHistoryDialog } from "../components/rack/NodeIssueHistoryDialo
 import { getContent } from "../content";
 import { useActiveCluster } from "../context/ActiveClusterContext";
 import { fetchPostRunNodeReport } from "../services/nodeIssuesService";
-import type { NodeInventoryEntry, NodeIssue, NodeIssueRollup, NodeIssuesResponse, RackRow } from "../types/api";
+import { fetchNodeStages } from "../services/nodeStagesService";
+import type {
+  NodeInventoryEntry,
+  NodeIssue,
+  NodeIssueRollup,
+  NodeIssuesResponse,
+  NodeStagesResponse,
+  RackRow,
+} from "../types/api";
 import type { NvisNamingSchema } from "../types/naming";
 
 const RACK_DETAIL_HELP = getContent("rackDetail");
@@ -68,6 +76,7 @@ export function RackDetailView({ rack, row, comment, physicalRf0, inventory, nam
   const [terminalNode, setTerminalNode] = useState("");
   const [issueNode, setIssueNode] = useState("");
   const [issueData, setIssueData] = useState<NodeIssuesResponse | null>(null);
+  const [stageData, setStageData] = useState<NodeStagesResponse | null>(null);
   const { activeCluster, activePlatform } = useActiveCluster();
   const traysPerRack =
     activeCluster?.geometry?.trays_per_rack || activePlatform?.geometry?.trays_per_rack || 18;
@@ -90,6 +99,32 @@ export function RackDetailView({ rack, row, comment, physicalRf0, inventory, nam
     selectionSeedRef.current = seed;
     setSelectedNodes(new Set(nodes.map((n) => n.id)));
   }, [rack, nodes]);
+
+  // Each node's own Stage 1 / Stage 2. A rack's stages come only from runs over all its nodes,
+  // so this is where a one-node run shows up. Polled like the rack table; a failure keeps the last
+  // answer rather than blanking the column.
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const data = await fetchNodeStages({ rack, logDir });
+        if (alive) setStageData(data);
+      } catch {
+        /* keep the previous answer */
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 60_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [rack, logDir]);
+
+  const nodeStages = useMemo(
+    () => (stageData ? Object.fromEntries(stageData.nodes.map((n) => [n.node, n])) : undefined),
+    [stageData],
+  );
 
   useEffect(() => {
     let alive = true;
@@ -209,6 +244,8 @@ export function RackDetailView({ rack, row, comment, physicalRf0, inventory, nam
             onOpenTerminal={(nodeId) => setTerminalNode(nodeId)}
             issueNodes={issueData?.nodes}
             onOpenIssues={(nodeId) => setIssueNode(nodeId)}
+            nodeStages={nodeStages}
+            stage2Source={stageData?.stage2_source}
           />
         </Box>
 

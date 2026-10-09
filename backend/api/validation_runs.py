@@ -83,6 +83,7 @@ from naming import _normalize_rack_id, _nvis_naming
 from node_targets import (
     _scontrol_hostnames_preserving_case,
     _validation_ct_inner,
+    launch_scope_for_target,
     validation_target_for_rack,
 )
 from paths import (
@@ -458,10 +459,12 @@ def api_run_validation_async():
     created = datetime.now(timezone.utc).isoformat()
     operator = _operator_from_request()
     val_tool, val_stage = _validation_tool_and_stage()
+    scope, scope_nodes = launch_scope_for_target(target)
     _record_validation_activity(
         val_tool,
         stage=val_stage,
-        scope="rack" if rk else "node",
+        scope=scope if rk else "node",
+        nodes=scope_nodes,
         rack=rk,
         racks=[rk] if rk else [],
         log_dir=str(log_dir),
@@ -1744,10 +1747,12 @@ def api_run_nccl_fullrack_async():
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
     operator = _operator_from_request()
+    scope, scope_nodes = launch_scope_for_target(target)
     _record_validation_activity(
         "nccl-fullrack",
         stage="stage1",
-        scope="rack",
+        scope=scope,
+        nodes=scope_nodes,
         rack=rk,
         racks=[rk],
         log_dir=str(log_dir),

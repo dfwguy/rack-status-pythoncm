@@ -67,6 +67,7 @@ def _record_validation_activity(
     operator: str = "",
     dry_run: bool = False,
     scheduler: str = "slurm",
+    nodes: list[str] | None = None,
 ) -> str:
     """Persist a validation launch in the durable activities store."""
     return validation_activities.record_activity(
@@ -81,6 +82,7 @@ def _record_validation_activity(
         dry_run=dry_run,
         scheduler=scheduler,
         activity_id=activity_id,
+        nodes=nodes,
     )
 
 

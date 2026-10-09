@@ -36,4 +36,40 @@ describe("NodeSelector", () => {
     const row = screen.getAllByText("p5-r01-ct01")[0].closest("tr")!;
     expect(within(row).getAllByText("p5-r01-ct01")).toHaveLength(2);
   });
+
+  it("shows each node's own Stage 1 and Stage 2 when the server sends them", () => {
+    const host = "sys1-gso1-p-phy-gpu19-su19";
+    render(
+      <NodeSelector
+        nodes={nodes}
+        selected={new Set()}
+        onSelectionChange={vi.fn()}
+        stage2Source="bringup:llm-pretrain-solo"
+        nodeStages={{
+          [host]: {
+            node: host,
+            rack: "U20",
+            stage1: { state: "done", job_id: "119310" },
+            stage2: { state: "fail", status: "FAIL", reason: "loss diverged" },
+          },
+        }}
+      />,
+    );
+    expect(screen.getByRole("columnheader", { name: "Stages" })).toBeTruthy();
+    const row = screen.getByText("U20-ct01").closest("tr")!;
+    expect(within(row).getByLabelText("Stage 1 — single-node NCCL: pass (job 119310)")).toBeTruthy();
+    expect(
+      within(row).getByLabelText(
+        "Stage 2 — single-node LLM (bringup:llm-pretrain-solo): fail (FAIL: loss diverged)",
+      ),
+    ).toBeTruthy();
+    // A node the server has no answer for has not started either stage.
+    const legacy = screen.getAllByText("p5-r01-ct01")[0].closest("tr")!;
+    expect(within(legacy).getByLabelText(/Stage 1 — single-node NCCL: not started/)).toBeTruthy();
+  });
+
+  it("leaves the Stages column out when the server sends no stages", () => {
+    render(<NodeSelector nodes={nodes} selected={new Set()} onSelectionChange={vi.fn()} />);
+    expect(screen.queryByRole("columnheader", { name: "Stages" })).toBeNull();
+  });
 });

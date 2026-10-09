@@ -52,7 +52,7 @@ import math
 import os
 import sqlite3
 import threading
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1061,6 +1061,8 @@ def latest_run_for_log(source_log_path: str) -> dict[str, Any] | None:
 
 def latest_successful_runs_by_rack(
     workload_kinds: Sequence[str] = ("nccl", "nemo"),
+    *,
+    accept_log: Callable[[str], bool] | None = None,
 ) -> dict[str, dict[str, dict[str, Any]]]:
     """Return durable completion evidence, grouped by workload kind and rack.
 
@@ -1069,6 +1071,10 @@ def latest_successful_runs_by_rack(
     run, rather than the newest attempt.  Attempts remain available through
     :func:`list_runs`; this query is the completion/acceptance rollup used by
     RackStatus after an ephemeral parser cache is replaced or rebuilt.
+
+    *accept_log*, given a row's log basename, says whether that row is evidence for its rack at
+    all. Rejected rows are skipped before "newest" is decided, so a later one-node smoke test
+    cannot hide an earlier full-rack acceptance pass behind itself.
     """
     kinds: list[str] = []
     for raw in workload_kinds or ():
@@ -1091,6 +1097,10 @@ def latest_successful_runs_by_rack(
             kind = str(row["workload_kind"] or "")
             rack = str(row["rack"] or "").strip()
             if not rack or kind not in grouped or rack in grouped[kind]:
+                continue
+            if accept_log is not None and not accept_log(
+                str(row["log_basename"] or os.path.basename(str(row["source_log_path"] or "")))
+            ):
                 continue
             grouped[kind][rack] = _row_to_run(row)
     return grouped

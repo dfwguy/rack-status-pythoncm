@@ -51,6 +51,7 @@ import nvis_id_templates as _nvis_ids
 import results_history
 from core import is_valid_node_hostname
 from json_db import atomic_write_json
+from naming import _full_rack_expected_nodes
 from platforms import get_platform as _get_platform
 
 _logger = logging.getLogger(__name__)
@@ -505,6 +506,50 @@ def _glob_multirack_logs(log_dir: Path) -> list[tuple[Path, int, int]]:
 
 def _rack_from_1rack_log(name: str) -> str | None:
     return _nvis_naming().rack_id_from_log_basename(name)
+
+
+def _is_full_rack_log(name: str) -> bool:
+    """Does this one-rack log speak for its whole rack?
+
+    A ``…-1Rack-<rack>-<N>N-<jobid>`` basename says how many nodes the run covered, and only a
+    run over the full rack (``RACK_FULL_RACK_NODES``, 18 on NVL72) is rack evidence. A one-node
+    Stage-1 sweep has the same shape: counting it painted Nscale NC's V20 Stage 1 done on one
+    node's result (2026-10-09), and a rack is not validated until all of its nodes ran together.
+    A basename with no node count predates the field and keeps counting, as it always has.
+    """
+    n = _nvis_ids.node_count_from_log_basename(name)
+    return n is None or n == _full_rack_expected_nodes()
+
+
+def _is_partial_rack_log(name: str) -> bool:
+    """A run over fewer nodes than a rack: evidence for each node it covered, not for the rack."""
+    n = _nvis_ids.node_count_from_log_basename(name)
+    return n is not None and 0 < n < _full_rack_expected_nodes()
+
+
+# nccl-tests prints one line per rank naming its host:
+#   "#  Rank  0 Group  0 Pid 1875886 on sys1-gso1-p-phy-gpu24-su19 device  0 [0008:06:00] NVIDIA GB300"
+_NCCL_RANK_HOST_RE = re.compile(r"^#\s+Rank\s+\d+\s+Group\s+\d+\s+Pid\s+\d+\s+on\s+(\S+)\s+device\b", re.MULTILINE)
+
+
+def _hosts_in_partial_log(path: Path) -> list[str]:
+    """The hosts a sub-rack run covered, read from the head of its log.
+
+    The basename carries the rack, not the host, so the content has to say: a NeMo job log opens
+    with ``NODELIST: <hosts>`` (the batch script echoes it), and an aggregated nccl-tests log
+    names every rank's host. Read through the connection, like the multirack rack scan.
+    """
+    max_b = max(8192, _env_int("RACK_PARTIAL_LOG_HOST_SCAN_BYTES", 262144))
+    text, meta = host_exec.read_text(path, head_bytes=max_b, tail_bytes=0, whole_bytes=max_b)
+    if meta.get("read_error"):
+        return []
+    hosts: list[str] = []
+    nodem = _NODELIST_LINE_RE.search(text)
+    if nodem:
+        hosts = [h.strip() for h in nodem.group(1).split(",") if h.strip()]
+    if not hosts or any("[" in h for h in hosts):
+        hosts = list(dict.fromkeys(_NCCL_RANK_HOST_RE.findall(text)))
+    return sorted({h for h in hosts if is_valid_node_hostname(h)})
 
 
 def _jobid_from_log_name(name: str) -> str | None:
@@ -1319,7 +1364,9 @@ def _durable_completed_stage_logs_by_rack() -> dict[str, dict[str, dict[str, Any
     the durable source of successful NCCL/NeMo evidence.
     """
     try:
-        completed = results_history.latest_successful_runs_by_rack(("nccl", "nemo"))
+        completed = results_history.latest_successful_runs_by_rack(
+            ("nccl", "nemo"), accept_log=_is_full_rack_log
+        )
     except Exception:  # status still renders while history storage is unhealthy
         _logger.warning("could not load durable validation completion evidence", exc_info=True)
         return {}
@@ -1786,6 +1833,7 @@ def _archive_completed_native_probe(
 
 class NativeRackTableState:
     __slots__ = (
+        "by_node_stage_log",
         "by_rack_log",
         "by_rack_stage_log",
         "ct_by_rack",
@@ -1835,6 +1883,9 @@ class NativeRackTableState:
         # by_rack_log alone keeps only the newest log of any kind, which silently discards a
         # passing NCCL result as soon as a NeMo run for the same rack finishes after it.
         self.by_rack_stage_log: dict[str, dict[str, dict[str, Any]]] = {}
+        # host -> stage kind -> newest probe record of a sub-rack run that covered the host.
+        # A run over fewer nodes than the rack is that node's evidence, never the rack's.
+        self.by_node_stage_log: dict[str, dict[str, dict[str, Any]]] = {}
         self.ds_thread: threading.Thread | None = None
         self.sinfo_thread: threading.Thread | None = None
         self.log_thread: threading.Thread | None = None
@@ -1974,20 +2025,35 @@ class NativeRackTableState:
                     disk[keyp] = {"mtime_ns": mtime_ns, "size": size, "probe": rec}
                     dirty = True
                 rec_d = rec if isinstance(rec, dict) else {}
+                full_rack = _is_full_rack_log(p.name)
                 rk = _rack_from_1rack_log(p.name)
                 m_this = mtime_ns / 1_000_000_000
                 kind = _stage_kind_of_log_bn(p.name)
+                hosts: list[str] = []
+                if kind and _is_partial_rack_log(p.name):
+                    cached = disk[keyp].get("hosts") if isinstance(disk.get(keyp), dict) else None
+                    if isinstance(cached, list):
+                        hosts = [str(h) for h in cached]
+                    else:
+                        hosts = _hosts_in_partial_log(p)
+                        disk[keyp]["hosts"] = hosts
+                        dirty = True
                 _archive_completed_native_probe(
                     p,
                     mtime_ns=mtime_ns,
                     size=size,
-                    rack=rk,
+                    rack=rk if full_rack else None,
                     kind=kind,
                     probe=rec_d,
                 )
                 with self.lock:
                     self.per_path_probe[keyp] = rec_d
-                    if rk:
+                    for host in hosts:
+                        nbucket = self.by_node_stage_log.setdefault(host, {})
+                        prev_n = nbucket.get(kind)
+                        if prev_n is None or m_this >= float(prev_n.get("_mtime") or 0.0):
+                            nbucket[kind] = {**rec_d, "_path": str(p), "_mtime": m_this, "_rack": rk or ""}
+                    if rk and full_rack:
                         prev = self.by_rack_log.get(rk)
                         replace = prev is None
                         if not replace and isinstance(prev, dict):
@@ -2471,6 +2537,30 @@ def live_table_snapshot_for_log_dir(log_dir: Path) -> dict[str, Any] | None:
         "footnotes": footnotes,
         "legend": legend,
     }
+
+
+def node_inventory_for_log_dir(log_dir: Path) -> list[dict[str, Any]] | None:
+    """The node inventory ``/api/status`` serves (``id`` = host, ``rack``), or ``None`` before
+    the native workers have run for *log_dir*."""
+    key = native_state_key(log_dir)
+    with _states_lock:
+        st = _states.get(key)
+    if st is None:
+        return None
+    return st.node_inventory_snapshot().get("nodes")
+
+
+def node_stage_logs_for_log_dir(log_dir: Path) -> dict[str, dict[str, dict[str, Any]]] | None:
+    """Per-node stage evidence from sub-rack runs: ``host -> kind -> probe``, or ``None`` before
+    the native workers have run for *log_dir*. The rack table never reads this; see
+    ``_is_full_rack_log``."""
+    key = native_state_key(log_dir)
+    with _states_lock:
+        st = _states.get(key)
+    if st is None:
+        return None
+    with st.lock:
+        return {h: {k: dict(v) for k, v in kinds.items()} for h, kinds in st.by_node_stage_log.items()}
 
 
 def _get_state(key: str, log_dir: Path) -> NativeRackTableState:

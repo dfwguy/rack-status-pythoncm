@@ -607,7 +607,7 @@ Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **cas
 
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
-| `rack:list` | read | instance | `GET dashboard.api_status` |
+| `rack:list` | read | instance | `GET dashboard.api_status`<br>`GET node_stages.api_node_stages` |
 | `rack:uptime` | mutate | instance | `POST rack_power.api_rack_uptime` |
 
 ## `rack.bmc`

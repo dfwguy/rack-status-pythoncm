@@ -23,7 +23,8 @@ import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import { Tag, Text, Button } from "@nvidia/foundations-react-core";
 import { Terminal, TrendingUp } from "lucide-react";
-import type { NodeIssueRollup } from "../../types/api";
+import type { NodeIssueRollup, NodeStageInfo, NodeStagesRow } from "../../types/api";
+import { stageStateColor, stageStateLabel } from "../../lib/validationStages";
 
 /** Build https URL for BMC / RedFish UI; bracket bare IPv6 literals only. */
 function redfishHttpsHref(host: string): string | null {
@@ -55,6 +56,50 @@ interface NodeSelectorProps {
   onOpenTerminal?: (nodeId: string) => void;
   issueNodes?: Record<string, NodeIssueRollup>;
   onOpenIssues?: (nodeId: string) => void;
+  /** Per-node Stage 1 / Stage 2 (``/api/node-stages``), keyed by hostname. */
+  nodeStages?: Record<string, NodeStagesRow>;
+  /** Where Stage 2 comes from, e.g. ``bringup:llm-pretrain-solo``; shown on hover. */
+  stage2Source?: string;
+}
+
+/** A node's two stages: single-node NCCL (Stage 1) and single-node LLM training (Stage 2). */
+export function NodeStageTags({ stages, stage2Source }: { stages?: NodeStagesRow; stage2Source?: string }) {
+  const cells: { short: string; label: string; info?: NodeStageInfo; detail: (i: NodeStageInfo) => string }[] = [
+    {
+      short: "S1 NCCL",
+      label: "Stage 1 — single-node NCCL",
+      info: stages?.stage1,
+      detail: (i) => (i.job_id ? ` (job ${i.job_id})` : ""),
+    },
+    {
+      short: "S2 LLM",
+      label: `Stage 2 — single-node LLM${stage2Source ? ` (${stage2Source})` : ""}`,
+      info: stages?.stage2,
+      detail: (i) => (i.status ? ` (${i.status}${i.reason ? `: ${i.reason}` : ""})` : ""),
+    },
+  ];
+  return (
+    <Box sx={{ display: "flex", gap: 0.5 }}>
+      {cells.map((c) => {
+        const state = c.info?.state ?? "pending";
+        const known = state !== "unknown";
+        return (
+          <Tooltip
+            key={c.short}
+            title={`${c.label}: ${known ? stageStateLabel(state) : "loading"}${c.info && known ? c.detail(c.info) : ""}`}
+            enterDelay={350}
+            arrow
+          >
+            <span style={{ display: "inline-flex", cursor: "default" }}>
+              <Tag color={known ? stageStateColor(state) : "gray"} kind="outline" readOnly density="compact">
+                {c.short}
+              </Tag>
+            </span>
+          </Tooltip>
+        );
+      })}
+    </Box>
+  );
 }
 
 function statusLabel(status: NodeInfo["status"]) {
@@ -96,7 +141,16 @@ function RedfishIpCell({ ip }: { ip?: string }) {
   );
 }
 
-export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTerminal, issueNodes, onOpenIssues }: NodeSelectorProps) {
+export function NodeSelector({
+  nodes,
+  selected,
+  onSelectionChange,
+  onOpenTerminal,
+  issueNodes,
+  onOpenIssues,
+  nodeStages,
+  stage2Source,
+}: NodeSelectorProps) {
   const allSelected = nodes.length > 0 && selected.size === nodes.length;
   const someSelected = selected.size > 0 && selected.size < nodes.length;
 
@@ -157,6 +211,7 @@ export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTermina
               <TableCell>Node</TableCell>
               <TableCell>Hostname</TableCell>
               <TableCell>Status</TableCell>
+              {nodeStages && <TableCell>Stages</TableCell>}
               {(issueNodes || onOpenIssues) && <TableCell>Issue trend</TableCell>}
               <TableCell>RedFish IP</TableCell>
               {onOpenTerminal && <TableCell align="center">Actions</TableCell>}
@@ -197,6 +252,11 @@ export function NodeSelector({ nodes, selected, onSelectionChange, onOpenTermina
                     {statusLabel(node.status)}
                   </Tag>
                 </TableCell>
+                {nodeStages && (
+                  <TableCell>
+                    <NodeStageTags stages={nodeStages[node.hostname ?? node.id]} stage2Source={stage2Source} />
+                  </TableCell>
+                )}
                 {(issueNodes || onOpenIssues) && (
                   <TableCell onClick={(e) => e.stopPropagation()}>
                     {issueNodes?.[node.id] && (

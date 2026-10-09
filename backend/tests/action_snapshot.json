@@ -912,6 +912,12 @@
   "variant": "sync"
  },
  {
+  "endpoint": "node_stages.api_node_stages",
+  "method": "GET",
+  "action": "rack:list",
+  "variant": "sync"
+ },
+ {
   "endpoint": "nvftp_sync.api_nvftp_sync_run",
   "method": "POST",
   "action": "nvftp:sync",

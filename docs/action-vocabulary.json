@@ -1959,7 +1959,8 @@
           "kind": "read",
           "scope": "instance",
           "routes": [
-            "GET dashboard.api_status"
+            "GET dashboard.api_status",
+            "GET node_stages.api_node_stages"
           ]
         },
         {

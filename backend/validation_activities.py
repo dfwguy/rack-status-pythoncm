@@ -966,6 +966,8 @@ def _upgrade_legacy_record(rec: dict[str, Any], *, activity_id: str) -> dict[str
         "corrective_actions": _sanitize_corrective_actions(rec.get("corrective_actions")),
         "source": str(rec.get("source") or "ui"),
         "tasks": list(rec.get("tasks") or []),
+        # The hosts a scope="node" run covers (empty for rack and multirack runs).
+        "nodes": _sanitize_racks(rec.get("nodes") or []),
     }
     return out
 
@@ -1114,8 +1116,13 @@ def record_activity(
     source: str = "ui",
     activity_id: str | None = None,
     tasks: list[dict[str, Any]] | None = None,
+    nodes: list[str] | None = None,
 ) -> str:
-    """Persist a new validation activity. Returns ``activity_id`` (UUID)."""
+    """Persist a new validation activity. Returns ``activity_id`` (UUID).
+
+    *nodes* names the hosts a ``scope="node"`` run covers: its rack is only where they sit, and
+    the per-node stage view needs to know which hosts the live job speaks for.
+    """
     aid = (activity_id or "").strip() or str(uuid.uuid4())
     tool_n = _normalize_tool(tool)
     racks_s = _sanitize_racks(racks or ([rack] if rack else []))
@@ -1146,6 +1153,7 @@ def record_activity(
             "stderr_tail": "",
             "source": source,
             "tasks": tasks or [],
+            "nodes": _sanitize_racks(nodes or []),
         },
         activity_id=aid,
     )
@@ -1273,8 +1281,10 @@ def live_stage_jobs_by_rack(*, limit: int = 200) -> dict[str, dict[str, str]]:
     console can overlay that truth.
     """
     out: dict[str, dict[str, str]] = {}
-    for rec in list_activities(limit=max(1, int(limit))):
-        if not isinstance(rec, dict):
+    for rec, kind, ref in _open_stage_tasks(limit):
+        # A run over some of a rack's nodes is not that rack's validation: painting the rack
+        # "ongoing" for it is how a one-node sweep looked like rack Stage 1 in the table.
+        if str(rec.get("scope") or "").strip().lower() == "node":
             continue
         racks: list[str] = []
         raw_racks = rec.get("racks")
@@ -1286,7 +1296,35 @@ def live_stage_jobs_by_rack(*, limit: int = 200) -> dict[str, dict[str, str]]:
             rk = str(rec.get("rack") or "").strip()
             if rk:
                 racks = [rk]
-        if not racks:
+        for rack in racks:
+            bucket = out.setdefault(rack, {})
+            # list_activities is newest-first; keep the first jid per stage.
+            if kind not in bucket:
+                bucket[kind] = ref
+    return out
+
+
+def live_stage_jobs_by_node(*, limit: int = 400) -> dict[str, dict[str, str]]:
+    """Map host → ``{"nccl": jid, "nemo": jid}`` for open ``scope="node"`` runs still in flight.
+
+    The node-level counterpart of :func:`live_stage_jobs_by_rack`: a single-node Stage-1 run
+    writes its result log only when the job ends, so without this a node under test reads as
+    not run for the whole of its run.
+    """
+    out: dict[str, dict[str, str]] = {}
+    for rec, kind, ref in _open_stage_tasks(limit):
+        if str(rec.get("scope") or "").strip().lower() != "node":
+            continue
+        for host in rec.get("nodes") or []:
+            if isinstance(host, str) and host.strip():
+                out.setdefault(host.strip(), {}).setdefault(kind, ref)
+    return out
+
+
+def _open_stage_tasks(limit: int):
+    """``(activity, stage kind, scheduler ref)`` for every task still in flight, newest first."""
+    for rec in list_activities(limit=max(1, int(limit))):
+        if not isinstance(rec, dict):
             continue
         act_wp = str(rec.get("work_phase") or "").strip().lower()
         for task in rec.get("tasks") or []:
@@ -1310,14 +1348,8 @@ def live_stage_jobs_by_rack(*, limit: int = 200) -> dict[str, dict[str, str]]:
                 ):
                     continue
             kind = _task_stage_kind(rec, task)
-            if not kind:
-                continue
-            for rack in racks:
-                bucket = out.setdefault(rack, {})
-                # list_activities is newest-first; keep the first jid per stage.
-                if kind not in bucket:
-                    bucket[kind] = ref
-    return out
+            if kind:
+                yield rec, kind, ref
 
 
 def rollup_work_phase(tasks: list[dict] | None) -> str:

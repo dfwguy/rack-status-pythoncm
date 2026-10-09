@@ -30,7 +30,7 @@ import host_exec
 from config_env import _eget, _env_int
 from core import is_valid_node_hostname
 from core import slurm_job_base_id as _slurm_job_base_id
-from naming import _nvis_naming
+from naming import _full_rack_expected_nodes, _nvis_naming
 from platforms import get_platform as _get_platform
 from slurm_query import (
     _all_slurm_nodenames,
@@ -111,6 +111,24 @@ def _validation_ct_inner() -> str:
     if not s or not _CT_RANGE_INNER_RE.match(s):
         return "01-18"
     return s
+
+
+def launch_scope_for_target(target: str) -> tuple[str, list[str]]:
+    """``("rack", [])`` when *target* is a whole rack, ``("node", hosts)`` when it is fewer nodes.
+
+    A rack is validated only by a run over all of its nodes (``RACK_FULL_RACK_NODES``); a run
+    over some of them is evidence for those nodes. The launch records which one it is, so the
+    rack table and the per-node view each read only their own runs. A target that does not
+    expand to plain hostnames (a template the site resolves later) stays a rack launch.
+    """
+    from universal_parser import expand_nodelist
+
+    hosts = [h for h in expand_nodelist((target or "").strip()) if h]
+    if not hosts or any("[" in h or not is_valid_node_hostname(h) for h in hosts):
+        return "rack", []
+    if len(hosts) >= _full_rack_expected_nodes():
+        return "rack", []
+    return "node", hosts
 
 
 def validation_target_for_rack(rack: str, override: str | None) -> str:

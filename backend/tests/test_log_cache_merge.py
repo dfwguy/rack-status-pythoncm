@@ -196,7 +196,7 @@ def test_incomplete_native_probe_is_not_archived(monkeypatch, tmp_path, kind, pr
 
 
 def test_worker_archives_a_fingerprint_validated_cache_hit(monkeypatch, tmp_path):
-    log = tmp_path / "cmods-NEMO-1Rack-r01-16N-43.txt"
+    log = tmp_path / "cmods-NEMO-1Rack-r01-18N-43.txt"
     cached = {"jid": "43", "nccl_ok": False, "llm_ok": True}
     monkeypatch.setattr(
         native_status,

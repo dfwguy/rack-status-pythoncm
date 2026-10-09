@@ -12,6 +12,40 @@
 /** Per-stage validation state. A rack is individually validated once stage 1 & 2 are both "done". */
 export type StageState = "done" | "fail" | "ongoing" | "pending";
 
+/**
+ * One node's state for one stage (``/api/node-stages``). ``unknown`` only for Stage 2 while the
+ * server is still loading the bring-up verdicts.
+ */
+export interface NodeStageInfo {
+  state: StageState | "unknown";
+  /** Slurm job that decided it (Stage 1). */
+  job_id?: string;
+  /** Result log that decided it (Stage 1). */
+  log?: string;
+  /** Bring-up verdict word, e.g. ``DONE`` / ``FAIL`` (Stage 2). */
+  status?: string;
+  /** Bring-up's reason for a failure (Stage 2). */
+  reason?: string;
+}
+
+/** Stage 1 (single-node NCCL) and Stage 2 (single-node LLM) for one node. */
+export interface NodeStagesRow {
+  node: string;
+  rack: string;
+  stage1: NodeStageInfo;
+  stage2: NodeStageInfo;
+}
+
+export interface NodeStagesResponse {
+  ok: boolean;
+  nodes: NodeStagesRow[];
+  /** Where a node's Stage 2 comes from, e.g. ``bringup:llm-pretrain-solo``. */
+  stage2_source: string;
+  stage2_loading: boolean;
+  stage2_error?: string;
+  error?: string;
+}
+
 export interface RackRow {
   rack: string;
   nemo: string;

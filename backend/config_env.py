@@ -429,6 +429,24 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     },
     {
         "section": "jobs_cluster",
+        "key": "RACK_FULL_RACK_NODES",
+        "label": "Nodes per full rack",
+        "description": (
+            "Node count a run must cover to validate a rack (default 18, NVL72). A Stage 1/2 log over "
+            "fewer nodes counts for each node it ran on, never for the rack."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_NODE_STAGE2_BRINGUP_JOB",
+        "label": "Node Stage 2 bring-up job",
+        "description": (
+            "Bring-up job whose verdict is a node's Stage 2 (single-node LLM training). Default "
+            "llm-pretrain-solo; shown per node on the rack page."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
         "key": "RACK_VALIDATION_TIMEOUT",
         "label": "Validation timeout (seconds)",
         "description": "Max wall time for synchronous / async singlerack validation.",
