@@ -2553,10 +2553,6 @@ def live_table_snapshot_for_log_dir(log_dir: Path) -> dict[str, Any] | None:
     }
 
 
-
-
-
-
 def _get_state(key: str, log_dir: Path) -> NativeRackTableState:
     with _states_lock:
         st = _states.get(key)

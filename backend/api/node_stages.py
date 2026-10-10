@@ -37,7 +37,10 @@ def api_node_stages():
     large fleet) instead of answering 503 / ``stage2: unknown`` -- for scripts, not pages.
     """
     # The same warm-up /api/status does: after a restart nothing else may have asked yet.
-    from api.dashboard import _ensure_rack_status_background_thread, _start_cmsh_rack_list_warm_thread
+    from api.dashboard import (
+        _ensure_rack_status_background_thread,
+        _start_cmsh_rack_list_warm_thread,
+    )
 
     _start_cmsh_rack_list_warm_thread()
     _ensure_rack_status_background_thread()

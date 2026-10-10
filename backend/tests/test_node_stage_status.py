@@ -263,17 +263,18 @@ def test_the_snapshot_carries_each_nodes_evidence_and_status_does_not_serve_it(m
 
 
 def test_node_stages_route_reads_the_snapshot(monkeypatch):
+    from types import SimpleNamespace
+
     import app as app_module
     from api import node_stages as route
 
-    class _Snap:
-        payload = {
-            "nodes": [{"id": HOST, "rack": "V20"}, {"id": "sys1-gso1-p-phy-gpu20-su23", "rack": "V20"},
-                      {"id": "other", "rack": "Q7"}],
-            "node_stage_logs": {HOST: {"nccl": {"nccl_ok": True, "jid": 119310}}},
-        }
+    snap = SimpleNamespace(payload={
+        "nodes": [{"id": HOST, "rack": "V20"}, {"id": "sys1-gso1-p-phy-gpu20-su23", "rack": "V20"},
+                  {"id": "other", "rack": "Q7"}],
+        "node_stage_logs": {HOST: {"nccl": {"nccl_ok": True, "jid": 119310}}},
+    })
 
-    monkeypatch.setattr(route, "get_cluster_snapshot", lambda _d, wait=False: _Snap())
+    monkeypatch.setattr(route, "get_cluster_snapshot", lambda _d, wait=False: snap)
     monkeypatch.setattr(native_status, "load_squeue_jobs_map", lambda: (set(), {}))
     monkeypatch.setattr(node_stages._bringup, "get", lambda wait=False: {})
     monkeypatch.setattr("api.dashboard._ensure_rack_status_background_thread", lambda: None)
@@ -303,4 +304,3 @@ def test_node_stages_route_says_retry_while_the_inventory_loads(monkeypatch):
     if r.status_code in (401, 403):
         pytest.skip("route requires a session in this app configuration")
     assert r.status_code == 503 and r.headers.get("Retry-After") == "30"
-
