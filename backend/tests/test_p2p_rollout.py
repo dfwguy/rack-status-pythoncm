@@ -167,12 +167,24 @@ class TestTheCoordinator:
         assert state["nodes"][RACK[0]]["state"] == "deferred"
         fleet.failing.clear()  # the operator fixed the node
         coord.apply_commands(plan, state, [{"seq": 1, "kind": "retry", "nodes": []}])
+        assert state["nodes"][RACK[0]]["state"] == "pending"
+        coord.tick(plan, PACING, state)  # released through the normal path, with a new generation
         assert state["nodes"][RACK[0]]["state"] == "released" and state["nodes"][RACK[0]]["attempts"] == 2
         assert json.loads((tmp_path / f"{RACK[0]}.json").read_text())["generation"] == 2
         assert _drive(coord, plan, PACING, state, clock)
         assert state["nodes"][RACK[0]]["state"] == "ready"
         coord.apply_commands(plan, state, [{"seq": 1, "kind": "retry", "nodes": []}])  # applied once only
         assert state["nodes"][RACK[0]]["attempts"] == 2
+
+    def test_retrying_a_node_that_still_has_no_agent_defers_it_at_once(self, tmp_path):
+        clock, fleet = Clock(), Fleet(tmp_path, dead=RACK[:1])
+        plan, coord = _plan(tmp_path, {"Q5": RACK[:2]}), _coord(tmp_path, fleet, clock)
+        state = pr.new_state(plan, clock())
+        assert _drive(coord, plan, PACING, state, clock)
+        coord.apply_commands(plan, state, [{"seq": 1, "kind": "retry", "nodes": [RACK[0]]}])
+        assert coord.tick(plan, PACING, state) is True  # one tick, not a node budget
+        assert state["nodes"][RACK[0]]["reason"] == "no_agent"
+        assert not (tmp_path / f"{RACK[0]}.json").exists()
 
     def test_pacing_changes_apply_on_the_next_tick(self, tmp_path):
         clock, fleet = Clock(), Fleet(tmp_path, delay=1)

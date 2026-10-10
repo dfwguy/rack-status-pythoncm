@@ -247,10 +247,14 @@ class Coordinator:
                            if (n in wanted or (not wanted and nr["state"] == "deferred"))
                            and nr["state"] in ("deferred", "released", "downloading")]
                 for node in targets:
-                    rack = state["racks"][state["nodes"][node]["rack"]]
+                    # Back to pending, not straight to a document: the next tick releases it through
+                    # the same liveness check as a first release, so a node that still has no agent
+                    # is deferred again at once instead of waiting out a whole node budget.
+                    nr = state["nodes"][node]
+                    nr.update(state="pending", reason="")
+                    rack = state["racks"][nr["rack"]]
                     if rack["state"] == "done":
-                        rack["state"] = "active"
-                    self._release(plan, state, node)
+                        rack["state"] = "waiting"
                 self._log(state, f"retry seq={seq} nodes={len(targets)}")
             state["commands_done"] = seq
 
