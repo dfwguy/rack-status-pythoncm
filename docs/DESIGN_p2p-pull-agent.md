@@ -243,3 +243,40 @@ and to audit the results afterwards.
 `sudo systemctl stop nvis-p2p-agent-proto`), the agent file under `/opt/containers/.nvis-p2p/agent/`,
 the handed-over metrics file, and the node's desired document at generation 6. Every image it names
 is now installed on that node, so the agent sits idle.
+
+## P1: one rack on Nscale NC
+
+**Run 2026-10-10** on rack **Q5** (SU22, 18 nodes). The image was `nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh`
+(42.5 GB, pin `2acf607c…`), which all 18 nodes were missing. Two scripts were added:
+
+- `deploy/p2p/scripts/install-nvis-p2p-agent-node.sh` is the SSH bootstrap: it installs the agent on
+  the 18 nodes as a transient unit in **10 s**, with one result line per node and no batch abort on
+  a bad node.
+- `deploy/p2p/scripts/nvis-p2p-coordinator.py` is the coordinator: rack-staged rungs (`1, 50%, 100%`
+  → 1, 9, 18 nodes), desired-document writes, and reads from VictoriaMetrics. It ran as a plain
+  process on the appserver and opened no SSH session.
+
+| Rung | Nodes | Time to ready per node (from release) |
+|---|---|---|
+| 0 (seed) | 1 | 3 min 45 s |
+| 1 (50 %) | 8 | 3 min 15 s – 5 min 30 s |
+| 2 (100 %) | 9 | 3 min 15 s – 5 min 30 s |
+
+**18 of 18 ready, 0 deferred, 14 min 46 s for 765 GB.** A read-only audit afterwards found every
+node holding the file at the pinned size with a receipt for the pinned sha256, so the metrics agreed
+with the disks — the P1 exit criterion.
+
+Found on the way:
+
+- **PromQL escaping.** `re.escape` produces `\-`, which is not a legal escape in a PromQL string;
+  VictoriaMetrics answered 422. Node names are now validated and only `.` is escaped.
+- **A failed metrics read must stop the tick, not decide on it.** An empty observation would have
+  read as "no live agent" and deferred the whole rack. The coordinator now logs the error and skips
+  the tick; per-node budgets keep running on the clock.
+- **The rack's Slurm state changed between plan and run.** Three Q5 nodes picked up jobs in that
+  window. Downloads run at `ionice -c2 -n7 nice 10`, onto the `/opt/containers` NVMe, over the
+  management NIC rather than the RoCE rails, so they ran beside the jobs. A production coordinator
+  should still read node allocation and hold or pace allocated nodes as a policy choice.
+
+**Left in place:** transient `nvis-p2p-agent` units on Q5 (gone on reboot), their desired documents
+at generation 1, and the run record under `~/p2p-coordinator-runs/` on the appserver.
