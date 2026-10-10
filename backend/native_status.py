@@ -53,6 +53,7 @@ from core import is_valid_node_hostname
 from json_db import atomic_write_json
 from naming import _full_rack_expected_nodes
 from platforms import get_platform as _get_platform
+from universal_parser import expand_nodelist
 
 _logger = logging.getLogger(__name__)
 
@@ -546,7 +547,7 @@ def _hosts_in_partial_log(path: Path) -> list[str]:
     hosts: list[str] = []
     nodem = _NODELIST_LINE_RE.search(text)
     if nodem:
-        hosts = [h.strip() for h in nodem.group(1).split(",") if h.strip()]
+        hosts = expand_nodelist(nodem.group(1).strip())
     if not hosts or any("[" in h for h in hosts):
         hosts = list(dict.fromkeys(_NCCL_RANK_HOST_RE.findall(text)))
     return sorted({h for h in hosts if is_valid_node_hostname(h)})
@@ -1005,8 +1006,15 @@ def collect_sinfo_nodes_and_shapes() -> tuple[dict[str, str], dict[str, dict[str
 
 
 def sinfo_counts_for_nodes(nodes: dict[str, str]) -> dict[tuple[str, str], int]:
-    """Project real inventory onto the legacy rack table; unmatched nodes remain in inventory."""
+    """Project real inventory onto the legacy rack table; unmatched nodes remain in inventory.
+
+    Only where the hostname encodes the rack (``direct``). In ``translate`` and ``pool`` parsing a
+    name against the tray template invents racks, so this returns nothing and the callers take the
+    per-rack counts from the node inventory instead (see ``counts_from_node_inventory``).
+    """
     counts: dict[tuple[str, str], int] = {}
+    if not _hostname_encodes_rack():
+        return counts
     naming = _nvis_naming()
     for host, state in nodes.items():
         parsed = naming.sinfo_rack_from_host(host.lower().split(".")[0])
@@ -2683,12 +2691,18 @@ class MultirackTableState:
                 else:
                     rec = dict(rec)
                     need_save = False
-                racks_norm = _normalize_physical_racks_probe(rec.get("physical_racks"))
-                if not racks_norm:
-                    racks_norm = extract_physical_rack_ids_from_multirack_log(p)
-                prev_r = rec.get("physical_racks")
-                if racks_norm and prev_r != racks_norm:
-                    rec["physical_racks"] = racks_norm
+                if _hostname_encodes_rack():
+                    racks_norm = _normalize_physical_racks_probe(rec.get("physical_racks"))
+                    if not racks_norm:
+                        racks_norm = extract_physical_rack_ids_from_multirack_log(p)
+                    prev_r = rec.get("physical_racks")
+                    if racks_norm and prev_r != racks_norm:
+                        rec["physical_racks"] = racks_norm
+                        need_save = True
+                elif not isinstance(rec.get("hosts"), list):
+                    # The hostname names no rack here; keep the hosts the run covered and let
+                    # build_rows place them through the node inventory.
+                    rec["hosts"] = _hosts_in_partial_log(p)
                     need_save = True
                 if need_save:
                     disk[keyp] = {"mtime_ns": mtime_ns, "size": size, "probe": rec}
@@ -2729,13 +2743,28 @@ class MultirackTableState:
         self,
         rack_label_fn: Callable[[str], str],
         rack_ids_fn: Callable[[str], list[str]],
+        inventory: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, str]]:
+        """One row per multirack log.
+
+        *inventory* is the dashboard's node inventory (``build_node_inventory``), which already
+        placed every node by the cluster's rack-mapping mode. Where the hostname names no rack it
+        is the only way to say which racks a run covered, and its per-rack counts stand in for the
+        hostname-parsed ``sinfo`` tally, exactly as the rack table does.
+        """
         running, job_times = load_squeue_jobs_map()
         with self.lock:
             paths = list(self.log_paths)
             sct = dict(self.sinfo_counts)
             probe_map = {k: dict(v) for k, v in self.per_path_probe.items()}
             sinfo_done = self.sinfo_done
+        parse_hostname = _hostname_encodes_rack()
+        rack_of_host: dict[str, str] = {}
+        if inventory is not None:
+            rack_of_host = {str(n["id"]).casefold(): str(n["rack"]) for n in inventory if n.get("rack")}
+            if not sct:
+                sct = counts_from_node_inventory(inventory)
+                sinfo_done = True
         want: set[str] = set()
         for p, _mtime_ns, _size in paths:
             # Paths are PurePosixPath (exec-host) — never .resolve() (AttributeError → HTML 500).
@@ -2767,7 +2796,13 @@ class MultirackTableState:
                 nemo = "done"
             else:
                 nemo = "fail"
-            racks_from_log = _normalize_physical_racks_probe(probe.get("physical_racks"))
+            if parse_hostname:
+                racks_from_log = _normalize_physical_racks_probe(probe.get("physical_racks"))
+            else:
+                hosts = probe.get("hosts") if isinstance(probe.get("hosts"), list) else []
+                placed = {rack_of_host[h.casefold()] for h in hosts
+                          if isinstance(h, str) and h.casefold() in rack_of_host}
+                racks_from_log = sorted(placed, key=_natural_key)
             rack_ids_sinfo = racks_from_log if racks_from_log else list(rack_ids_fn(bn))
             rack_disp = _multirack_rack_display_label(bn, racks_from_log, rack_label_fn)
             siv = format_multirack_sinfo_cell(rack_ids_sinfo, sct, sinfo_done)
@@ -2843,6 +2878,16 @@ def worker_snapshot_for_multirack_log_dir(log_dir: Path) -> dict[str, Any] | Non
     return _multirack_worker_snapshot(st)
 
 
+def _dashboard_node_inventory(log_dir: Path) -> list[dict[str, Any]] | None:
+    """The rack table's node inventory for *log_dir*, or None before its workers have run."""
+    with _states_lock:
+        st = _states.get(native_state_key(log_dir))
+    if st is None:
+        return None
+    nodes = st.node_inventory_snapshot().get("nodes")
+    return nodes if isinstance(nodes, list) else None
+
+
 def build_multirack_status(
     log_dir: Path,
     probe_fn: Callable[[Path], dict[str, object] | None],
@@ -2854,7 +2899,7 @@ def build_multirack_status(
     st = _get_multirack_state(key, log_dir)
     st.refresh_paths_blocking()
     st.schedule_workers(probe_fn)
-    rows = st.build_rows(rack_label_fn, rack_ids_fn)
+    rows = st.build_rows(rack_label_fn, rack_ids_fn, _dashboard_node_inventory(log_dir))
     return {
         "ok": True,
         "log_dir": str(_host_resolve(log_dir)),

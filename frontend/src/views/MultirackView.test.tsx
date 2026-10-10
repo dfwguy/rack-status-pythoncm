@@ -584,6 +584,27 @@ describe("MultirackView rack filters", () => {
     await waitFor(() => expect(visibleRacks()).not.toContain("ink50-dh01-e04"));
   });
 
+  it("judges a translate cluster's racks by their placed nodes, not the up/down sinfo tally", async () => {
+    // Nscale NC: hostnames name no rack, the row's sinfo cell is BCM's "up=18" and ct_down_unk is "-".
+    const ncNodes = (rackId: string, first: number, drained = 0) =>
+      Array.from({ length: 18 }, (_, i) => ({
+        id: `sys1-gso1-p-phy-gpu${first + i}-su19`, rack: rackId, status: "up", ip: "",
+        scheduler_state: i < drained ? "drain" : "idle",
+      }));
+    const data = {
+      ok: true,
+      rows: [
+        rack("ink50-dh01-d01", "done", { sinfo: "up=18" }),
+        rack("ink50-dh01-d02", "done", { sinfo: "up=18" }),
+      ],
+      nodes: [...ncNodes("ink50-dh01-d01", 19), ...ncNodes("ink50-dh01-d02", 37, 2)],
+    } as unknown as RackStatusResponse;
+    render(<MultirackView data={data} logDir="/logs" />);
+    fireEvent.click(screen.getByLabelText("Eligible only"));
+    await waitFor(() => expect(visibleRacks()).toEqual(["ink50-dh01-d01"]));
+    expect(screen.getByText("1 eligible")).toBeInTheDocument();
+  });
+
   it("filters combine rather than replace each other", async () => {
     renderView();
     fireEvent.change(screen.getByPlaceholderText("Filter by rack id…"), { target: { value: "e0" } });

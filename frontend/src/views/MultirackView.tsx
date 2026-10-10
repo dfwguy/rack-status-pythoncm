@@ -57,21 +57,11 @@ import {
   type ValidationPresetRequest,
 } from "../lib/validationPresets";
 import { apiFetch } from "../lib/apiFetch";
+import { inventoryByRack, multirackEligibility } from "../lib/multirackEligibility";
 
 interface MultirackViewProps {
   data: RackStatusResponse | null;
   logDir: string;
-}
-
-function isRackEligible(row: RackRow): { eligible: boolean; reason: string } {
-  if (row.nemo !== "done") return { eligible: false, reason: "need validation done" };
-  const sinfoStates = row.sinfo.split(",").map((s) => s.trim().split("=")[0].toLowerCase()).filter(Boolean);
-  if (sinfoStates.length === 0) return { eligible: false, reason: "no sinfo data" };
-  if (sinfoStates.some((s) => s !== "idle" && s !== "alloc" && s !== "allocated")) {
-    return { eligible: false, reason: `sinfo ${row.sinfo}` };
-  }
-  if (row.ct_down_unk.includes("DN:")) return { eligible: false, reason: "has DN nodes" };
-  return { eligible: true, reason: "" };
 }
 
 type TagColor = "green" | "red" | "yellow" | "blue" | "gray";
@@ -326,11 +316,12 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
       }
       return map;
     }
+    const byRack = inventoryByRack(data?.nodes);
     for (const row of rows) {
-      map.set(row.rack, isRackEligible(row));
+      map.set(row.rack, multirackEligibility(row, byRack));
     }
     return map;
-  }, [rows, campaign]);
+  }, [rows, campaign, data?.nodes]);
 
   const eligibleCount = useMemo(() => {
     let count = 0;
