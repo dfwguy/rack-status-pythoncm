@@ -36,6 +36,7 @@ import time
 from pathlib import Path
 
 import host_exec
+import native_status
 from config_env import _eget, _env_int
 from core import SLURM_JOB_ID_RE, SLURM_STDOUT_RE
 from core import rpath as _rpath
@@ -113,15 +114,20 @@ def _all_slurm_nodenames() -> list[str]:
 
 
 def _rack_node_hostnames_from_inventory(rack: str) -> list[str]:
-    """Real node hostnames belonging to *rack*, derived from live Slurm inventory.
+    """Real node hostnames belonging to *rack*.
 
-    Nodes are matched to the rack id by prefix (rack id followed by a separator), so
-    this is **template-free** and works where the hostname is not ``<rack>-<ctNN>``.
+    In ``direct`` mode nodes are matched to the rack id by hostname prefix (rack id followed by a
+    separator) against live Slurm inventory -- template-free, so it holds where the hostname is not
+    ``<rack>-<ctNN>``. In ``translate`` and ``pool`` the hostname names no rack, so the prefix would
+    match nothing (NC's rack Q5 has no ``Q5-`` host) or the wrong thing; membership then comes from
+    the dashboard's node inventory, which placed every node by the cluster manager's word.
     Returns ``[]`` when inventory is unavailable or nothing matches.
     """
     rid = (rack or "").strip()
     if not rid:
         return []
+    if not native_status._hostname_encodes_rack():
+        return native_status.placed_rack_members(rid) or []
     hosts = _all_slurm_nodenames()
     if not hosts:
         return []

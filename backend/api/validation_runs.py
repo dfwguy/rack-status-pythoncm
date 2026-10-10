@@ -54,6 +54,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import host_exec
+import native_status
 import script_tree
 import validation_presets
 from activity_hydration import _record_validation_activity
@@ -1418,6 +1419,9 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
     if requested_campaign and requested_campaign != campaign_id:
         return None, (jsonify({"ok": False, "error": "stale or unknown exact-node campaign id"}), 409)
     exact_nodes: list[str] = []
+    # Rack ids that ride along after a server-resolved nodelist, only to name the run's log. An
+    # exact-node campaign sends none: its manifest, not the rack, is what ran.
+    label_racks: list[str] = []
     if campaign_snapshot.get("active"):
         indexed = {
             str(row.get("rack") or ""): row
@@ -1431,6 +1435,17 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
             if not row.get("eligible"):
                 return None, (jsonify({"ok": False, "error": f"rack {rack}: {row.get('reason') or 'not eligible'}"}), 409)
             exact_nodes.extend(str(node) for node in row.get("nodes", []) if str(node).strip())
+    elif not native_status._hostname_encodes_rack():
+        # The launchers expand rack ids by hostname pattern, which names no host where the
+        # hostname carries no rack (Nscale NC: rack Q5 has no "Q5-" node, so every multirack
+        # launch failed with "matched 0 Slurm nodes"). Resolve the members here, from the
+        # placement the dashboard shows, and hand the launcher the real hosts.
+        for rack in rack_ids:
+            members = _rack_node_hostnames_from_inventory(rack)
+            if not members:
+                return None, (jsonify({"ok": False, "error": f"no inventory nodes placed in rack {rack}"}), 409)
+            exact_nodes.extend(members)
+        label_racks = rack_ids
 
     # Multi-rack NCCL now runs the DIRECT path (run_nccl_mpi.sh → nccl_allreduce.sbatch:
     # host nccl-tests + mpirun, NCCL over the IB rails). This replaces the llmb-run
@@ -1470,7 +1485,7 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
     if rounds:
         cmd += ["--rounds", str(rounds)]
     if exact_nodes:
-        cmd += ["--nodelist", ",".join(exact_nodes)]
+        cmd += ["--nodelist", ",".join(exact_nodes), *label_racks]
     else:
         cmd += rack_ids
 
@@ -1482,9 +1497,9 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
         (" --nccl-version " + shlex.quote(nccl_version)) if nccl_version else ""
     ) + (
         (" --rounds " + str(rounds)) if rounds else ""
-    ) + ((" --nodelist " + shlex.quote(",".join(exact_nodes))) if exact_nodes else (
-        " " + " ".join(shlex.quote(r) for r in rack_ids)
-    ))
+    ) + ((" --nodelist " + shlex.quote(",".join(exact_nodes))) if exact_nodes else "") + "".join(
+        " " + shlex.quote(r) for r in (label_racks if exact_nodes else rack_ids)
+    )
     timeout = max(120, _job_env_int("RACK_LLMB_NCCL_TIMEOUT", 14400))
     return (
         {

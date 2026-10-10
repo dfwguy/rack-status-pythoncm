@@ -85,7 +85,9 @@ command -v sbatch >/dev/null 2>&1 || die "sbatch not on PATH"
 # --- Resolve nodes --------------------------------------------------------------
 if [[ -n "${EXPLICIT_NODELIST}" ]]; then
   nvis_nodes_resolve --nodelist "${EXPLICIT_NODELIST}" || exit $?
-  _label="nodes"
+  # Rack ids given alongside the nodelist name the run (the server resolved them to these hosts);
+  # the nodelist alone decides which hosts run.
+  if [[ ${#RACKS[@]} -gt 0 ]]; then _label="$(IFS=+; echo "${RACKS[*]}")"; else _label="nodes"; fi
 else
   [[ ${#RACKS[@]} -gt 0 ]] || die "no racks given (pass RACK ids or --nodelist)"
   nvis_nodes_resolve "${RACKS[@]}" || exit $?

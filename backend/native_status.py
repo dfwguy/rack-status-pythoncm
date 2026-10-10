@@ -2923,6 +2923,34 @@ def _dashboard_node_inventory(log_dir: Path) -> list[dict[str, Any]] | None:
     return nodes if isinstance(nodes, list) else None
 
 
+def placed_rack_members(rack: str) -> list[str] | None:
+    """Hostnames the dashboard's node inventory placed in *rack*, in natural (install) order.
+
+    The inventory already applied the rack-mapping mode and templates, so this is the one answer
+    to "which nodes are in this rack" that holds where the hostname names no rack (Nscale NC's
+    U20 is sys1-gso1-p-phy-gpu19..36-su19). Scoped to the active cluster by the state key minus
+    its log root, so it does not depend on which log directory the caller has in hand. ``None``
+    when no inventory has been built for this cluster yet; ``[]`` when the rack holds no node.
+    """
+    rid = (rack or "").strip().casefold()
+    if not rid:
+        return []
+    cluster = json.loads(native_state_key(Path("/")))[:-1]
+    with _states_lock:
+        states = list(_states.items())
+    for key, st in states:
+        try:
+            if json.loads(key)[:-1] != cluster:
+                continue
+        except (TypeError, ValueError):
+            continue
+        nodes = st.node_inventory_snapshot().get("nodes")
+        if isinstance(nodes, list):
+            members = [str(n["id"]) for n in nodes if str(n.get("rack") or "").casefold() == rid]
+            return sorted(members, key=_natural_key)
+    return None
+
+
 def build_multirack_status(
     log_dir: Path,
     probe_fn: Callable[[Path], dict[str, object] | None],
