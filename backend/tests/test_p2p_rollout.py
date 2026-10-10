@@ -291,6 +291,15 @@ class TestAsAWorkflowRun:
         assert pr.describe(run, detail=True)["rack_detail"][0]["state"] == "done"
         assert pr.start(_plan(docs, {"Q5": RACK[:4]}), PACING, "rkoike")["run_id"] != started["run_id"]
 
+    def test_deferred_nodes_leave_the_rollout_completed_with_them_counted(self, tmp_path, monkeypatch):
+        docs = tmp_path / "desired"
+        docs.mkdir()
+        self._fake(monkeypatch, docs, lambda d: Fleet(d, delay=1, dead=RACK[:1]))
+        run_id = pr.start(_plan(docs, {"Q5": RACK[:3]}), PACING, "rkoike")["run_id"]
+        run = self._wait(run_id, {"completed", "failed"})
+        assert run["state"] == "completed"
+        assert run["progress"]["deferred"] == 1 and run["progress"]["ready"] == 2
+
     def test_a_second_start_of_the_same_rollout_joins_it_and_cancel_stops_it(self, tmp_path, monkeypatch):
         docs = tmp_path / "desired"
         docs.mkdir()

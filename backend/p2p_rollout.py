@@ -386,8 +386,10 @@ def run_rollout_step(run: dict, step: dict, *, coordinator: Coordinator | None =
         if done:
             state["finished"] = coord.now()
             workflow_engine.persist_run(run)
-            counts = summarize(state)
-            return counts["deferred"] == 0, _report(plan, state, "done")
+            # A rollout that reached every node it could is complete even when some were deferred:
+            # 16 of 18 nodes installed is not a failed rollout, and the deferrals are in its counts
+            # and report, each with its reason, for a retry.
+            return True, _report(plan, state, "done")
         _sleep_unless_cancelled(run, interval)
 
 
