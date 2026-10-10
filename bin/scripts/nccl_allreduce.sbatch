@@ -248,11 +248,18 @@ echo "nccl_allreduce: NCCL_IB_HCA=${NCCL_IB_HCA:-<auto>} NCCL_SOCKET_IFNAME=${NS
 
 # MPI bootstrap over tcp/${NS_IF} (routable cross-rack); NCCL data over IB rails.
 # plm=rsh launches orted via ssh across the allocated nodes (works in-allocation).
+# The daemons log in as this job's user with that user's own keys, so the agent does not read the
+# submitter's ~/.ssh/config: that file serves their interactive work and may remap these very hosts.
+# On Nscale NC (job 136390, 270 nodes) a P2P block sent every sys1-*-su* login to the nvis-p2p
+# service account with a service key, and every daemon was refused before a collective ran.
+# NVIS_MPI_RSH_AGENT overrides it for a site whose node-to-node ssh genuinely needs options.
+RSH_AGENT="${NVIS_MPI_RSH_AGENT:-ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=accept-new}"
+echo "nccl_allreduce: orted launch agent: ${RSH_AGENT}"
 rc=0
 for _round in $(seq 1 "${ROUNDS}"); do
   echo "===== nccl_allreduce round ${_round}/${ROUNDS} ====="
   mpirun -np "${NP}" --hostfile "${HF}" --map-by "ppr:${GPUS_PER_NODE}:node" --bind-to none \
-    --mca plm rsh --mca plm_rsh_agent ssh \
+    --mca plm rsh --mca plm_rsh_agent "${RSH_AGENT}" \
     --mca pml ob1 --mca btl tcp,self --mca btl_tcp_if_include "${NS_IF}" \
     --mca oob_tcp_if_include "${NS_IF}" \
     -x LD_LIBRARY_PATH -x PATH \
