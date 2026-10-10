@@ -16,6 +16,7 @@ and step metadata. Execution state is persisted as JSON in var/workflows/runs/.
 from __future__ import annotations
 
 import base64
+import fcntl
 import json
 import logging
 import os
@@ -84,11 +85,30 @@ def list_workflows() -> list[dict]:
     return results
 
 
+#: Workflows a feature module defines in code (see :func:`register_builtin_workflow`).
+_BUILTIN_WORKFLOWS: dict[str, dict] = {}
+
+
+def register_builtin_workflow(definition: dict) -> None:
+    """Register a workflow definition that ships with the code rather than as a YAML file.
+
+    A feature whose run *is* a workflow (a P2P rollout is one resumable native step) must not
+    depend on a YAML file being present at runtime: the deployment mounts its state directory over
+    ``var/``, which hides every definition baked into the image, and a run whose definition has
+    vanished cannot start or resume. A YAML file of the same id still wins, so a site can override.
+    """
+    wf_id = str(definition.get("id") or "").strip()
+    if not wf_id or not definition.get("steps"):
+        raise ValueError("a built-in workflow needs an id and at least one step")
+    _BUILTIN_WORKFLOWS[wf_id] = definition
+
+
 def get_workflow(workflow_id: str) -> dict | None:
     _ensure_dirs()
     path = WORKFLOWS_DIR / f"{workflow_id}.yaml"
     if not path.is_file():
-        return None
+        builtin = _BUILTIN_WORKFLOWS.get(workflow_id)
+        return dict(builtin) if builtin else None
     try:
         with open(path, "r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
@@ -216,8 +236,49 @@ def get_step_output(run_id: str, step_id: str) -> str | None:
         return None
 
 
-def start_workflow_run(workflow_id: str, params: dict | None = None) -> dict:
-    """Start a new workflow execution instance."""
+def _live_run_with_key(workflow_id: str, key: str) -> dict | None:
+    """A non-terminal run of *workflow_id* started with idempotency *key*, if one exists.
+
+    A run loaded in this process is judged by its in-memory record, never by its file: the executor
+    sets the terminal state a moment before it saves, so the file can still say ``running`` for a
+    run that has just finished.
+    """
+    with _runs_lock:
+        loaded = set(_active_runs)
+        for run in _active_runs.values():
+            if (run.get("workflow_id") == workflow_id and run.get("idempotency_key") == key
+                    and run.get("state") not in TERMINAL_STATES):
+                return run
+    if not RUNS_DIR.is_dir():
+        return None
+    for d in RUNS_DIR.iterdir():
+        state_file = d / "state.json"
+        if d.name in loaded or not state_file.is_file():
+            continue
+        try:
+            data = json.loads(state_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (data.get("workflow_id") == workflow_id and data.get("idempotency_key") == key
+                and data.get("state") not in TERMINAL_STATES):
+            return data
+    return None
+
+
+def start_workflow_run(workflow_id: str, params: dict | None = None, *,
+                       idempotency_key: str | None = None) -> dict:
+    """Start a new workflow execution instance.
+
+    With *idempotency_key*, a second start while a run with the same workflow and key is still live
+    joins that run instead of launching another: the response carries its ``run_id`` and
+    ``joined: True``. That is what stops a double-clicked button, or two operators, from running
+    the same rollout twice.
+    """
+    if idempotency_key:
+        live = _live_run_with_key(workflow_id, idempotency_key)
+        if live is not None:
+            return {"run_id": live["run_id"], "state": live.get("state"),
+                    "current_step_id": live.get("current_step_id"), "joined": True}
     wf = get_workflow(workflow_id)
     if not wf:
         raise ValueError(f"Workflow '{workflow_id}' not found")
@@ -247,6 +308,8 @@ def start_workflow_run(workflow_id: str, params: dict | None = None) -> dict:
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+    if idempotency_key:
+        run["idempotency_key"] = idempotency_key
 
     with _runs_lock:
         _active_runs[run_id] = run
@@ -266,6 +329,40 @@ def get_run_state(run_id: str) -> dict | None:
     return _load_run(run_id)
 
 
+def persist_run(run: dict) -> None:
+    """Save a run a step is updating in place (progress, its own state) -- the public way to do it.
+
+    A long native step owns ``run`` while it executes and records progress on it as it goes; this
+    stamps ``updated_at`` and writes it through the same atomic save the engine uses, so a restart
+    resumes from the last tick instead of from the start.
+    """
+    run["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    with _runs_lock:
+        _active_runs.setdefault(run["run_id"], run)
+    _save_run(run)
+
+
+def update_run_params(run_id: str, patch: dict) -> dict:
+    """Merge *patch* into a live run's ``params`` -- how an operator steers a run in flight.
+
+    The executing step holds the same dict, so it sees the change on its next read; nothing has to
+    be restarted. Terminal runs are refused: changing the parameters of a finished run would only
+    falsify its record.
+    """
+    with _runs_lock:
+        run = _active_runs.get(run_id)
+    if run is None:
+        run = _load_run(run_id)
+        if run is None:
+            raise ValueError(f"Run '{run_id}' not found")
+    if run.get("state") in TERMINAL_STATES:
+        raise ValueError(f"Run is in state '{run.get('state')}', its parameters are final")
+    with _runs_lock:
+        run.setdefault("params", {}).update(patch)
+    persist_run(run)
+    return dict(run)
+
+
 def invalidate_run(run_id: str, *, reason: str, operator: str = "rack-status") -> dict:
     """Hide an invalid QA run while retaining its state and output as evidence."""
     run = _load_run(run_id)
@@ -283,7 +380,8 @@ def invalidate_run(run_id: str, *, reason: str, operator: str = "rack-status") -
     return dict(run)
 
 
-def list_runs() -> list[dict]:
+def list_runs(workflow_id: str | None = None, limit: int = 50) -> list[dict]:
+    """Recent runs, newest first; *workflow_id* restricts them to one workflow."""
     _ensure_dirs()
     results = []
     with _runs_lock:
@@ -348,8 +446,10 @@ def list_runs() -> list[dict]:
         except (OSError, json.JSONDecodeError, KeyError):
             continue
 
+    if workflow_id is not None:
+        results = [r for r in results if r.get("workflow_id") == workflow_id]
     results.sort(key=lambda r: r.get("started_at", ""), reverse=True)
-    return results[:50]
+    return results[:limit]
 
 
 def advance_run(run_id: str, action: dict) -> dict:
@@ -443,6 +543,25 @@ def _find_next_step_in_sequence(steps_map: dict, steps_list: list[dict], current
 
 
 def _execute_run(run_id: str) -> None:
+    """Execute a run, unless another executor already holds it.
+
+    One run, one executor: a resume after a restart, a second app process, or an ``advance`` racing
+    a resume must never drive the same run twice. The claim is an exclusive ``flock`` on a file in
+    the run's directory, held for as long as this executor drives it and released by the kernel if
+    the process dies, so a crash never leaves a run unclaimable.
+    """
+    run_path = _run_dir(run_id)
+    run_path.mkdir(parents=True, exist_ok=True)
+    with open(run_path / ".executor.lock", "w", encoding="utf-8") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            _logger.info("Workflow run %s is already being executed; not starting a second executor", run_id)
+            return
+        _execute_run_claimed(run_id)
+
+
+def _execute_run_claimed(run_id: str) -> None:
     """Execute workflow steps sequentially until hitting a manual/decision/terminal step."""
     with _runs_lock:
         run = _active_runs.get(run_id)
@@ -499,6 +618,20 @@ def _execute_run(run_id: str) -> None:
 
         if step_type == "automated":
             success, output = _execute_automated_step(run, step)
+            if run.get("state") == "cancelled":
+                # Cancelled while the step ran (a long native step watches for this and returns).
+                # The step's outcome must not overwrite the operator's decision.
+                _save_step_output(run["run_id"], step_id, output)
+                run["history"].append({
+                    "step_id": step_id, "type": "automated", "success": False, "cancelled": True,
+                    "output_snippet": _get_output_snippet(output),
+                    "output_file": f"{run['run_id']}/{step_id}.log",
+                    "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                })
+                run["current_step_id"] = None
+                run["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                _save_run(run)
+                return
             _eval_meta = run.get("evaluations", {}).get(step_id, {})
             run["history"].append({
                 "step_id": step_id,
@@ -1435,9 +1568,60 @@ def _execute_inline_run(run: dict, step: dict, params: dict, script_text: str) -
 _NATIVE_STEPS: dict[str, Callable[[dict, dict], tuple[bool, str]]] = {}
 
 
-def register_native_step(name: str, fn: Callable[[dict, dict], tuple[bool, str]]) -> None:
-    """Register a native step callable under *name* (idempotent; a re-register replaces)."""
+#: Native steps that are safe to start again on a run a restart interrupted: their whole state
+#: lives on the run record and every action they take is idempotent (see ``resume_interrupted_runs``).
+_RESUMABLE_NATIVE_STEPS: set[str] = set()
+
+
+def register_native_step(name: str, fn: Callable[[dict, dict], tuple[bool, str]], *,
+                         resumable: bool = False) -> None:
+    """Register a native step callable under *name* (idempotent; a re-register replaces).
+
+    ``resumable=True`` promises that calling *fn* again on a run it was already driving picks up
+    where it left off -- it keeps its state on ``run`` (saved with :func:`persist_run`) and its side
+    effects are idempotent. Only such steps are restarted by :func:`resume_interrupted_runs`.
+    """
     _NATIVE_STEPS[name] = fn
+    if resumable:
+        _RESUMABLE_NATIVE_STEPS.add(name)
+    else:
+        _RESUMABLE_NATIVE_STEPS.discard(name)
+
+
+def resume_interrupted_runs() -> list[str]:
+    """Restart runs a process restart cut off in the middle of a resumable native step.
+
+    Before this, a run that was ``running`` when the container restarted stayed ``running`` on disk
+    forever with nothing driving it. A run is resumed only when its current step is a native step
+    registered ``resumable``; anything else is left exactly as it was. The per-run executor lock
+    makes this safe to call more than once, and from more than one process.
+    """
+    resumed: list[str] = []
+    if not RUNS_DIR.is_dir():
+        return resumed
+    for d in sorted(RUNS_DIR.iterdir()):
+        state_file = d / "state.json"
+        if not state_file.is_file():
+            continue
+        try:
+            data = json.loads(state_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if data.get("state") not in ("running", "pending"):
+            continue
+        wf = get_workflow(str(data.get("workflow_id") or ""))
+        step = next((s for s in (wf or {}).get("steps", []) if s.get("id") == data.get("current_step_id")), None)
+        if not step or str(step.get("native") or "") not in _RESUMABLE_NATIVE_STEPS:
+            continue
+        run_id = data["run_id"]
+        with _runs_lock:
+            if run_id in _active_runs:
+                continue
+            _active_runs[run_id] = data
+        _logger.info("Resuming workflow run %s at native step %s", run_id, step.get("native"))
+        threading.Thread(target=_execute_run, args=(run_id,), daemon=True).start()
+        resumed.append(run_id)
+    return resumed
 
 
 def _execute_native_step(run: dict, step: dict) -> tuple[bool, str]:

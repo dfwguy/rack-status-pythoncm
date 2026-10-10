@@ -1387,6 +1387,11 @@ def validate_rollout_stages(stages: list[str], where: str = "rollout_stages") ->
     return problems
 
 
+#: The NVIS-P2P origin's HTTP port (the seed-origin nginx the agents and seeds fetch from).
+P2P_ORIGIN_PORT = 12130
+_P2P_HTTP_URL_RE = re.compile(r"^https?://[A-Za-z0-9.:\[\]-]+$")
+
+
 @dataclass
 class P2pSettings:
     """Per-cluster NVIS-P2P instance configuration.
@@ -1463,6 +1468,20 @@ class P2pSettings:
     #: killed when it passes), so a hung transfer ends even with no rollout watching; a launch also
     #: replaces a "running" download older than this rather than re-adopting it.
     rollout_download_timeout_seconds: int = 3600
+    #: Pull rollouts (docs/DESIGN_p2p-pull-agent.md): where Rack Status writes each node's
+    #: desired-state document, as *this process* sees the directory the origin serves to the agents
+    #: (a mount). Blank means pull rollouts are not configured for this cluster.
+    desired_dir: str = ""
+    #: The origin the node agents fetch images and documents from, written into every document.
+    #: Blank derives ``http://<appserver_ip>:12130``, the origin's port.
+    origin_url: str = ""
+    #: The Prometheus-API endpoint (VictoriaMetrics) that receives the agents' ``nvis_p2p_*`` series.
+    #: Blank falls back to the app-wide ``RACK_METRICS_URL``.
+    metrics_url: str = ""
+    #: How long a node released by a pull rollout may take before it is deferred.
+    rollout_node_budget_seconds: int = 3600
+    #: How many racks one pull rollout drives at the same time.
+    rollout_max_active_racks: int = 4
 
     @classmethod
     def from_dict(cls, d: Any) -> P2pSettings:
@@ -1501,6 +1520,12 @@ class P2pSettings:
             rollout_stall_seconds=_as_int(d.get("rollout_stall_seconds"), base.rollout_stall_seconds),
             rollout_download_timeout_seconds=_as_int(d.get("rollout_download_timeout_seconds"),
                                                      base.rollout_download_timeout_seconds),
+            desired_dir=_as_str(d.get("desired_dir")),
+            origin_url=_as_str(d.get("origin_url")).rstrip("/"),
+            metrics_url=_as_str(d.get("metrics_url")).rstrip("/"),
+            rollout_node_budget_seconds=_as_int(d.get("rollout_node_budget_seconds"),
+                                                base.rollout_node_budget_seconds),
+            rollout_max_active_racks=_as_int(d.get("rollout_max_active_racks"), base.rollout_max_active_racks),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1536,7 +1561,31 @@ class P2pSettings:
         if self.rollout_download_timeout_seconds < 60:
             problems.append("rollout_download_timeout_seconds must be at least 60, "
                             f"got {self.rollout_download_timeout_seconds}")
+        if self.desired_dir and not self.desired_dir.startswith("/"):
+            problems.append(f"desired_dir must be an absolute path, got {self.desired_dir!r}")
+        for label, url in (("origin_url", self.origin_url), ("metrics_url", self.metrics_url)):
+            if url and not _P2P_HTTP_URL_RE.match(url):
+                problems.append(f"{label} must be http(s)://host[:port], got {url!r}")
+        if self.rollout_node_budget_seconds < 60:
+            problems.append(f"rollout_node_budget_seconds must be at least 60, got {self.rollout_node_budget_seconds}")
+        if not 1 <= self.rollout_max_active_racks <= 64:
+            problems.append(f"rollout_max_active_racks must be between 1 and 64, got {self.rollout_max_active_racks}")
         return problems
+
+    def resolved_origin_url(self) -> str:
+        """The origin the agents fetch from: explicit, or the app server on the origin's port."""
+        if self.origin_url:
+            return self.origin_url
+        return f"http://{self.appserver_ip.strip()}:{P2P_ORIGIN_PORT}" if self.appserver_ip.strip() else ""
+
+    def rollout_blockers(self) -> list[str]:
+        """What is missing before a pull rollout can run on this cluster. Empty means ready."""
+        blockers: list[str] = []
+        if not self.desired_dir.strip():
+            blockers.append("desired_dir is not set (where the agents' desired-state documents are written)")
+        if not self.resolved_origin_url():
+            blockers.append("origin_url is not set and there is no appserver_ip to derive it from")
+        return blockers
 
     def provisioning_blockers(self) -> list[str]:
         """What is missing before this instance can be provisioned. Empty means ready to try.

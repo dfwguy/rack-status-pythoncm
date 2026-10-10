@@ -288,15 +288,25 @@ def _selector(args: Any) -> str:
     return "{" + ",".join(parts) + "}" if parts else ""
 
 
-def _vm(path: str, params: dict[str, str]) -> dict[str, Any]:
-    url = f"{base_url()}{path}?{urllib.parse.urlencode(params)}"
+def _vm(path: str, params: dict[str, str], base: str | None = None) -> dict[str, Any]:
+    url = f"{(base or base_url()).rstrip('/')}{path}?{urllib.parse.urlencode(params)}"
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=_timeout()) as resp:
         return json.loads(resp.read())
 
 
 def _instant(expr: str) -> list[dict[str, Any]]:
-    return (_vm("/api/v1/query", {"query": expr}).get("data") or {}).get("result") or []
+    return instant(expr)
+
+
+def instant(expr: str, base: str | None = None) -> list[dict[str, Any]]:
+    """One instant query; *base* overrides ``RACK_METRICS_URL`` (a cluster that names its own store).
+
+    Public so a second domain (the P2P rollout reads its agents' series) uses this client and its
+    timeout instead of a third HTTP client. Raises on any transport or HTTP error: a caller that
+    decides on the answer must be able to tell "no series" from "could not ask".
+    """
+    return (_vm("/api/v1/query", {"query": expr}, base).get("data") or {}).get("result") or []
 
 
 def _range(expr: str, minutes: int, step: str) -> list[dict[str, Any]]:

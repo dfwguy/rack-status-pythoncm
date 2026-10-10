@@ -1044,6 +1044,48 @@
   "variant": "sync"
  },
  {
+  "endpoint": "p2p_rollouts.p2p_rollouts_cancel",
+  "method": "POST",
+  "action": "p2p:rollout_cancel",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "p2p_rollouts.p2p_rollouts_get",
+  "method": "GET",
+  "action": "p2p:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "p2p_rollouts.p2p_rollouts_list",
+  "method": "GET",
+  "action": "p2p:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "p2p_rollouts.p2p_rollouts_pacing",
+  "method": "PUT",
+  "action": "p2p:rollout_pace",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "p2p_rollouts.p2p_rollouts_plan",
+  "method": "GET",
+  "action": "p2p:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "p2p_rollouts.p2p_rollouts_retry",
+  "method": "POST",
+  "action": "p2p:rollout_retry",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "p2p_rollouts.p2p_rollouts_start",
+  "method": "POST",
+  "action": "p2p:rollout_start",
+  "variant": "sync"
+ },
+ {
   "endpoint": "parser_results.api_capture_job_attempt",
   "method": "GET",
   "action": "results:read",

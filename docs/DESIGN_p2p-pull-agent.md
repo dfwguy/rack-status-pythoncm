@@ -280,3 +280,48 @@ Found on the way:
 
 **Left in place:** transient `nvis-p2p-agent` units on Q5 (gone on reboot), their desired documents
 at generation 1, and the run record under `~/p2p-coordinator-runs/` on the appserver.
+
+## P2: the coordinator inside Rack Status
+
+The P1 script became part of the product. A rollout is now a **workflow-engine run** (citizen 4),
+not a process somebody started on the appserver.
+
+- **`backend/p2p_rollout.py`** registers a built-in `nvis-p2p-rollout` workflow. It has one native
+  step, `p2p_rollout`, which is the coordinator. The run record holds three things:
+  - the fixed plan (`params.plan`): the image pin from the cluster's catalog, and each rack's members
+    in tray order from the server's node inventory
+  - the steerable inputs: `params.pacing` and `params.commands`
+  - the coordinator's own state, `run.rollout`, saved every tick
+- **`backend/api/p2p_rollouts.py`** serves `/api/p2p/rollouts`:
+  - start, list, preview (`/plan`) and detail
+  - cancel, retry and pacing on a live run
+  - each control is its own action: `p2p:rollout_start`, `_cancel`, `_retry` and `_pace`
+- **Artifact Distribution → Rollouts** is the UI: start with a preview of each rack's members, live
+  agents and current holders; a list with progress; and per rack its rung, its nodes and a retry for
+  each deferred node. Cancel is confirm-gated.
+- **Per-cluster settings** (`P2pSettings`): `desired_dir`, `origin_url`, `metrics_url`,
+  `rollout_node_budget_seconds` and `rollout_max_active_racks`, editable in Dragonfly Settings.
+  `rollout_blockers()` reports what is missing before a rollout can start.
+
+The workflow engine gained what a run lasting hours needs. Each addition went into the engine, not
+beside it:
+
+- **Built-in definitions.** A deployment mounts its state directory over `var/`, which hides any YAML
+  baked into the image.
+- **Idempotency keys.** A second start of the same image on the same racks joins the live run.
+- **Live parameter updates and `persist_run`.** Pacing and retry reach a running step on its next tick.
+- **Cancel is honoured mid-step.** Before, a step's result overwrote a cancel that arrived while it ran.
+- **Resumable native steps and a resume sweep** at startup. Before, a run interrupted by a restart
+  stayed `running` on disk forever.
+- **A per-run executor `flock`.** One run is never driven twice: not by a resume, not by a second
+  process, not by an `advance` racing either of them.
+- **`list_runs(workflow_id=…)`.**
+
+Two rules were applied deliberately and not followed literally:
+
+- **No rack claim (citizen 8).** A rollout runs no jobs on a rack and takes nothing from it, so it is
+  not an exclusive operation. In any case `rack_locks` accepts only `pN-rMM` rack ids, and NC's are
+  `Q5`. The exclusivity that matters, one live rollout per image and set of racks, is the run's
+  idempotency key.
+- **Not registered as a validation activity.** That registry is the audit trail of what ran on a rack.
+  A rollout's own run record is its audit trail.

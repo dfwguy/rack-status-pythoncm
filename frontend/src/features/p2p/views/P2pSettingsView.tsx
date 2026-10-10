@@ -191,6 +191,16 @@ export default function P2pSettingsView() {
             </>
           ))}
 
+          {section("Pull rollouts (node agents)", (
+            <>
+              {text("Desired-state directory", "desired_dir", "Where Rack Status writes each node's desired-state document — the directory the origin serves as /.nvis-p2p/desired, as this container sees it (a mount). Blank = pull rollouts are off.", "e.g. /app/p2p-desired")}
+              {text("Origin URL", "origin_url", "The origin the node agents fetch images and documents from. Blank = http://<app server IP>:12130.", "e.g. http://10.10.20.22:12130")}
+              {text("Metrics URL", "metrics_url", "VictoriaMetrics (Prometheus query API) that receives the agents' nvis_p2p_* series. Blank = the app's RACK_METRICS_URL.", "e.g. http://10.10.20.22:8428")}
+              {num("Node budget (s)", "rollout_node_budget_seconds", "How long a node released by a rollout may take before it is deferred. Default 3600.")}
+              {num("Racks in flight", "rollout_max_active_racks", "How many racks one rollout drives at the same time (1–64). Default 4.")}
+            </>
+          ))}
+
           {section("Campaign defaults (staged rollout)", (
             <>
               {num("Wave size", "rollout_wave_size", "Nodes per wave; the roster is distributed this many at a time so each wave seeds the next.")}

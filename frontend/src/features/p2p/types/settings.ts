@@ -54,6 +54,17 @@ export interface P2pSettingsDoc {
   rollout_stall_seconds: number;
   /** Hard limit on one node's download of one image, enforced on the node (default 3600). */
   rollout_download_timeout_seconds: number;
+  /** Pull rollouts: where Rack Status writes the agents' desired-state documents (its own view of the
+   * directory the origin serves). Blank = pull rollouts not configured. */
+  desired_dir: string;
+  /** The origin the agents fetch from; blank = http://<appserver_ip>:12130. */
+  origin_url: string;
+  /** VictoriaMetrics receiving the agents' series; blank = the app's RACK_METRICS_URL. */
+  metrics_url: string;
+  /** How long a node released by a pull rollout may take before it is deferred. */
+  rollout_node_budget_seconds: number;
+  /** How many racks one pull rollout drives at the same time. */
+  rollout_max_active_racks: number;
 }
 
 /** GET /api/p2p/settings and PUT response. */

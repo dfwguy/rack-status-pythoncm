@@ -229,4 +229,46 @@ export const p2pContent: HelpContent[] = [
     aiContext:
       "Campaigns are saved distributions for the active cluster's NVIS-P2P instance (backend P2pCampaigns, GET/PUT /api/p2p/campaigns). A campaign names a catalog image, a roster (blank = whole fleet) and optional pacing overrides (wave_size, parallelism, poll_seconds, max_launches, max_unreachable, timeout_seconds, fill_wave_size, stall_seconds, download_timeout_seconds; 0 inherits the cluster default) and an optional wave plan (strategy sequential|rack-staged, stages ladder such as 1, 50%, 100%; blank inherits). Rack-staged is planned by the worker from the installed topology inventory (<install_root>/current/inventory/topology.tsv, node/SU/rack -- the same file the peers' scheduler labels come from): stage one puts one node in every rack at wave_size (the only stage that loads the seeds), later stages grow every rack to the next rung at fill_wave_size, racks round-robin across SUs; with no topology it falls back to sequential and says so in the log. When the fleet snapshot (<state>/p2p-snapshots/<cluster>.json) is under an hour old the plan also counts nodes that already hold the image toward each rack's rungs (a rack with a copy gets no seed wave), seeds each rack from the reachable peer with the most verified images, and puts unreachable nodes and roster holders in the rack's last stage. Every rollout watches each active download's written bytes: one that has not moved for stall_seconds (default 600, 0 = off) is stopped and relaunched, then deferred as stalled_<N>s_after_<L>_launches once it has used max_launches, instead of holding its wave to the timeout. Each node also enforces download_timeout_seconds (default 3600) on its own transfer -- dfget is killed when it passes -- and a launch replaces a running download older than that instead of re-adopting it; a wave that times out stops the downloads it gives up on. Launch is confirm-gated and enqueues an ordinary distribute operation through POST /api/p2p/operations tagged with the campaign name; the worker preheats the seeds then rolls out in waves. One operation runs at a time (409 otherwise). Re-launching is idempotent: nodes holding the pinned image are skipped by receipt.",
   },
+  {
+    id: "p2pRollouts",
+    kind: "view",
+    title: "Rollouts",
+    domain: "Artifact Distribution",
+    routePath: "/p2p/rollouts",
+    summary:
+      "Pull distribution: put one catalog image onto racks through the node agents, rung by rung, and steer it while it runs.",
+    description:
+      "A rollout puts one pinned catalog image onto the racks you choose without opening an SSH session to any node. Rack Status writes each node's desired-state document into the directory the origin serves; the agent on the node fetches the image through its local Dragonfly peer, verifies it against the pin, installs it and reports back through the cluster's metrics. Each rack is released rung by rung -- by default one node first, which seeds the rack, then half, then all -- so most nodes pull from rack-mates rather than the app server. A rollout is a durable run: it survives a restart of Rack Status, and while it runs you can cancel it (nodes still downloading are told to stop; installed nodes keep the image), retry one node or every deferred node, and change the pacing, which applies from the next tick. A node with no live agent, one that keeps failing, or one that overruns its budget is deferred rather than holding its rack.",
+    features: [
+      "Rack-staged release with a live per-node view",
+      "Cancel, retry a node, retry every deferred node, change pacing -- all on a running rollout",
+      "Preview: each rack's members, live agents and current holders before starting",
+      "Survives a restart of Rack Status and resumes where it was",
+      "No SSH: desired-state documents out, agent metrics back",
+    ],
+    howTo: [
+      {
+        task: "Roll an image onto racks",
+        steps: [
+          "Pin the image in Catalog.",
+          "Choose the image and the racks, and adjust the stage ladder, budget and racks in flight if needed.",
+          "Click Preview to see each rack's members, live agents and current holders, then Start rollout and confirm.",
+          "Open the rollout to follow each rack's rungs and nodes; Retry deferred nodes once the cause is fixed.",
+        ],
+      },
+    ],
+    tips: [
+      "Racks only take part if their nodes run the pull agent; a node without a live agent is deferred as no_agent.",
+      "Starting the same image on the same racks while that rollout is running opens the running one instead of a second.",
+      "Pull rollouts need Desired-state directory and Origin URL set in Dragonfly Settings.",
+    ],
+    keywords: ["p2p", "rollout", "pull", "agent", "desired state", "rack", "rung", "cancel", "retry", "pacing", "distribute", "image"],
+    related: ["p2pCatalog", "p2pCampaigns", "p2pArtifacts", "p2pSettings"],
+    aria: {
+      label: "Rollouts",
+      description: "Pull rollouts of a catalog image onto racks, with cancel, retry and pacing while they run.",
+    },
+    aiContext:
+      "Rollouts are NVIS-P2P pull rollouts (backend p2p_rollout.py, /api/p2p/rollouts; design docs/DESIGN_p2p-pull-agent.md). A rollout is a workflow-engine run of the built-in nvis-p2p-rollout workflow whose single native step is the coordinator; it is registered resumable, so a Rack Status restart resumes it. Start: POST /api/p2p/rollouts {image, racks, pacing:{stages, budget_seconds, max_active_racks}} (action p2p:rollout_start); the plan fixes the image pin from the cluster's catalog and each rack's members in tray order from the server's node inventory (cluster snapshot nodes[], placed by the rack-mapping mode and naming templates). The coordinator writes <desired_dir>/<node>.json (schema_version 1, generation, origin, images) and reads nvis_p2p_agent_up, nvis_p2p_agent_last_poll_timestamp_seconds, nvis_p2p_image_state and nvis_p2p_image_failures_total from the cluster's metrics_url (VictoriaMetrics); a node's report counts only once its agent has acted on the generation written for it. Rungs per rack from the stage ladder (1, 50%, 100% -> 1, 9, 18 of 18); max_active_racks racks at a time; nodes deferred as no_agent, failed_<n>x or timeout. Controls on a live run: POST .../cancel (p2p:rollout_cancel; withdraws the image from nodes still downloading), POST .../retry {nodes} (p2p:rollout_retry; empty = all deferred; rewrites the document with a new generation), PUT .../pacing (p2p:rollout_pace). A second start with the same image and racks joins the live run (idempotency key). GET /api/p2p/rollouts/plan previews members, live agents and holders.",
+  },
 ];

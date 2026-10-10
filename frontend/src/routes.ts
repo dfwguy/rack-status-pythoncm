@@ -52,6 +52,7 @@ export const ROUTES: RouteDef[] = [
   { viewId: "p2pCatalog", path: "/p2p/catalog", domain: "Artifact Distribution", label: "Catalog" },
   { viewId: "p2pRosters", path: "/p2p/rosters", domain: "Artifact Distribution", label: "Rosters" },
   { viewId: "p2pCampaigns", path: "/p2p/campaigns", domain: "Artifact Distribution", label: "Campaigns" },
+  { viewId: "p2pRollouts", path: "/p2p/rollouts", domain: "Artifact Distribution", label: "Rollouts" },
   { viewId: "p2pSettings", path: "/p2p/settings", domain: "Artifact Distribution", label: "Dragonfly Settings" },
   { viewId: "infraEthernet", path: "/infrastructure/ethernet", domain: "Infrastructure", label: "Ethernet" },
   { viewId: "infraIbNvlink", path: "/infrastructure/ib-nvlink", domain: "Infrastructure", label: "IB / NVLink" },
