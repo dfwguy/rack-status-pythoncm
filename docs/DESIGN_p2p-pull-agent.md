@@ -325,3 +325,27 @@ Two rules were applied deliberately and not followed literally:
   idempotency key.
 - **Not registered as a validation activity.** That registry is the audit trail of what ran on a rack.
   A rollout's own run record is its audit trail.
+
+**Live on Nscale NC, 2026-10-10 (rack Q23, SU21, 18 nodes):**
+
+- **Setup.** The image was `nemo-arm-nccl2.30.7` (42.5 GB). The bootstrap installed agents on 16
+  nodes. It was refused on two, `gpu74` and `gpu89`, where `nvis-p2p` has lost passwordless sudo.
+  The preview showed 18 members in tray order, 16 live agents and no holders.
+- **Resume after a restart, for real.** The rollout was started from a one-off process whose
+  executor died with it, so the run sat `pending`. The next deploy's resume sweep picked it up
+  20 s after start-up and drove it to the end.
+- **Result.** The run finished `completed` in 13 min 52 s: **15 ready, 3 deferred**.
+  - `gpu74` and `gpu89` were deferred as `no_agent`, at their rung and without holding it.
+  - `gpu77` was deferred as `failed_3x`. Its Dragonfly peer is crash-looping (18 077 restarts), so
+    every `dfget` failed with `Connect Dfdaemon Failed` within seconds. The agent reported each
+    failure and backed off. Its document still names the image, so the agent will install it if
+    the peer recovers.
+- **Agreement with the disks.** A read-only audit found the pinned receipt on exactly the 15 ready
+  nodes.
+- **What it changed.** Two fixes came out of the run.
+  - A retry now returns a node to pending, so an agentless node is deferred again at once instead
+    of waiting out a node budget.
+  - A rollout with deferrals now completes rather than failing.
+- **Not exercised live.** Cancel, retry and pacing go through the app process (the HTTP API or
+  the Rollouts page), so they need an operator session. The tests cover them against the real
+  engine.
