@@ -222,6 +222,70 @@ class TestInfiniBandIsUnchanged:
         assert e["NCCL_IB_ADDR_FAMILY"] == ""
 
 
+def _scan_warned(root: Path, **env: str | None) -> dict[str, str]:
+    """The scan, plus whatever it warned on stderr, as WARNING."""
+    return _run(
+        root,
+        'w="$(nvis_fabric_scan 2>&1 >/dev/null)"; eval "$(nvis_fabric_scan 2>/dev/null)"; '
+        'set | grep "^NVIS_FAB_"; echo "WARNING=${w//$\'\\n\'/ }"',
+        **env,
+    )
+
+
+class TestTheStatedTechnology:
+    """A stated scale-out is an expectation the node confirms, not a substitute for the node.
+
+    NC inherits gb300-nvl72's ``scaleout = ib``, so every launch ran with NVIS_RDMA_LINK_TECH=ib on
+    nodes with no InfiniBand port: no rails, no pin, no address family -- NCCL opened all 26 devices
+    and hit "GID index -1" (multirack job 138174). The same code must keep IB sites exactly as they were.
+    """
+
+    def _ib_only(self, root: Path) -> None:
+        for i in range(4):
+            _dev(root, f"mlx5_{i}", state="ACTIVE", link="InfiniBand", rate=400,
+                 gids=[f"fe80:0000:0000:0000:a088:c203:00{i}5:fa3e"])
+
+    def test_a_roce_node_stated_as_ib_is_wired_as_the_roce_node_it_is(self, tmp_path):
+        _nc_node(tmp_path)
+        s = _scan_warned(tmp_path, NVIS_RDMA_LINK_TECH="ib")
+        assert s["NVIS_FAB_LINK"] == "roce"
+        assert s["NVIS_FAB_IB_HCA"].replace("\\", "") == "roce_vf_r1,roce_vf_r2,roce_vf_r3,roce_vf_r4"
+        assert s["NVIS_FAB_ADDR_FAMILY"] == "ipv6"
+        assert "NVIS_RDMA_LINK_TECH=ib" in s["WARNING"] and "fabric.scaleout" in s["WARNING"]
+        e = _exported(tmp_path, NVIS_RDMA_LINK_TECH="ib")
+        assert e["NCCL_IB_HCA"] == "roce_vf_r"
+        assert e["NCCL_IB_ADDR_FAMILY"] == "AF_INET6"
+
+    def test_an_ib_node_stated_as_ib_is_unchanged_and_silent(self, tmp_path):
+        self._ib_only(tmp_path)
+        s = _scan_warned(tmp_path, NVIS_RDMA_LINK_TECH="ib", NVIS_FABRIC_DEFAULT_ROUTE_IFS="")
+        assert s["NVIS_FAB_LINK"] == "ib"
+        assert s["NVIS_FAB_IB_HCA"].replace("\\", "") == "mlx5_0,mlx5_1,mlx5_2,mlx5_3"
+        assert s["WARNING"] == ""
+        e = _exported(tmp_path, NVIS_RDMA_LINK_TECH="ib", NVIS_FABRIC_DEFAULT_ROUTE_IFS="")
+        assert e["NCCL_IB_HCA"] == "" and e["NCCL_IB_ADDR_FAMILY"] == ""
+
+    def test_an_ib_node_stated_as_roce_is_wired_as_ib(self, tmp_path):
+        self._ib_only(tmp_path)
+        s = _scan_warned(tmp_path, NVIS_RDMA_LINK_TECH="roce", NVIS_FABRIC_DEFAULT_ROUTE_IFS="")
+        assert s["NVIS_FAB_LINK"] == "ib"
+        assert s["NVIS_FAB_RAILS"] == "4"
+        assert "NVIS_RDMA_LINK_TECH=roce" in s["WARNING"]
+
+    def test_a_stated_technology_the_node_has_is_honoured_over_auto(self, tmp_path):
+        # IB rails and a routable RoCE NIC side by side: auto would take IB; a stated roce stands.
+        self._ib_only(tmp_path)
+        _dev(tmp_path, "mlx5_4", state="ACTIVE", link="Ethernet", rate=200, netdev="enp1s0", gids=[V4])
+        assert _scan_warned(tmp_path, NVIS_FABRIC_DEFAULT_ROUTE_IFS="")["NVIS_FAB_LINK"] == "ib"
+        s = _scan_warned(tmp_path, NVIS_RDMA_LINK_TECH="roce", NVIS_FABRIC_DEFAULT_ROUTE_IFS="")
+        assert s["NVIS_FAB_LINK"] == "roce" and s["WARNING"] == ""
+
+    def test_a_node_with_neither_keeps_the_statement_and_finds_nothing(self, tmp_path):
+        _dev(tmp_path, "mlx5_0", state="DOWN", link="InfiniBand", rate=400)
+        s = _scan_warned(tmp_path, NVIS_RDMA_LINK_TECH="ib")
+        assert s["NVIS_FAB_LINK"] == "ib" and s["NVIS_FAB_RAILS"] == "0" and s["WARNING"] == ""
+
+
 class TestTheEdges:
     def test_no_pin_when_nothing_else_is_active(self, tmp_path):
         for r in (1, 2):

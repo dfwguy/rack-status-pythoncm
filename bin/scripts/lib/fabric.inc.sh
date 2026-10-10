@@ -23,6 +23,12 @@
 #      the OOB bond0) and the NVSwitch-attached HCA (one PCIe device with 4 functions).
 #   2. Split by link_layer: InfiniBand vs Ethernet(RoCE). Pick the technology
 #      (NVIS_RDMA_LINK_TECH: ib|roce|auto; auto = IB if any active IB port exists, else RoCE).
+#      A stated technology (the cluster's fabric.scaleout, else its platform's default) is an
+#      expectation the node confirms: when the node has no candidate of that technology but does
+#      have the other, the node's own wins, with a warning naming the mismatch. A platform
+#      default describes a family of sites (gb300-nvl72 says ib; NscaleTX-NC is Spectrum-X RoCE),
+#      and honouring it against the hardware left NC with no rails, NCCL on every device and
+#      "GID index -1". Where the stated technology is present, nothing changes.
 #   3. InfiniBand: keep the ports at the TOP link rate (drops slower BlueField-3 storage
 #      NICs). IB GIDs live on fe80::/64 by default, so no GID rule applies there.
 #   4. RoCE: keep a port only if it has a ROUTABLE GID (not zero, not fe80::) and its netdev
@@ -180,6 +186,14 @@ nvis_fabric_scan() {
     roce) link=roce ;;
     *)    if [[ "${#ib[@]}" -gt 0 ]]; then link=ib; else link=roce; fi ;;
   esac
+  # The stated technology names what the site should have; the node says what it does have.
+  local -i n_ib="${#ib[@]}" n_roce="${#roce[@]}"
+  if [[ "$link" == ib && $n_ib -eq 0 && $n_roce -gt 0 ]] || [[ "$link" == roce && $n_roce -eq 0 && $n_ib -gt 0 ]]; then
+    local found=ib; [[ "$link" == ib ]] && found=roce
+    echo "nvis_fabric: WARNING: NVIS_RDMA_LINK_TECH=${want} but this node has no ${link} compute port;" \
+         "using the ${found} rails it does have -- correct the cluster's fabric.scaleout" >&2
+    link=$found
+  fi
 
   local -a rails=()
   local e name r f top=0 all_v4=1 all_v6=1
