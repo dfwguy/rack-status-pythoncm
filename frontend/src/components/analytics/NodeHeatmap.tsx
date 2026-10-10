@@ -81,6 +81,13 @@ export interface NodeHeatmapProps {
   onRefresh?: () => void;
   /** Cluster name, for the exported image's caption and filename. */
   clusterName?: string;
+  /**
+   * Draw only the nodes in ``nodes``. Set when ``nodes`` is the server's inventory: bring-up then
+   * also knows nodes Slurm defines but that never came up (NC: whole SUs not yet built), and with
+   * no placement for them the only way to draw them would be to invent racks. They are counted
+   * instead. Unset, bring-up-only nodes are drawn too, so a legacy feed does not under-report.
+   */
+  onlyListedNodes?: boolean;
 }
 
 // Wide enough for the gauge to read as a proportion rather than a dot.
@@ -113,6 +120,7 @@ export function NodeHeatmap({
   error,
   onRefresh,
   clusterName,
+  onlyListedNodes = false,
 }: NodeHeatmapProps) {
   const views = useMemo(() => heatmapViews(fleet), [fleet]);
   const [viewId, setViewId] = useState(STATUS_VIEW_ID);
@@ -141,11 +149,25 @@ export function NodeHeatmap({
 
   // Union of both feeds: a node with results but no inventory entry (or the reverse) still
   // deserves a square, otherwise the map silently under-reports the cluster.
+  // Order is the inventory's (racks, then trays); nodes only bring-up knows follow, in natural order.
+  const unlisted = useMemo(() => {
+    const known = new Set(nodes.map((n) => n.id));
+    return (fleet?.nodes ?? []).map((n) => n.node).filter((id) => !known.has(id));
+  }, [nodes, fleet]);
+
   const rows = useMemo(() => {
-    const ids = new Set<string>(nodes.map((n) => n.id));
-    for (const n of fleet?.nodes ?? []) ids.add(n.node);
-    return groupByRack([...ids].sort(), rackOf);
-  }, [nodes, fleet, rackOf]);
+    const ids: string[] = nodes.map((n) => n.id);
+    if (onlyListedNodes) return groupByRack(ids, rackOf);
+    const extra = [...unlisted].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    return groupByRack([...new Set([...ids, ...extra])], rackOf);
+  }, [nodes, unlisted, onlyListedNodes, rackOf]);
+
+  /** A compact cell's number: the server's tray when known, else what the id itself carries. */
+  const slotOf = useMemo(() => {
+    const trays = new Map<string, string>();
+    for (const n of nodes) if (n.tray) trays.set(n.id, String(n.tray).padStart(2, "0"));
+    return (id: string, rack: string) => trays.get(id) ?? shortNodeLabel(id, rack);
+  }, [nodes]);
 
   const total = rows.reduce((sum, r) => sum + r.nodes.length, 0);
 
@@ -167,7 +189,7 @@ export function NodeHeatmap({
             id,
             fill: cellFill(view, node, status, range),
             border: borderFor(view, node, status),
-            label: shortNodeLabel(id, rack),
+            label: slotOf(id, rack),
           };
         }),
       })),
@@ -177,7 +199,7 @@ export function NodeHeatmap({
     } catch (e) {
       setExportError(e instanceof Error ? e.message : String(e));
     }
-  }, [view, clusterName, total, rows, legendEntries, statusById, fleetByNode, range, format]);
+  }, [view, clusterName, total, rows, legendEntries, statusById, fleetByNode, range, format, slotOf]);
 
   return (
     <Card style={{ padding: 16 }}>
@@ -194,6 +216,17 @@ export function NodeHeatmap({
               : "Border and bar are node up/down."}{" "}
             Hover a node for all of its metrics.
           </Text>
+          {onlyListedNodes && unlisted.length > 0 && (
+            <Text
+              kind="body/regular/sm"
+              data-testid="heatmap-unlisted"
+              style={{ display: "block", color: "var(--nv-color-text-secondary)" }}
+            >
+              {unlisted.length} more node{unlisted.length === 1 ? " has" : "s have"} bring-up results but{" "}
+              {unlisted.length === 1 ? "is" : "are"} not in the cluster inventory (defined in Slurm,
+              never placed), so {unlisted.length === 1 ? "it is" : "they are"} not drawn.
+            </Text>
+          )}
         </div>
         <Flex align="center" style={{ gap: 8 }}>
           <SegmentedControl
@@ -362,6 +395,7 @@ export function NodeHeatmap({
                         range={range}
                         statusById={statusById}
                         fleetByNode={fleetByNode}
+                        slotOf={slotOf}
                       />
                     ))}
                   </div>
@@ -459,21 +493,21 @@ function GaugeCell({
 /** Small solid square carrying its slot number: the compact layout. */
 function CompactCell({
   id,
-  rack,
+  slot,
   view,
   range,
   status,
   node,
 }: {
   id: string;
-  rack: string;
+  slot: string;
   view: ReturnType<typeof heatmapViews>[number];
   range: { min: number; max: number } | null;
   status: NodeInfo["status"];
   node: FleetNode;
 }) {
   const fill = cellFill(view, node, status, range);
-  const label = shortNodeLabel(id, rack);
+  const label = slot;
   return (
     <Tooltip slotContent={<CellTooltip node={id} status={status} fleetNode={node} />} side="top">
       <div
@@ -514,6 +548,7 @@ function RackBlock({
   range,
   statusById,
   fleetByNode,
+  slotOf,
 }: {
   rack: string;
   ids: string[];
@@ -521,6 +556,7 @@ function RackBlock({
   range: { min: number; max: number } | null;
   statusById: Map<string, NodeInfo["status"]>;
   fleetByNode: Map<string, NonNullable<FleetNode>>;
+  slotOf: (id: string, rack: string) => string;
 }) {
   const counts = toneCounts(
     ids.map((id) => cellTone(view, fleetByNode.get(id), statusById.get(id) ?? "unknown")),
@@ -557,7 +593,7 @@ function RackBlock({
               <CompactCell
                 key={id}
                 id={id}
-                rack={rack}
+                slot={slotOf(id, rack)}
                 view={view}
                 range={range}
                 status={statusById.get(id) ?? "unknown"}

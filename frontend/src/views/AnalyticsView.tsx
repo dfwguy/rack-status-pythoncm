@@ -43,6 +43,7 @@ import { NodeHeatmap } from "../components/analytics/NodeHeatmap";
 import { IssueHealthOverview } from "../components/analytics/IssueHealthOverview";
 import { type NodeInfo } from "../components/rack/NodeSelector";
 import { parseNodesFromRack } from "../lib/parseNodesFromRack";
+import { NOT_IN_INVENTORY_GROUP, UNPLACED_GROUP, fleetNodesFromInventory } from "../lib/rackNodesFromInventory";
 import { getBringupFleet } from "../services/bringupService";
 import { useActiveCluster } from "../context/ActiveClusterContext";
 import { usePagedRows } from "../hooks/usePagedRows";
@@ -239,9 +240,18 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
   const traysPerRack =
     activeCluster?.geometry?.trays_per_rack || activePlatform?.geometry?.trays_per_rack || 18;
 
-  // Node inventory with live up/down state, derived exactly as the Nodes view does so both
-  // pages agree on what a node is called and whether it is up.
+  // The server's node inventory: real hostnames, placed in racks by the cluster's mapping mode and
+  // naming templates, with live up/down and tray numbers. The browser does not re-derive nodes from
+  // the rack rows -- on a translate cluster that invented <rack>-ctNN names with no status, and the
+  // bring-up results (keyed by real hostname) then landed beside them as a second, rackless set.
+  // The ct_down_unk expansion remains only for a server that sends no inventory.
+  const inventoryNodes = useMemo(
+    () => fleetNodesFromInventory(status?.nodes, status?.physical_rf0 ?? {}, status?.naming),
+    [status],
+  );
+
   const heatmapNodes = useMemo<NodeInfo[]>(() => {
+    if (inventoryNodes) return inventoryNodes;
     const rf0 = status?.physical_rf0 ?? {};
     const naming = status?.naming;
     const out: NodeInfo[] = [];
@@ -249,10 +259,14 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
       out.push(...parseNodesFromRack(r.rack, r.ct_down_unk, rf0, traysPerRack, naming));
     }
     return out;
-  }, [rows, status, traysPerRack]);
+  }, [inventoryNodes, rows, status, traysPerRack]);
 
   const rackByNode = useMemo(() => {
     const map = new Map<string, string>();
+    if (inventoryNodes) {
+      for (const n of inventoryNodes) map.set(n.id, n.rack ?? UNPLACED_GROUP);
+      return map;
+    }
     const rf0 = status?.physical_rf0 ?? {};
     const naming = status?.naming;
     for (const r of rows) {
@@ -261,18 +275,19 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
       }
     }
     return map;
-  }, [rows, status, traysPerRack]);
+  }, [inventoryNodes, rows, status, traysPerRack]);
 
   const rackOf = useCallback(
     (nodeId: string) => {
       const known = rackByNode.get(nodeId);
       if (known) return known;
-      // A node the status feed has not reported (bring-up knows it, the dashboard does not):
-      // fall back to the name's own prefix so it still lands in a sensible group.
+      // Bring-up knows the node and the inventory does not. With an inventory the placement is the
+      // server's call, so the node is grouped as such rather than given a rack guessed from its name.
+      if (inventoryNodes) return NOT_IN_INVENTORY_GROUP;
       const cut = nodeId.lastIndexOf("-");
       return cut > 0 ? nodeId.slice(0, cut) : nodeId;
     },
-    [rackByNode],
+    [rackByNode, inventoryNodes],
   );
 
   const loadFleet = useCallback(async () => {
@@ -658,6 +673,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
             fleet={fleet}
             nodes={heatmapNodes}
             rackOf={rackOf}
+            onlyListedNodes={inventoryNodes !== null}
             loading={fleetLoading}
             error={fleetError}
             onRefresh={() => void loadFleet()}

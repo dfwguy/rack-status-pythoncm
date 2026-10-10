@@ -10,7 +10,7 @@
  * its affiliates is strictly prohibited.
  */
 import { describe, expect, it } from "vitest";
-import { rackNodesFromInventory } from "./rackNodesFromInventory";
+import { fleetNodesFromInventory, rackNodesFromInventory } from "./rackNodesFromInventory";
 import type { NodeInventoryEntry } from "../types/api";
 import type { NvisNamingSchema } from "../types/naming";
 
@@ -80,5 +80,29 @@ describe("rackNodesFromInventory", () => {
     expect(rackNodesFromInventory("U20", undefined)).toBeNull();
     expect(rackNodesFromInventory("U20", null)).toBeNull();
     expect(rackNodesFromInventory("Z9", inv)).toBeNull();
+  });
+});
+
+describe("fleetNodesFromInventory", () => {
+  it("returns every node, racks in natural order, trays within, unplaced last", () => {
+    const fleet = fleetNodesFromInventory([
+      ...inv,
+      { id: "sys1-gso1-p-phy-gpu2-su19", rack: "U2", rack_unit: "11", tray: 1, status: "up", ip: "" },
+    ])!;
+    expect(fleet.map((n) => [n.rack, n.id])).toEqual([
+      ["U2", "sys1-gso1-p-phy-gpu2-su19"],
+      ["U19", "sys1-gso1-p-phy-gpu1-su19"],
+      ["U20", "sys1-gso1-p-phy-gpu19-su19"],
+      ["U20", "sys1-gso1-p-phy-gpu20-su19"],
+      ["U20", "sys1-gso1-p-phy-gpu36-su19"],
+      [null, "appserver-nc"],
+    ]);
+    expect(fleet.find((n) => n.id.endsWith("gpu36-su19"))).toMatchObject({ tray: 18, label: "U20-ct18", status: "down" });
+    expect(fleet.find((n) => n.id === "appserver-nc")).toMatchObject({ tray: undefined, label: "appserver-nc" });
+  });
+
+  it("returns null without an inventory so the caller keeps the legacy path", () => {
+    expect(fleetNodesFromInventory(undefined)).toBeNull();
+    expect(fleetNodesFromInventory(null)).toBeNull();
   });
 });

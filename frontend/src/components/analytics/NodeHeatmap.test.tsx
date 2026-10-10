@@ -228,6 +228,38 @@ describe("NodeHeatmap", () => {
     expect(cell("r01-12")).toHaveTextContent("12");
   });
 
+  it("numbers cells with the server's tray and keeps tray order, not hostname order", () => {
+    /** NC hostnames carry no slot ("…-gpu19-su19"), and gpu100 sorts before gpu19 as text. */
+    const ncNodes: NodeInfo[] = [
+      { id: "sys1-gso1-p-phy-gpu19-su19", status: "up", tray: 1 },
+      { id: "sys1-gso1-p-phy-gpu20-su19", status: "up", tray: 2 },
+      { id: "sys1-gso1-p-phy-gpu100-su19", status: "down", tray: 3 },
+    ];
+    renderHeatmap({ fleet: null, nodes: ncNodes, rackOf: () => "U20" });
+    expect(cell("sys1-gso1-p-phy-gpu19-su19")).toHaveTextContent("01");
+    expect(cell("sys1-gso1-p-phy-gpu100-su19")).toHaveTextContent("03");
+    const ids = screen.getAllByTestId(/^heatmap-cell-/).map((el) => el.getAttribute("data-testid"));
+    expect(ids).toEqual([
+      "heatmap-cell-sys1-gso1-p-phy-gpu19-su19",
+      "heatmap-cell-sys1-gso1-p-phy-gpu20-su19",
+      "heatmap-cell-sys1-gso1-p-phy-gpu100-su19",
+    ]);
+  });
+
+  it("draws only inventory nodes when asked, and counts the bring-up-only ones", () => {
+    /** NC: bring-up knows 4 608 Slurm nodes, the inventory 2 305; the rest were never placed. */
+    renderHeatmap({ nodes: NODES.slice(0, 2), onlyListedNodes: true });
+    expect(cell("r01-11")).toBeInTheDocument();
+    expect(screen.queryByTestId("heatmap-cell-r02-11")).toBeNull();
+    expect(screen.getByTestId("heatmap-unlisted")).toHaveTextContent("1 more node has bring-up results");
+  });
+
+  it("still draws bring-up-only nodes for a feed with no inventory", () => {
+    renderHeatmap({ nodes: NODES.slice(0, 2) });
+    expect(cell("r02-11")).toBeInTheDocument();
+    expect(screen.queryByTestId("heatmap-unlisted")).toBeNull();
+  });
+
   it("summarises each rack so a mixed block says how mixed", () => {
     /** Colour alone says "mixed"; the tally says whether that is one node or half the rack. */
     renderHeatmap();

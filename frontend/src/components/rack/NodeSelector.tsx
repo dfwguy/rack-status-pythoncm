@@ -47,6 +47,8 @@ export interface NodeInfo {
   label?: string;
   /** Where the cluster manager placed it, e.g. BCM's ``U20:11``; shown on hover. */
   placement?: string;
+  /** The server's tray number within the rack (natural hostname order); absent when unplaced. */
+  tray?: number;
 }
 
 interface NodeSelectorProps {

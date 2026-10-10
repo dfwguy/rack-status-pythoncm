@@ -26,6 +26,42 @@ import type { NodeInfo } from "../components/rack/NodeSelector";
 import type { NodeInventoryEntry } from "../types/api";
 import type { NvisNamingSchema } from "../types/naming";
 
+/** Heatmap groups for nodes the inventory leaves without a rack, or does not list at all. */
+export const UNPLACED_GROUP = "Unplaced";
+export const NOT_IN_INVENTORY_GROUP = "Not in inventory";
+
+/** Label/sort helpers shared by the rack page and the fleet heatmap. */
+const trayOf = (n: NodeInventoryEntry): number | undefined =>
+  typeof n.tray === "number" && n.tray > 0 ? n.tray : undefined;
+
+function byTrayThenName(a: NodeInventoryEntry, b: NodeInventoryEntry): number {
+  const ta = trayOf(a) ?? Number.POSITIVE_INFINITY;
+  const tb = trayOf(b) ?? Number.POSITIVE_INFINITY;
+  return ta - tb || a.id.localeCompare(b.id, undefined, { numeric: true });
+}
+
+function toNodeInfo(
+  n: NodeInventoryEntry,
+  rackId: string,
+  joiner: string,
+  rfByHost: Map<string, string>,
+): NodeInfo {
+  const tray = trayOf(n);
+  return {
+    id: n.id,
+    hostname: n.id,
+    label: tray !== undefined && rackId ? `${rackId}${joiner}${String(tray).padStart(2, "0")}` : n.id,
+    placement: n.rack_unit && rackId ? `${rackId}:${n.rack_unit}` : undefined,
+    tray,
+    status: n.status,
+    ip: n.ip || rfByHost.get(n.id.toLowerCase()) || "",
+  };
+}
+
+function rfMap(physicalRf0: Record<string, string>): Map<string, string> {
+  return new Map(Object.entries(physicalRf0).map(([h, ip]) => [h.toLowerCase(), ip]));
+}
+
 /**
  * ``tray`` is the server's number (natural hostname order within the rack); the label renders it
  * with the cluster's own tray joiner, as the dashboard names trays (``U20`` + ``-ct`` + ``01``).
@@ -40,21 +76,31 @@ export function rackNodesFromInventory(
   const rackKey = rack.trim().toLowerCase();
   const members = inventory.filter((n) => (n.rack ?? "").trim().toLowerCase() === rackKey);
   if (members.length === 0) return null;
-  const rfByHost = new Map(Object.entries(physicalRf0).map(([h, ip]) => [h.toLowerCase(), ip]));
+  const rfByHost = rfMap(physicalRf0);
   const joiner = naming?.ct_joiner ?? "-ct";
-  const trayNum = (n: NodeInventoryEntry) =>
-    typeof n.tray === "number" && n.tray > 0 ? n.tray : Number.POSITIVE_INFINITY;
-  return [...members]
-    .sort((a, b) => trayNum(a) - trayNum(b) || a.id.localeCompare(b.id, undefined, { numeric: true }))
-    .map((n) => {
-      const rackId = n.rack ?? rack;
-      return {
-        id: n.id,
-        hostname: n.id,
-        label: typeof n.tray === "number" && n.tray > 0 ? `${rackId}${joiner}${String(n.tray).padStart(2, "0")}` : n.id,
-        placement: n.rack_unit ? `${rackId}:${n.rack_unit}` : undefined,
-        status: n.status,
-        ip: n.ip || rfByHost.get(n.id.toLowerCase()) || "",
-      };
-    });
+  return [...members].sort(byTrayThenName).map((n) => toNodeInfo(n, n.rack ?? rack, joiner, rfByHost));
+}
+
+/**
+ * The whole fleet from the server's inventory, for views that draw every node (the Analytics
+ * heatmap). Racks in natural order (``Q2`` before ``Q10``), trays in order within each; unplaced
+ * nodes last. Returns null when the server sent no inventory, so the caller can fall back.
+ */
+export function fleetNodesFromInventory(
+  inventory: NodeInventoryEntry[] | null | undefined,
+  physicalRf0: Record<string, string> = {},
+  naming?: NvisNamingSchema,
+): Array<NodeInfo & { rack: string | null }> | null {
+  if (!Array.isArray(inventory)) return null;
+  const rfByHost = rfMap(physicalRf0);
+  const joiner = naming?.ct_joiner ?? "-ct";
+  const rackKey = (n: NodeInventoryEntry) => (n.rack ?? "").trim();
+  return [...inventory]
+    .sort((a, b) => {
+      const ra = rackKey(a);
+      const rb = rackKey(b);
+      if (!ra !== !rb) return ra ? -1 : 1;
+      return ra.localeCompare(rb, undefined, { numeric: true }) || byTrayThenName(a, b);
+    })
+    .map((n) => ({ ...toNodeInfo(n, rackKey(n), joiner, rfByHost), rack: rackKey(n) || null }));
 }
