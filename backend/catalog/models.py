@@ -1089,6 +1089,16 @@ class ClusterConnection:
     #: ``/opt/containers`` and have no ``/raid`` at all. Blank falls back to the
     #: ``NVIS_NODE_CONTAINER_DIR`` setting and then its default.
     node_container_dir: str = ""
+    #: Run commands on compute nodes under ``sudo -n``. For a connection whose account is not
+    #: root but has passwordless sudo on the nodes (Nscale NC connects as an operator account):
+    #: service restarts and GPU resets need root, and without this they fail on every node.
+    #: Off keeps the original behaviour, which assumes the account is already root.
+    node_sudo: bool = False
+    #: Reach compute nodes straight from the app server instead of through the head node. The
+    #: app opens its own ssh to each node with this connection's account and key, which needs the
+    #: nodes to accept that key from the app server; it frees the head's sshd sessions and does
+    #: not need pdsh on the head. Off keeps the original route through the head node.
+    node_exec_direct: bool = False
     endpoints: list[Endpoint] = field(default_factory=list)
     roles: list[ConnectionRole] = field(default_factory=list)
 
@@ -1105,6 +1115,8 @@ class ClusterConnection:
             workspace_dir=_as_str(d.get("workspace_dir")),
             shared_container_dir=_as_str(d.get("shared_container_dir")),
             node_container_dir=_as_str(d.get("node_container_dir")),
+            node_sudo=_as_bool(d.get("node_sudo")),
+            node_exec_direct=_as_bool(d.get("node_exec_direct")),
             endpoints=[Endpoint.from_dict(x) for x in _as_dict_list(d.get("endpoints"))],
             roles=[ConnectionRole.from_dict(x) for x in _as_dict_list(d.get("roles"))],
         )

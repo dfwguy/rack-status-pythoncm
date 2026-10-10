@@ -38,7 +38,7 @@ from naming import _normalize_rack_id
 from node_targets import validation_target_for_rack
 from paths import _resolve_log_dir
 from platforms import get_platform as _get_platform
-from slurm_admin import _run_scancel, _run_scontrol_node_update
+from slurm_admin import _run_scancel, _run_scontrol_node_update, _run_scontrol_reboot
 from slurm_query import (
     _resolve_slurm_job_stdout_path,
     _run_scontrol_show_job,
@@ -119,6 +119,50 @@ def api_slurm_drain():
             payload["error"] = "scontrol denied the update — the service account lacks Slurm operator rights."
         else:
             payload["error"] = f"scontrol update failed: {err[:300] or 'no output'}"
+    return jsonify(payload), (200 if ok else 502)
+
+
+@bp.route("/api/scheduler-reboot", methods=["POST"])
+@action("scheduler.node:reboot")
+def api_slurm_reboot():
+    """POST JSON {\"target\": \"host1,host2\"} (or {\"rack\": …}) — Slurm-managed node reboot.
+
+    ``scontrol reboot ASAP nextstate=RESUME``: the nodes drain now, reboot as soon as their jobs
+    end, and return to service once they register again. Nothing running is interrupted.
+    """
+    if os.environ.get("RACK_SLURM_NODES_STATE_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "Slurm node state changes disabled (RACK_SLURM_NODES_STATE_DISABLED)"}), 403
+    body = request.get_json(silent=True) or {}
+    target, err = _slurm_nodename_target_from_body(body)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    raw_reason = body.get("reason")
+    if raw_reason is not None and not isinstance(raw_reason, str):
+        return jsonify({"ok": False, "error": "reason must be a string"}), 400
+    r = (raw_reason if isinstance(raw_reason, str) else "").strip() or "reboot requested from Rack Status"
+    if not _SLURM_DRAIN_REASON_RE.fullmatch(r):
+        return jsonify(
+            {"ok": False, "error": "invalid reason (1–256 chars: letters, digits, space, _.,:/()- only)"}
+        ), 400
+    rk_for_lock = (body.get("rack") or "").strip()
+    try:
+        with _track_sync_op(rk_for_lock, "slurm_reboot", _operator_from_request()):
+            result = _run_scontrol_reboot(target, r)
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    ok = bool(result.get("ok"))
+    payload: dict = {"ok": ok, "target": target, **result}
+    if ok:
+        payload["message"] = (
+            f"Reboot queued for {len(target.split(','))} node(s): they drain now, reboot when idle "
+            "and return to service afterwards."
+        )
+    else:
+        err = f"{result.get('stderr') or ''} {result.get('stdout') or ''}".strip()
+        if "Access/permission denied" in err or "Invalid user" in err:
+            payload["error"] = "scontrol denied the reboot — the service account lacks Slurm operator rights."
+        else:
+            payload["error"] = f"scontrol reboot failed: {err[:300] or 'no output'}"
     return jsonify(payload), (200 if ok else 502)
 
 

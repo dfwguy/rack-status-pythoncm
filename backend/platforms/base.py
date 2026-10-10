@@ -161,9 +161,31 @@ class PlatformProvider(ABC):
     def services_restart_remote_cmd(self) -> str:
         """The remote command string that pdsh sends to each node."""
 
+    def gpu_reset_remote_cmd(self) -> str:
+        """Reset every GPU on a node: stop what holds them, ``nvidia-smi -r``, start it all again.
+
+        Stops only the services that are running, and starts the same ones in reverse order, so
+        one command fits sites that name DCGM ``nvidia-dcgm`` (Nscale NC) or ``cuda-dcgm`` and
+        sites without BCM's ``cmd``. ``nvidia-persistenced`` is stopped too: it holds every GPU
+        open and a reset refuses while it does. Exits with the reset's status.
+        """
+        return (
+            "act=; for s in cmd slurmd nvidia-dcgm cuda-dcgm nvidia-imex nvidia-persistenced; do "
+            "systemctl is-active --quiet $s && act=\"$s $act\"; done; "
+            "[ -n \"$act\" ] && systemctl stop $act; sleep 5; "
+            "nvidia-smi -r; rc=$?; "
+            "for s in $act; do systemctl start $s; done; "
+            "exit $rc"
+        )
+
     def pdsh_cmd(self, hosts: str, remote_cmd: str, *, fanout: int | None = None) -> list[str]:
-        """Build a ``pdsh -w <hosts> <remote_cmd>`` argv."""
-        argv = ["pdsh"]
+        """Build a ``pdsh -R ssh -w <hosts> <remote_cmd>`` argv.
+
+        ``-R ssh`` always: pdsh's compiled-in default is often rsh, which needs a privileged
+        source port and so fails with "rcmd: socket: Permission denied" for any non-root account
+        -- on every node, while pdsh still exits 0. Every node script here already passes it.
+        """
+        argv = ["pdsh", "-R", "ssh"]
         if fanout:
             argv.extend(["-f", str(fanout)])
         argv.extend(["-w", hosts, remote_cmd])

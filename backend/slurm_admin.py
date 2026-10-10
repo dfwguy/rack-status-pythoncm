@@ -44,10 +44,23 @@ def _run_scontrol_node_update(target: str, state_kv: list[str]) -> dict:
     matching cluster login environments where *scontrol* is not on PATH until modules load.
     Set RACK_SLURM_SKIP_MODULE_LOAD=1 to invoke *scontrol* directly (e.g. full path already on PATH).
     """
+    return _run_scontrol(["update", f"nodename={target}", *state_kv])
+
+
+def _run_scontrol_reboot(target: str, reason: str) -> dict:
+    """``scontrol reboot ASAP nextstate=RESUME reason=… TARGET``: Slurm's own node reboot.
+
+    Slurm drains the nodes at once (so no new job lands), reboots each one when its running
+    jobs end, and returns it to service when it registers again -- a reboot that cannot cut a
+    job short and needs nobody to undrain afterwards. Uses the cluster's ``RebootProgram``.
+    """
+    return _run_scontrol(["reboot", "ASAP", "nextstate=RESUME", f"reason={reason}", target])
+
+
+def _run_scontrol(args: list[str]) -> dict:
+    """Run ``scontrol <args>`` through the platform's Slurm command (module load, dry run)."""
     plat = _get_platform()
-    nodename_arg = f"nodename={target}"
-    tail = " ".join(shlex.quote(a) for a in ["update", nodename_arg, *state_kv])
-    shell_cmd = plat.scontrol_cmd(tail)
+    shell_cmd = plat.scontrol_cmd(" ".join(shlex.quote(a) for a in args))
     cmd_display = shell_cmd
 
     dry = os.environ.get("RACK_SLURM_NODES_STATE_DRY_RUN", "").strip().lower() in ("1", "true", "yes")

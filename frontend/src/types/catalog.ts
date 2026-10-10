@@ -221,6 +221,12 @@ export interface ClusterConnection {
   // the per-node cache jobs run from. Mount points, so per-cluster; blank = deployment default.
   shared_container_dir: string;
   node_container_dir: string;
+  // Run node commands under `sudo -n` (an account that is not root but has passwordless sudo on
+  // the nodes). Off = the original behaviour, which assumes the account is root.
+  node_sudo?: boolean;
+  // Reach compute nodes straight from the app server with this connection's account and key,
+  // instead of through the head node. Off = the original route through the head node.
+  node_exec_direct?: boolean;
 }
 
 export interface Cluster {

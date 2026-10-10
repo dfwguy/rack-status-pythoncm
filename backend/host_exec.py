@@ -60,8 +60,9 @@ from transport import (
     TransportConfig,
     build_connection,
 )
-from transport.compose import make_env_resolver
+from transport.compose import SudoExecutor, make_env_resolver
 from transport.factory import FORWARD_ENV_NAMES, FORWARD_ENV_PREFIXES
+from transport.fanout import NodeResult, fanout_via
 from transport.topology import (
     DEFAULT_ROLE,
     SSHDefaults,
@@ -922,7 +923,23 @@ def ssh_to_headnode_argv() -> list[str]:
     return _conn().select(DEFAULT_ROLE).interactive_argv()
 
 
-def node_connection(node: str) -> Connection:
+def _on(value: str | None) -> bool:
+    # Inline rather than core.truthy_env: core imports this module, so importing it back
+    # would close a cycle.
+    return (value or "").strip().lower() not in ("", "0", "false", "no", "off")
+
+
+def node_sudo_enabled() -> bool:
+    """The cluster's "run node commands with sudo" setting (``RACK_NODE_SUDO``)."""
+    return _on(os.environ.get("RACK_NODE_SUDO"))
+
+
+def node_exec_direct() -> bool:
+    """The cluster's "reach compute nodes directly from the app server" setting."""
+    return _on(os.environ.get("RACK_DIRECT_NODE_SSH"))
+
+
+def node_connection(node: str, *, sudo: bool = False) -> Connection:
     """A connection to compute *node*, honouring how this deployment reaches nodes.
 
     Two models, and the difference is a property of the deployment rather than of the code:
@@ -935,9 +952,12 @@ def node_connection(node: str) -> Connection:
       and a fleet sweep that silently lost 655 of 2,013 nodes), but it requires the app
       itself to hold a credential the node accepts.
 
-    Selected by ``RACK_DIRECT_NODE_SSH``, with ``RACK_NODE_SSH_USER`` / ``RACK_NODE_SSH_KEY``
-    for the direct case. No hostname pattern: this used to be gated on one customer's tray
-    regex inside ``Connection.hop``, which meant the setting did nothing anywhere else.
+    Selected by ``RACK_DIRECT_NODE_SSH`` (the cluster's ``connection.node_exec_direct``), with
+    ``RACK_NODE_SSH_USER`` / ``RACK_NODE_SSH_KEY`` for the direct case. No hostname pattern:
+    this used to be gated on one customer's tray regex inside ``Connection.hop``, which meant
+    the setting did nothing anywhere else.
+
+    *sudo* runs each command under ``sudo -n -E`` on the node, on either route.
     """
     _ensure_init()
     ctrl = _CONFIG.control if _CONFIG else None
@@ -946,21 +966,76 @@ def node_connection(node: str) -> Connection:
     # the app's own account when the app is already on the head. Set it when the node expects
     # a different account than the host launching the leg.
     node_user = (os.environ.get("RACK_NODE_SSH_USER") or "").strip() or None
-    # Inline rather than core.truthy_env: core imports this module, so importing it back
-    # would close a cycle.
-    direct = (os.environ.get("RACK_DIRECT_NODE_SSH") or "").strip().lower() not in (
-        "", "0", "false", "no", "off",
-    )
-    if not direct:
-        return _conn().select(DEFAULT_ROLE).hop(node, user=node_user, connect_timeout=timeout)
-    return Connection(SSHExecutor(SSHConfig(
+    if not node_exec_direct():
+        return _conn().select(DEFAULT_ROLE).hop(
+            node, user=node_user, connect_timeout=timeout, sudo=sudo
+        )
+    executor = SSHExecutor(SSHConfig(
         host=node,
-        # A direct leg has no predecessor to inherit from, so it needs a concrete account.
-        user=node_user or "root",
+        # A direct leg has no predecessor to inherit from, so it needs a concrete account: the
+        # one named for nodes, else the cluster connection's own (its key is the one used), and
+        # root only when neither is set.
+        user=node_user or (ctrl.user if ctrl else "") or "root",
         key=(os.environ.get("RACK_NODE_SSH_KEY") or (ctrl.key if ctrl else "") or "").strip(),
         port=(ctrl.port if ctrl else "22") or "22",
         connect_timeout=timeout,
-    )))
+    ))
+    return Connection(SudoExecutor(executor) if sudo else executor)
+
+
+def run_on_nodes(
+    nodes: list[str],
+    command: str,
+    *,
+    timeout: int = 600,
+    max_workers: int | None = None,
+) -> list[NodeResult]:
+    """Run shell *command* on every node in *nodes*; one :class:`NodeResult` per node.
+
+    The cluster's settings decide how: straight from the app server or through the head node
+    (``node_exec_direct``), and as the connection's account or under ``sudo -n``
+    (``node_sudo``). The command always runs as ``bash -c <command>``, so sudo covers all of
+    it rather than only its first word. A node that could not be reached is a failed result
+    of its own -- never folded into an overall exit code that hides it, which is how a pdsh
+    run that reached no node at all used to report success.
+    """
+    sudo = node_sudo_enabled()
+    workers = max_workers or (32 if node_exec_direct() else 8)
+    warm = None if node_exec_direct() else _conn().select(DEFAULT_ROLE)
+    return fanout_via(
+        lambda n: node_connection(n, sudo=sudo),
+        list(dict.fromkeys(n for n in nodes if n)),
+        ["bash", "-c", command],
+        timeout=timeout,
+        max_workers=workers,
+        warm=warm,
+    )
+
+
+def node_results_summary(results: list[NodeResult], command: str) -> dict:
+    """``run_pdsh_job``-shaped dict for per-node results: rc 0 only when every node succeeded.
+
+    Output lines are prefixed ``<node>: `` like pdsh's, so existing parsers and the job panel
+    read them unchanged; ``failed_nodes`` names the nodes that did not succeed.
+    """
+    def _prefixed(attr: str) -> str:
+        return "\n".join(
+            f"{r.node}: {line}" for r in results for line in (getattr(r, attr) or "").splitlines()
+        )
+
+    failed = [r.node for r in results if r.returncode != 0]
+    route = "direct" if node_exec_direct() else "via head node"
+    return {
+        "returncode": 0 if results and not failed else 1,
+        "stdout": _prefixed("stdout"),
+        "stderr": _prefixed("stderr"),
+        "command_display": (
+            f"[{route}{', sudo -n' if node_sudo_enabled() else ''}] on {len(results)} node(s): {command}"
+        ),
+        "pdsh_w": ",".join(r.node for r in results),
+        "nodes_ok": [r.node for r in results if r.returncode == 0],
+        "failed_nodes": failed,
+    }
 
 
 def ssh_to_node_argv(node: str) -> list[str]:

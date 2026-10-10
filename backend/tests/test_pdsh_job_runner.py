@@ -7,7 +7,7 @@
 # disclosure or distribution of this material and related documentation
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
-"""The pdsh fan-out contract shared by the bug-report and services-restart endpoints.
+"""The pdsh fan-out contract of the bug-report endpoint (services restart left pdsh; see below).
 
 Author: Rafael M. Koike & Cursor Agent ("Ada")
 
@@ -16,9 +16,10 @@ tests at all and they are not harmless: each fans pdsh across a rack, one to col
 nvidia-bug-report.sh and the other to restart munge/slurmd/nvidia-imex. Refactoring that on the
 strength of "the diff looks equivalent" is how a rack gets a service bounce nobody asked for.
 
-Every test is parametrized over both endpoints, so the two implementations are asserted to behave
-identically -- which is the actual claim the extraction rests on. `pdsh_cmd` and `run_on_host` are
-stubbed: nothing here may reach a real host.
+Every test was parametrized over both endpoints. Services restart has since moved to
+``host_exec.run_on_nodes`` -- per-node results, the cluster's direct/via-head route and its sudo
+setting -- and is tested in test_node_exec_settings.py; the parametrization is kept so another
+pdsh job can join it. `pdsh_cmd` and `run_on_host` are stubbed: nothing here may reach a real host.
 """
 
 from __future__ import annotations
@@ -33,13 +34,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import host_exec
-from api import bug_report, rack_power
+from api import bug_report
 
 # (module, callable, the env var that forces a dry run)
 ENDPOINTS = [
     pytest.param(bug_report, "run_bug_report_pdsh", "RACK_BUG_REPORT_DRY_RUN", id="bug-report"),
-    pytest.param(rack_power, "run_services_restart", "RACK_SERVICES_RESTART_DRY_RUN",
-                 id="services-restart"),
 ]
 
 
@@ -61,14 +60,13 @@ class _Platform:
 def rig(monkeypatch):
     """Neutralise expansion, the platform provider and execution for BOTH modules."""
     plat = _Platform()
-    for mod in (bug_report, rack_power):
+    for mod in (bug_report,):
         monkeypatch.setattr(mod, "_expand_pdsh_w_slurm_nodenames", lambda w: w, raising=True)
         monkeypatch.setattr(mod, "_get_platform", lambda: plat, raising=True)
     # A remote dir that does not depend on the deployment layout.
     monkeypatch.setattr(bug_report, "_bug_report_remote_dir", lambda: "/tmp/bugreports",
                         raising=True)
     monkeypatch.delenv("RACK_BUG_REPORT_DRY_RUN", raising=False)
-    monkeypatch.delenv("RACK_SERVICES_RESTART_DRY_RUN", raising=False)
     return plat
 
 
@@ -163,8 +161,8 @@ def test_expansion_result_is_what_gets_targeted(mod, name, dry_env, rig, monkeyp
     assert rig.calls[-1][0] == "rack-a-expanded"
 
 
-def test_both_endpoints_pass_their_own_timeout(rig, monkeypatch):
-    """The shared runner must not flatten the two very different timeout budgets."""
+def test_bug_report_passes_its_own_timeout(rig, monkeypatch):
+    """The shared runner must not flatten the bug report's long timeout budget."""
     seen = {}
 
     def _capture(cmd, timeout=None, **k):
@@ -173,8 +171,5 @@ def test_both_endpoints_pass_their_own_timeout(rig, monkeypatch):
 
     monkeypatch.setattr(host_exec, "run_on_host", _capture)
     monkeypatch.setenv("RACK_BUG_REPORT_TIMEOUT", "4242")
-    monkeypatch.setenv("RACK_SERVICES_RESTART_TIMEOUT", "99")
     bug_report.run_bug_report_pdsh("n1")
-    rack_power.run_services_restart("n1")
     assert 4242 in seen.values(), seen
-    assert 99 in seen.values(), seen

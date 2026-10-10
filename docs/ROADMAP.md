@@ -17,7 +17,7 @@ Current release line: **0.4.0** (cut 2026-10-01).
 |---|---|
 | **Now** (active) | DSX support v1 groundwork · pool/rackless cluster mode · identity & authz programme · nvrs CLI · deploy/TLS hardening |
 | **Next** (1–2 cycles) | DSX v1 `nicocli` provider · multi-user / multi-cluster · PythonCM hardening · frontend token-expiry resilience |
-| **Later** (envisioned) | DSX v2 REST + transport `forward()` + generic Credential provider · NVCRE readiness results · NVIS-P2P as a per-project capability · policy engine (authz Phase 3) |
+| **Later** (envisioned) | DSX v2 REST + transport `forward()` + generic Credential provider · NVCRE readiness results · NVIS-P2P as a per-project capability · policy engine (authz Phase 3) · compute-node remote execution chain (jumpboxes) |
 
 ---
 
@@ -75,6 +75,14 @@ The auth programme. See [auth/AUTH_PROGRAMME_SCOPE.md](auth/AUTH_PROGRAMME_SCOPE
   gunicorn (`refactor/api-module-migration`).
 - **SSH host-key policy** — *In flight.* Opt-in `RACK_SSH_KNOWN_HOSTS`, honored on all paths
   (`fix/ssh-host-key-paths`).
+- **Compute-node remote execution chain** — *Later.* Today two cluster switches say how node
+  commands run: under `sudo -n` or not, and straight from the app server or through the head node
+  (`connection.node_sudo` / `node_exec_direct`, read by `host_exec.run_on_nodes`). A site with a
+  jumpbox, a bastion per SU, or different accounts per leg needs more than two booleans: a Project/
+  Cluster component that holds an ordered chain of hosts with per-leg attributes (user, key, port,
+  sudo, options), edited visually as a list, and executed by the transport layer's existing `via`
+  hops so every node command and the terminal follow the same chain. The two switches become the
+  chain's simplest shapes (one leg direct, or head then node).
 - **Secret hygiene** — *Shipped.* Removed the shipped NVSwitch admin password
   (`fix/nvswitch-hardcoded-credential`).
 - **Nscale NC (air-gapped x86_64)** — *In flight.* Offline image, `--no-build`, render-site-config

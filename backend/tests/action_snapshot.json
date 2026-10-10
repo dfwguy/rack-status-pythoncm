@@ -1416,6 +1416,12 @@
   "variant": "sync"
  },
  {
+  "endpoint": "slurm_ops.api_slurm_reboot",
+  "method": "POST",
+  "action": "scheduler.node:reboot",
+  "variant": "sync"
+ },
+ {
   "endpoint": "slurm_ops.api_slurm_scancel",
   "method": "POST",
   "action": "scheduler.job:cancel",

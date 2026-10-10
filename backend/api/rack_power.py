@@ -128,19 +128,54 @@ def _power_reset_worker(job_id: str, specs: list[str]) -> None:
     _reset_job_purge_later(job_id)
 
 
-def run_services_restart(pdsh_w: str) -> dict:
-    """Run pdsh across hosts: mount -a, restart munge/slurmd/nvidia-imex, then nvidia-dcgm or cuda-dcgm."""
+def _node_hosts(pdsh_w: str) -> list[str]:
+    """The hostnames a ``-w`` pattern names, expanded (``a-[01-03],b`` -> three plus one)."""
+    from universal_parser import expand_nodelist
+
     w = _expand_pdsh_w_slurm_nodenames((pdsh_w or "").strip())
     if not w:
         raise ValueError("empty pdsh -w pattern")
-    plat = _get_platform()
-    return host_exec.run_pdsh_job(
-        plat.pdsh_cmd(w, plat.services_restart_remote_cmd()),
-        pdsh_w=w,
+    return [h for h in expand_nodelist(w) if h]
+
+
+def _run_node_command(pdsh_w: str, command: str, *, timeout: int, dry_run: bool, dry_env: str) -> dict:
+    """Run *command* on the nodes *pdsh_w* names, by the cluster's node route and sudo setting.
+
+    Success is counted per node: the result's ``returncode`` is 0 only when every node ran it
+    successfully, and ``failed_nodes`` names the rest.
+    """
+    hosts = _node_hosts(pdsh_w)
+    if dry_run:
+        return {
+            "returncode": 0,
+            "stdout": f"dry-run ({dry_env})",
+            "stderr": "",
+            "command_display": f"on {len(hosts)} node(s): {command}",
+            "pdsh_w": ",".join(hosts),
+            "failed_nodes": [],
+        }
+    results = host_exec.run_on_nodes(hosts, command, timeout=timeout)
+    return host_exec.node_results_summary(results, command)
+
+
+def _node_job_error(what: str, result: dict) -> str | None:
+    failed = result.get("failed_nodes") or []
+    if result.get("returncode") == 0:
+        return None
+    if failed:
+        shown = ", ".join(failed[:10]) + (f" (+{len(failed) - 10} more)" if len(failed) > 10 else "")
+        return f"{what} failed on {len(failed)} node(s): {shown} (see stderr)"
+    return f"{what} exited non-zero (see stdout/stderr)"
+
+
+def run_services_restart(pdsh_w: str) -> dict:
+    """On each node: mount -a, restart munge/slurmd/nvidia-imex, then nvidia-dcgm or cuda-dcgm."""
+    return _run_node_command(
+        pdsh_w,
+        _get_platform().services_restart_remote_cmd(),
         timeout=max(30, _env_int("RACK_SERVICES_RESTART_TIMEOUT", 1800)),
-        dry_run=os.environ.get("RACK_SERVICES_RESTART_DRY_RUN", "").strip().lower()
-        in ("1", "true", "yes"),
-        dry_run_label="RACK_SERVICES_RESTART_DRY_RUN",
+        dry_run=os.environ.get("RACK_SERVICES_RESTART_DRY_RUN", "").strip().lower() in ("1", "true", "yes"),
+        dry_env="RACK_SERVICES_RESTART_DRY_RUN",
     )
 
 
@@ -255,7 +290,8 @@ def _services_restart_worker(job_id: str, pdsh_w: str) -> None:
             stderr=result.get("stderr", ""),
             command_display=result.get("command_display", ""),
             pdsh_w=result.get("pdsh_w", ""),
-            error=None if ok else "services restart (pdsh) exited non-zero (see stdout/stderr)",
+            failed_nodes=result.get("failed_nodes", []),
+            error=_node_job_error("services restart", result),
         )
     except Exception as e:
         _logger.debug("_services_restart_worker: ignoring error", exc_info=True)
@@ -304,7 +340,8 @@ def _gpu_reset_worker(job_id: str, pdsh_w: str) -> None:
             stderr=result.get("stderr", ""),
             command_display=result.get("command_display", ""),
             pdsh_w=result.get("pdsh_w", ""),
-            error=None if ok else "gpu_reset.sh exited non-zero (see stdout/stderr)",
+            failed_nodes=result.get("failed_nodes", []),
+            error=_node_job_error("GPU reset", result),
         )
     except Exception as e:
         _logger.debug("_gpu_reset_worker: ignoring error", exc_info=True)
@@ -542,7 +579,21 @@ def _gpu_reset_script_path() -> Path:
 
 
 def run_gpu_reset(pdsh_w: str) -> dict:
-    """Run gpu_reset.sh once; argument is the pdsh -w host pattern (may contain commas)."""
+    """Reset the GPUs on the nodes *pdsh_w* names.
+
+    By default this is the platform's ``gpu_reset_remote_cmd`` run on each node through the
+    cluster's node route (direct or via the head, sudo or not), counted per node. A site that
+    named its own script with ``RACK_GPU_RESET_SCRIPT`` keeps running that script on the head,
+    as before.
+    """
+    if not (_eget("RACK_GPU_RESET_SCRIPT") or "").strip():
+        return _run_node_command(
+            pdsh_w,
+            _get_platform().gpu_reset_remote_cmd(),
+            timeout=max(30, _env_int("RACK_GPU_RESET_TIMEOUT", 3600)),
+            dry_run=os.environ.get("RACK_GPU_RESET_DRY_RUN", "").strip().lower() in ("1", "true", "yes"),
+            dry_env="RACK_GPU_RESET_DRY_RUN",
+        )
     script = _gpu_reset_script_path()
     if not _script_exists(script):
         raise OSError(f"gpu_reset script not found: {script}")

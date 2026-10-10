@@ -10,7 +10,7 @@ Every action the product declares, which is what a policy's `actions` field may 
 **Generated from the live registry** — a route without a declaration cannot appear here,
 and the build gate in `backend/tests/test_action_coverage.py` fails if one exists.
 
-199 actions across 56 services: 64 reads and 135 mutations.
+200 actions across 56 services: 64 reads and 136 mutations.
 
 A read-only role is `["*:read", "*:list"]` — the two read verbs — rather than an
 enumeration of the reads below.
@@ -71,7 +71,7 @@ case does not match.
 | [`report.node`](#reportnode) | instance | 4 | Generated reports: the archive, per-node reports, and the post-run acceptance report. |
 | [`results`](#results) | singleton | 4 | Parser results: what a finished run measured, per rack, as the dashboard charts it. |
 | [`scheduler.job`](#schedulerjob) | instance | 2 | Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log. |
-| [`scheduler.node`](#schedulernode) | instance | 2 | Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log. |
+| [`scheduler.node`](#schedulernode) | instance | 3 | Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log. |
 | [`scheduler.queue`](#schedulerqueue) | singleton | 1 | Can this cluster's scheduler accept work right now? |
 | [`settings`](#settings) | singleton | 3 | The dashboard core: rack status, cluster overview, app stats, and the settings writer. |
 | [`support`](#support) | singleton | 3 | nvidia-bug-report collection: run it across a rack, then list and serve what landed. |
@@ -745,6 +745,7 @@ Identified by `node`, `nodes`, `host`, `target` on the request. The identifier i
 | Action | Kind | Scope | Routes |
 |---|---|---|---|
 | `scheduler.node:drain` | mutate | instance | `POST slurm_ops.api_slurm_drain` |
+| `scheduler.node:reboot` | mutate | instance | `POST slurm_ops.api_slurm_reboot` |
 | `scheduler.node:undrain` | mutate | instance | `POST slurm_ops.api_slurm_undrain` |
 
 ## `scheduler.queue`

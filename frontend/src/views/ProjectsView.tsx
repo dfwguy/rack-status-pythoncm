@@ -76,6 +76,8 @@ function emptyCluster(): Cluster {
       workspace_dir: "",
       shared_container_dir: "",
       node_container_dir: "",
+      node_sudo: false,
+      node_exec_direct: false,
     },
     // Empty means "derive SUs from the platform's racks_per_su", which is what a new
     // cluster wants. A site with a ragged SU map states it explicitly instead.
@@ -626,6 +628,28 @@ export function ProjectsView() {
                 value={clusterDraft?.cluster.connection.node_container_dir || ""}
                 onValueChange={(v) => setConn({ node_container_dir: v })}
                 placeholder="Where each compute node caches images (blank = /tmp/containers)"
+              />
+            </FormField>
+            <FormField
+              name="cl-nodesudo"
+              slotLabel="Node commands"
+              slotHelp="Service restarts and GPU resets need root on the nodes. Turn on when the SSH user is not root but has passwordless sudo there."
+            >
+              <Switch
+                slotLabel="Run with sudo -n"
+                checked={Boolean(clusterDraft?.cluster.connection.node_sudo)}
+                onCheckedChange={(on: boolean) => setConn({ node_sudo: on })}
+              />
+            </FormField>
+            <FormField
+              name="cl-nodedirect"
+              slotLabel="Reach compute nodes"
+              slotHelp="Off: through the head node. On: straight from the app server with this connection's user and key (the nodes must accept that key from the app server)."
+            >
+              <Switch
+                slotLabel="Directly from the app server"
+                checked={Boolean(clusterDraft?.cluster.connection.node_exec_direct)}
+                onCheckedChange={(on: boolean) => setConn({ node_exec_direct: on })}
               />
             </FormField>
           </Box>

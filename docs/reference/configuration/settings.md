@@ -11,9 +11,9 @@ Every environment variable the backend reads, found by scanning the source rathe
 importing it — a variable read inside a function body is never reached by an import, so only
 the source knows the whole set.
 
-**361 settings.** 19 are *declared* in
+**362 settings.** 19 are *declared* in
 `backend/config_registry.py`, which is the set `rackstatus.toml` can carry, the required-
-setting preflight can demand, and `rackstatus.toml.example` lists. 174 are named in
+setting preflight can demand, and `rackstatus.toml.example` lists. 175 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
 whether that document mentions the setting at all. It is not in this site yet; see
 `docs/README.md` for why the migration is page-at-a-time.
@@ -54,12 +54,12 @@ scan simply cannot point at a call site.
 
 ## Read outside the resolution ladder
 
-248 of them are read only via `os.environ`, so a cluster overlay and the
+249 of them are read only via `os.environ`, so a cluster overlay and the
 Settings screen cannot influence them — the setting is process-wide. New code should
 prefer `_eget` (`core-designs.mdc` §5); these are the ones that predate the rule or
 genuinely belong to the process rather than to a cluster.
 
-They are not listed here — 248 names in a paragraph is not something
+They are not listed here — 249 names in a paragraph is not something
 anyone reads.
 The table below marks each one `environment` in its `Reader` column, which answers the
 same question setting by setting, where you are already looking.
@@ -299,6 +299,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-node-ssh-user"></a>`RACK_NODE_SSH_USER` | environment |  | See `docs/ENVIRONMENT.md` | `backend/host_exec.py` |
 | <a id="s-rack-node-stage2-bringup-job"></a>`RACK_NODE_STAGE2_BRINGUP_JOB` | ladder |  | — | `backend/node_stages.py` |
 | <a id="s-rack-node-stage-bringup-ttl-sec"></a>`RACK_NODE_STAGE_BRINGUP_TTL_SEC` | environment | `300` | — | `backend/node_stages.py` |
+| <a id="s-rack-node-sudo"></a>`RACK_NODE_SUDO` | environment |  | Set to 1 by the cluster overlay when the cluster's *Run node commands with sudo -n* switch is on (connection.node_sudo); not an operator knob. Node commands -- services restart, GPU reset -- then run as `sudo -n -E bash -c ...` on every node, for an SSH account that is not root but has passwordless sudo there. | `backend/host_exec.py` |
 | <a id="s-rack-nvftp-remote-base"></a>`RACK_NVFTP_REMOTE_BASE` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvftp_cache_sync.py` |
 | <a id="s-rack-nvftp-sftp-host"></a>`RACK_NVFTP_SFTP_HOST` | ladder | `transfer.nvftp.nvidia.com` | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/nvftp_cache_sync.py` |
 | <a id="s-rack-nvftp-sftp-port"></a>`RACK_NVFTP_SFTP_PORT` | ladder |  | See `docs/ENVIRONMENT.md` | `backend/nvftp_cache_sync.py` |

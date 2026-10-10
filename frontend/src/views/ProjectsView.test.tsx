@@ -160,6 +160,26 @@ describe("compute fabric", () => {
     expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "roce", addr_family: "", compute_hca: "" });
   });
 
+  it("saves a new cluster with node commands as before: through the head node, without sudo", async () => {
+    await openNewCluster();
+    fireEvent.change(screen.getByPlaceholderText("e.g. Pod A"), { target: { value: "NC" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
+    const conn = savedProject().clusters[0].connection;
+    expect([conn.node_sudo, conn.node_exec_direct]).toEqual([false, false]);
+  });
+
+  it("turns on sudo -n and direct node access for a cluster and saves both", async () => {
+    await openNewCluster();
+    fireEvent.change(screen.getByPlaceholderText("e.g. Pod A"), { target: { value: "NC" } });
+    fireEvent.click(screen.getByRole("switch", { name: "Node commands" }));
+    fireEvent.click(screen.getByRole("switch", { name: "Reach compute nodes" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
+    const conn = savedProject().clusters[0].connection;
+    expect([conn.node_sudo, conn.node_exec_direct]).toEqual([true, true]);
+  });
+
   it("opens a cluster stored before the field existed, and saves it as all-detect", async () => {
     // The running backend omits `fabric` until it is rebuilt; the editor must not crash on that.
     const legacy = {

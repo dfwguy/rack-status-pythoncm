@@ -84,6 +84,42 @@ def fanout(
     A fleet-wide inventory is thousands of nodes and minutes long; without this the only
     honest progress a UI could show is "started".
     """
+    return fanout_via(
+        lambda node: base.hop(node, user=user, key=key, extra_opts=extra_opts,
+                              connect_timeout=connect_timeout, sudo=sudo),
+        nodes,
+        cmd,
+        timeout=timeout,
+        max_workers=max_workers,
+        env_extra=env_extra,
+        retries=retries,
+        on_result=on_result,
+        warm=base,
+        warm_timeout=max(10, int(str(connect_timeout)) if str(connect_timeout).isdigit() else 15),
+    )
+
+
+def fanout_via(
+    connect: Callable[[str], Connection],
+    nodes: list[str],
+    cmd: str | list[str],
+    *,
+    timeout: int = 120,
+    max_workers: int = 8,
+    env_extra: dict[str, str] | None = None,
+    retries: int = 2,
+    on_result: Callable[[NodeResult, int, int], None] | None = None,
+    warm: Connection | None = None,
+    warm_timeout: int = 15,
+) -> list[NodeResult]:
+    """:func:`fanout` with the per-node connection supplied by *connect*.
+
+    The route to a node is the caller's choice -- a hop through the head, or the app's own ssh
+    straight to the node (``host_exec.node_connection``) -- and everything else (concurrency,
+    retrying a transient handshake failure, progress callbacks, stable ordering) is the same
+    either way. *warm*, when given, is run once first so a shared ControlMaster exists before
+    the concurrent legs attach to it.
+    """
     nodes = [n for n in nodes if n]
     if not nodes:
         return []
@@ -91,16 +127,15 @@ def fanout(
     # Warm the shared base (app->head) connection once so its SSH ControlMaster is
     # established before the concurrent hops attach — otherwise N simultaneous
     # first-connections race to create the master and can trip sshd MaxStartups.
-    if len(nodes) > 1:
+    if warm is not None and len(nodes) > 1:
         try:
-            base.run("true", timeout=max(10, int(str(connect_timeout)) if str(connect_timeout).isdigit() else 15))
+            warm.run("true", timeout=warm_timeout)
         except Exception:
             _logger.debug("fanout: ignoring error", exc_info=True)
 
     def _attempt(node: str) -> NodeResult:
-        conn = base.hop(node, user=user, key=key, extra_opts=extra_opts,
-                        connect_timeout=connect_timeout, sudo=sudo)
         try:
+            conn = connect(node)
             p = conn.run(cmd, timeout=timeout, env_extra=env_extra)
             return NodeResult(node, p.stdout or "", p.stderr or "", p.returncode)
         except Exception as exc:  # timeout / transport error -> stderr, non-zero

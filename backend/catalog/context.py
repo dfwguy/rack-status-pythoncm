@@ -228,6 +228,10 @@ def high_overlay(
     # The cluster's workspace (installed toolchains, the LLMB install). Scripts derive every
     # workspace path from it via workspace-dir-common.sh; see how-cluster-paths-reach-scripts.md.
     _put(out, "NVIS_WORKSPACE_DIR", c.workspace_dir)
+    # How commands reach the compute nodes: under sudo -n or not, and straight from the app
+    # server or through the head node. Read per call by host_exec.node_connection/run_on_nodes.
+    _put(out, "RACK_NODE_SUDO", "1" if c.node_sudo else "")
+    _put(out, "RACK_DIRECT_NODE_SSH", "1" if c.node_exec_direct else "")
     # Where this cluster's container images live: the shared store the launch host reads, and
     # the per-node cache the jobs run from. Both are mount points, so both are per-cluster; the
     # launchers read them from the environment (NVIS_/RACK_ prefixes forward over SSH). A P2P
