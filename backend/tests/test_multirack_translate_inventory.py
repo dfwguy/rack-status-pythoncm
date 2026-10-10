@@ -122,3 +122,49 @@ class TestCompressedNodelist:
 def test_no_dashboard_state_means_no_inventory(monkeypatch):
     monkeypatch.setattr(ns, "_states", {})
     assert ns._dashboard_node_inventory(Path("/nonexistent-log-dir")) is None
+
+
+class TestProviderSlurmStates:
+    """A provider-inventoried cluster (NC: scheduler pythoncm) still learns each node's Slurm state."""
+
+    @staticmethod
+    def _state(monkeypatch, records, sinfo):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+
+        provider = SimpleNamespace(compute_node_inventory=Mock(return_value=records))
+        monkeypatch.setattr(ns.config_env, "_eget", lambda key, default="": (
+            "pythoncm" if key == "RACK_SCHEDULER" else default
+        ))
+        monkeypatch.setattr(ns, "_get_platform", lambda: provider)
+        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        monkeypatch.setattr(ns, "collect_sinfo_nodes_and_shapes", sinfo)
+        st = ns.NativeRackTableState("provider-slurm", Path("/logs"))
+        st.racks = ["U20"]
+        return st
+
+    def test_slurm_states_ride_the_providers_roster(self, monkeypatch):
+        records = [{"id": h, "rack": "U20", "ip": "", "scheduler_state": ""} for h in U20[:2]]
+        sinfo = lambda: ({U20[0]: "idle", U20[1]: "drain", "not-in-bcm": "idle"}, {})  # noqa: E731
+        st = self._state(monkeypatch, records, sinfo)
+        st._worker_sinfo()
+        nodes = st.node_inventory_snapshot()["nodes"]
+        assert [(n["id"], n["scheduler_state"], n["rack"]) for n in nodes] == [
+            (U20[0], "idle", "U20"), (U20[1], "drain", "U20"),
+        ]
+
+    def test_a_cluster_without_slurm_backs_off_and_keeps_its_roster(self, monkeypatch):
+        records = [{"id": U20[0], "rack": "U20", "ip": "", "scheduler_state": ""}]
+        calls = []
+
+        def sinfo():
+            calls.append(1)
+            raise RuntimeError("Slurm node inventory unavailable")
+
+        st = self._state(monkeypatch, records, sinfo)
+        st._worker_sinfo()
+        st._worker_sinfo()
+        assert len(calls) == 1
+        nodes = st.node_inventory_snapshot()["nodes"]
+        assert [(n["id"], n["scheduler_state"]) for n in nodes] == [(U20[0], "")]
+        assert st.node_inventory_snapshot()["node_inventory_error"] == ""

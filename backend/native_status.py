@@ -1779,6 +1779,9 @@ def format_multirack_sinfo_cell(
     return "; ".join(parts)
 
 
+#: How long a provider cluster whose ``sinfo`` failed waits before asking Slurm again.
+_PROVIDER_SLURM_RETRY_SEC = 600
+
 _states_lock = threading.Lock()
 _states: dict[str, NativeRackTableState] = {}
 _native_history_lock = threading.Lock()
@@ -1860,6 +1863,7 @@ class NativeRackTableState:
         "node_shapes_refreshed_monotonic",
         "node_states",
         "per_path_probe",
+        "provider_slurm_failed_monotonic",
         "racks",
         "racks_refresh_lock",
         "racks_refreshed_monotonic",
@@ -1883,6 +1887,7 @@ class NativeRackTableState:
         # on hardware changes) so the nvidia-smi sample is not re-run every poll.
         self.node_shapes: dict[str, dict[str, Any]] = {}
         self.node_shapes_refreshed_monotonic = 0.0
+        self.provider_slurm_failed_monotonic: float | None = None
         self.node_inventory_error = ""
         self.sinfo_counts: dict[tuple[str, str], int] = {}
         self.per_path_probe: dict[str, dict[str, Any]] = {}
@@ -1946,7 +1951,11 @@ class NativeRackTableState:
                 nodes, slurm_shapes = collect_sinfo_nodes_and_shapes()
             else:
                 records = _get_platform().compute_node_inventory()
-                nodes = {record["id"]: record.get("scheduler_state", "") for record in records}
+                slurm_states = self._provider_slurm_states()
+                nodes = {
+                    record["id"]: slurm_states.get(record["id"].casefold()) or record.get("scheduler_state", "")
+                    for record in records
+                }
             c = sinfo_counts_for_nodes(nodes) if records is None else {}
             shapes = self._refresh_node_shapes(scheduler, records, nodes, slurm_shapes)
             with self.lock:
@@ -1965,6 +1974,32 @@ class NativeRackTableState:
                 ) + str(e)
                 self.last_errors.append(f"sinfo: {e}")
                 self.sinfo_done = True
+
+    def _provider_slurm_states(self) -> dict[str, str]:
+        """Slurm's state for each node of a provider-inventoried cluster, when Slurm answers.
+
+        The cluster manager owns the roster and the placement, but it does not say whether a node
+        can take a job: that is the workload manager's. A BCM cluster recorded with a non-Slurm
+        scheduler may still run Slurm -- Nscale NC is ``pythoncm`` for its inventory while every
+        validation launch, and the launch preflight's ``sinfo`` check, go through Slurm -- and
+        without its states the multirack picker could never call a validated rack schedulable.
+        Enrichment only: the roster stays the provider's (Slurm adds no node), and a cluster with
+        no Slurm costs one failed call per ``_PROVIDER_SLURM_RETRY_SEC``, not one per poll.
+        """
+        with self.lock:
+            failed = self.provider_slurm_failed_monotonic
+        if failed is not None and time.monotonic() - failed < _PROVIDER_SLURM_RETRY_SEC:
+            return {}
+        try:
+            states, _shapes = collect_sinfo_nodes_and_shapes()
+        except Exception:  # any failure just means "no Slurm view this round"
+            _logger.debug("provider Slurm state enrichment unavailable", exc_info=True)
+            with self.lock:
+                self.provider_slurm_failed_monotonic = time.monotonic()
+            return {}
+        with self.lock:
+            self.provider_slurm_failed_monotonic = None
+        return {host.casefold(): state for host, state in states.items()}
 
     def _refresh_node_shapes(
         self, scheduler: str, records: list[dict[str, Any]] | None,
