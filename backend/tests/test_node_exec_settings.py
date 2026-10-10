@@ -193,11 +193,15 @@ def test_pdsh_always_uses_ssh():
 def test_the_gpu_reset_command_stops_only_what_runs_and_restarts_it(tmp_path):
     """Run the real command against fake systemctl / nvidia-smi and read what it did."""
     log = tmp_path / "log"
-    running = {"cmd", "slurmd", "nvidia-dcgm", "nvidia-imex", "nvidia-persistenced"}
+    # nvidia-dcgm is mid-restart: the state that let its nv-hostengine hold the GPUs on NC.
+    states = {"cmd": "active", "slurmd": "active", "nvidia-dcgm": "activating", "dcgm-exporter": "active",
+              "nvidia-imex": "active", "nvidia-persistenced": "active"}
+    running = set(states)
+    cases = " ".join(f'{u}) echo {st}; exit 0;;' for u, st in states.items())
     (tmp_path / "systemctl").write_text(
         "#!/bin/bash\n"
         f'echo "systemctl $*" >> {log}\n'
-        f'if [ "$1" = is-active ]; then case "$3" in {"|".join(sorted(running))}) exit 0;; *) exit 3;; esac; fi\n'
+        f'if [ "$1" = is-active ]; then case "$2" in {cases} *) echo inactive; exit 3;; esac; fi\n'
     )
     (tmp_path / "nvidia-smi").write_text(f'#!/bin/bash\necho "nvidia-smi $*" >> {log}\nexit 0\n')
     (tmp_path / "sleep").write_text("#!/bin/bash\n")
@@ -210,7 +214,7 @@ def test_the_gpu_reset_command_stops_only_what_runs_and_restarts_it(tmp_path):
     assert r.returncode == 0, r.stderr
     lines = [ln for ln in log.read_text().splitlines() if not ln.startswith("systemctl is-active")]
     stop = lines[0].split()[2:]
-    assert lines[0].startswith("systemctl stop") and set(stop) == running, "cuda-dcgm is not running here"
+    assert lines[0].startswith("systemctl stop") and set(stop) == running, "cuda-dcgm is not up here; a restarting DCGM is"
     assert lines[1] == "nvidia-smi -r"
     started = [ln.split()[2] for ln in lines[2:]]
     assert set(started) == running and started[0] == "nvidia-persistenced"

@@ -164,14 +164,17 @@ class PlatformProvider(ABC):
     def gpu_reset_remote_cmd(self) -> str:
         """Reset every GPU on a node: stop what holds them, ``nvidia-smi -r``, start it all again.
 
-        Stops only the services that are running, and starts the same ones in reverse order, so
-        one command fits sites that name DCGM ``nvidia-dcgm`` (Nscale NC) or ``cuda-dcgm`` and
-        sites without BCM's ``cmd``. ``nvidia-persistenced`` is stopped too: it holds every GPU
-        open and a reset refuses while it does. Exits with the reset's status.
+        Stops only the services that are up -- running, or starting/restarting -- and starts the
+        same ones in reverse order, so one command fits sites that name DCGM ``nvidia-dcgm``
+        (Nscale NC) or ``cuda-dcgm`` and sites without BCM's ``cmd``. "Starting" counts: on a node
+        whose GPU needs a reset, DCGM sits in ``activating (auto-restart)``, and a stop list that
+        only took ``active`` units skipped it, so its nv-hostengine came back and held the GPUs
+        ("In use by another client", Nscale NC gpu105-su21). ``nvidia-persistenced`` and
+        ``dcgm-exporter`` are stopped too: both hold GPUs open. Exits with the reset's status.
         """
         return (
-            "act=; for s in cmd slurmd nvidia-dcgm cuda-dcgm nvidia-imex nvidia-persistenced; do "
-            "systemctl is-active --quiet $s && act=\"$s $act\"; done; "
+            "act=; for s in cmd slurmd dcgm-exporter nvidia-dcgm cuda-dcgm nvidia-imex nvidia-persistenced; do "
+            "case $(systemctl is-active $s) in active|activating|reloading) act=\"$s $act\";; esac; done; "
             "[ -n \"$act\" ] && systemctl stop $act; sleep 5; "
             "nvidia-smi -r; rc=$?; "
             "for s in $act; do systemctl start $s; done; "
