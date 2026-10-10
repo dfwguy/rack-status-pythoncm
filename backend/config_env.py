@@ -552,11 +552,13 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     },
     {
         "section": "jobs_cluster",
-        "key": "NVIS_RDMA_LINK_TECH",
-        "label": "RDMA link technology (global)",
+        "key": "NVIS_FABRIC_NETWORK",
+        "label": "Fabric network (global override)",
         "description": (
-            "auto | mlx | ib | roce | spectrumx | spx. Default auto: InfiniBand-style mlx5 sysfs when usable, else RoCE/Spectrum-X. "
-            "Other validation scripts may source nvis-rdma-common.inc.sh; ClusterKit uses this when RACK_CLUSTERKIT_LINK_TECH is unset."
+            "IB | RoCE (also auto, mlx, spectrumx, spx). The cluster's fabric protocol is set on the cluster "
+            "(Projects -> cluster -> Compute fabric) and reaches every script as NVIS_FABRIC_NETWORK; this "
+            "overrides the platform's value for clusters that do not state one. Blank = the cluster's, else "
+            "the platform's. Replaces NVIS_RDMA_LINK_TECH, which is still read as a fallback."
         ),
     },
     {
@@ -564,7 +566,7 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "key": "RACK_CLUSTERKIT_LINK_TECH",
         "label": "ClusterKit interconnect mode",
         "description": (
-            "Same values as NVIS_RDMA_LINK_TECH; overrides the global default for singlerack ClusterKit only. "
+            "Same values as NVIS_FABRIC_NETWORK; overrides the cluster's fabric network for singlerack ClusterKit only. "
             "Use roce or spx on Spectrum-X; use mlx or ib for classic IB mlx5 local_cpulist mapping."
         ),
     },
@@ -574,7 +576,7 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "label": "ClusterKit HCA preset profile",
         "description": (
             "Preset rail table: mlx — gb300_mlx4 (default), b300_mlx8; roce — gb300_roce_spx_quad (default), "
-            "gb300_roce_spx_rail, b300_roce_dual_8. Must match RACK_CLUSTERKIT_LINK_TECH / NVIS_RDMA_LINK_TECH family."
+            "gb300_roce_spx_rail, b300_roce_dual_8. Must match RACK_CLUSTERKIT_LINK_TECH / NVIS_FABRIC_NETWORK family."
         ),
     },
     {
@@ -758,6 +760,9 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     },
 ]
 _JOB_ENV_ALLOWED_KEYS: frozenset[str] = frozenset(d["key"] for d in JOB_ENV_UI_DEFINITIONS)
+
+#: Settings keys renamed in place: old name -> new name. Read by _read_job_env_file_raw.
+_JOB_ENV_RENAMED_KEYS: dict[str, str] = {"NVIS_RDMA_LINK_TECH": "NVIS_FABRIC_NETWORK"}
 # Snapshot of process env for allowed keys at import (used when an override is cleared in Settings).
 _JOB_ENV_SHELL_BASELINE: dict[str, str | None] = {k: os.environ.get(k) for k in _JOB_ENV_ALLOWED_KEYS}
 # Changes to these keys affect the cached native / shell ``/api/status`` payload; others skip a full bust.
@@ -860,6 +865,11 @@ def _read_job_env_file_raw(p: Path) -> dict[str, str]:
     out: dict[str, str] = {}
     if not isinstance(raw, dict):
         return out
+    # A Settings key that was renamed keeps its saved value under the new name, unless the new one
+    # was saved too: an operator's override must not vanish because the key changed its spelling.
+    for old, new in _JOB_ENV_RENAMED_KEYS.items():
+        if old in raw and new not in raw:
+            raw[new] = raw[old]
     for k, v in raw.items():
         if k not in _JOB_ENV_ALLOWED_KEYS:
             continue

@@ -39,7 +39,7 @@
 #   LLMB_RUN        llmb-run binary (optional; resolved from LLMB_REPO/LLMB_INSTALL)
 #   GPUS_PER_NODE   GPUs per compute node       (default 4)
 #   RACK_TO_NODE_SED / RACK_NODE_MATCH_SUFFIX   rack-id -> node mapping (see lib/nodes.inc.sh)
-#   NVIS_RDMA_LINK_TECH  ib|roce|auto — fabric technology (see lib/fabric.inc.sh)
+#   NVIS_FABRIC_NETWORK  IB|RoCE|auto — the cluster's fabric protocol (see lib/fabric.inc.sh)
 #   NVIS_FABRIC_SKIP=1   skip the representative-node fabric probe (use inherited/overridden env)
 #   NCCL_IB_HCA / NCCL_SOCKET_IFNAME / UCX_* / OMPI_MCA_*  — override fabric auto-detect
 set -uo pipefail

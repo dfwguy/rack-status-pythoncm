@@ -118,6 +118,11 @@ export function ProjectsView() {
   }, [load]);
 
   const platformName = (id: string) => platforms.find((p) => p.id === id)?.name || id || "—";
+  /** The fabric protocol a platform implies, for the cluster form's "inherit" choice. */
+  const platformFabricNetwork = (id: string) => {
+    const s = platforms.find((p) => p.id === id)?.fabric?.scaleout;
+    return s === "ib" ? "InfiniBand" : s === "roce" ? "RoCE" : "";
+  };
 
   const onSaveProject = async () => {
     if (!projectDraft) return;
@@ -627,13 +632,19 @@ export function ProjectsView() {
 
           <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>Compute fabric</Text>
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginTop: -4 }}>
-            Blank = detect on each node. Set these only where detection picks the wrong devices or address family.
+            Fabric network is the protocol the cluster's compute fabric runs; every script receives it as
+            NVIS_FABRIC_NETWORK and finds the interfaces by it. Address family and HCAs: blank = detect on each node.
           </Text>
           <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 2 }}>
-            <FormField name="cl-fab-scaleout" slotLabel="Scale-out">
+            <FormField name="cl-fab-scaleout" slotLabel="Fabric network">
               <Select
                 items={[
-                  { value: "", children: "Platform default" },
+                  {
+                    value: "",
+                    children: platformFabricNetwork(clusterDraft?.cluster.platform_id || "")
+                      ? `Platform default (${platformFabricNetwork(clusterDraft?.cluster.platform_id || "")})`
+                      : "Platform default",
+                  },
                   { value: "ib", children: "InfiniBand" },
                   { value: "roce", children: "RoCE" },
                 ]}

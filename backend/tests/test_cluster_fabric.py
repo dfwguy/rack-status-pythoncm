@@ -80,26 +80,36 @@ class TestTheRecord:
 class TestTheProjection:
     def test_stated_values_reach_the_launcher_env(self):
         env = context.high_overlay(None, _cluster(scaleout="roce", addr_family="ipv6", compute_hca="roce_vf_r"))
-        assert env["NVIS_RDMA_LINK_TECH"] == "roce"
+        assert env["NVIS_FABRIC_NETWORK"] == "RoCE"
         assert env["NVIS_FABRIC_ADDR_FAMILY"] == "ipv6"
         assert env["NVIS_FABRIC_HCA"] == "roce_vf_r"
 
     def test_blank_means_detect_so_nothing_is_projected(self):
         env = context.high_overlay(None, _cluster())
         assert not {"NVIS_FABRIC_ADDR_FAMILY", "NVIS_FABRIC_HCA"} & env.keys()
-        assert "NVIS_RDMA_LINK_TECH" not in env
+        assert "NVIS_FABRIC_NETWORK" not in env
 
     def test_the_cluster_overrides_the_platform_default(self):
         platform = models.Platform.from_dict({"id": "p", "name": "P", "fabric": {"scaleout": "ib"}})
-        assert context.fabric_defaults(platform)["NVIS_RDMA_LINK_TECH"] == "ib"  # low overlay
+        assert context.fabric_defaults(platform)["NVIS_FABRIC_NETWORK"] == "IB"  # low overlay
         high = context.high_overlay(None, _cluster(scaleout="roce"), platform)
         # Overlay order is low < process env < settings < high, so the cluster's value wins.
-        assert high["NVIS_RDMA_LINK_TECH"] == "roce"
+        assert high["NVIS_FABRIC_NETWORK"] == "RoCE"
+
+    def test_both_protocols_project_by_their_names(self):
+        for scaleout, network in (("ib", "IB"), ("roce", "RoCE")):
+            assert context.high_overlay(None, _cluster(scaleout=scaleout))["NVIS_FABRIC_NETWORK"] == network
+            platform = models.Platform.from_dict({"id": "p", "name": "P", "fabric": {"scaleout": scaleout}})
+            assert context.fabric_defaults(platform)["NVIS_FABRIC_NETWORK"] == network
+
+    def test_a_platform_without_a_protocol_projects_none(self):
+        platform = models.Platform.from_dict({"id": "p", "name": "P", "fabric": {"scaleout": ""}})
+        assert "NVIS_FABRIC_NETWORK" not in context.fabric_defaults(platform)
 
     def test_the_names_forward_over_ssh(self):
         from transport.factory import FORWARD_ENV_PREFIXES
 
-        for key in ("NVIS_RDMA_LINK_TECH", "NVIS_FABRIC_ADDR_FAMILY", "NVIS_FABRIC_HCA"):
+        for key in ("NVIS_FABRIC_NETWORK", "NVIS_FABRIC_ADDR_FAMILY", "NVIS_FABRIC_HCA"):
             assert key.startswith(FORWARD_ENV_PREFIXES), key
 
 
@@ -235,7 +245,7 @@ def _scan_warned(root: Path, **env: str | None) -> dict[str, str]:
 class TestTheStatedTechnology:
     """A stated scale-out is an expectation the node confirms, not a substitute for the node.
 
-    NC inherits gb300-nvl72's ``scaleout = ib``, so every launch ran with NVIS_RDMA_LINK_TECH=ib on
+    NC inherits gb300-nvl72's ``scaleout = ib``, so every launch ran with fabric network IB on
     nodes with no InfiniBand port: no rails, no pin, no address family -- NCCL opened all 26 devices
     and hit "GID index -1" (multirack job 138174). The same code must keep IB sites exactly as they were.
     """
@@ -247,43 +257,101 @@ class TestTheStatedTechnology:
 
     def test_a_roce_node_stated_as_ib_is_wired_as_the_roce_node_it_is(self, tmp_path):
         _nc_node(tmp_path)
-        s = _scan_warned(tmp_path, NVIS_RDMA_LINK_TECH="ib")
+        s = _scan_warned(tmp_path, NVIS_FABRIC_NETWORK="IB")
         assert s["NVIS_FAB_LINK"] == "roce"
         assert s["NVIS_FAB_IB_HCA"].replace("\\", "") == "roce_vf_r1,roce_vf_r2,roce_vf_r3,roce_vf_r4"
         assert s["NVIS_FAB_ADDR_FAMILY"] == "ipv6"
-        assert "NVIS_RDMA_LINK_TECH=ib" in s["WARNING"] and "fabric.scaleout" in s["WARNING"]
-        e = _exported(tmp_path, NVIS_RDMA_LINK_TECH="ib")
+        assert "fabric network ib" in s["WARNING"] and "fabric.scaleout" in s["WARNING"]
+        e = _exported(tmp_path, NVIS_FABRIC_NETWORK="IB")
         assert e["NCCL_IB_HCA"] == "roce_vf_r"
         assert e["NCCL_IB_ADDR_FAMILY"] == "AF_INET6"
 
     def test_an_ib_node_stated_as_ib_is_unchanged_and_silent(self, tmp_path):
         self._ib_only(tmp_path)
-        s = _scan_warned(tmp_path, NVIS_RDMA_LINK_TECH="ib", NVIS_FABRIC_DEFAULT_ROUTE_IFS="")
+        s = _scan_warned(tmp_path, NVIS_FABRIC_NETWORK="IB", NVIS_FABRIC_DEFAULT_ROUTE_IFS="")
         assert s["NVIS_FAB_LINK"] == "ib"
         assert s["NVIS_FAB_IB_HCA"].replace("\\", "") == "mlx5_0,mlx5_1,mlx5_2,mlx5_3"
         assert s["WARNING"] == ""
-        e = _exported(tmp_path, NVIS_RDMA_LINK_TECH="ib", NVIS_FABRIC_DEFAULT_ROUTE_IFS="")
+        e = _exported(tmp_path, NVIS_FABRIC_NETWORK="IB", NVIS_FABRIC_DEFAULT_ROUTE_IFS="")
         assert e["NCCL_IB_HCA"] == "" and e["NCCL_IB_ADDR_FAMILY"] == ""
 
     def test_an_ib_node_stated_as_roce_is_wired_as_ib(self, tmp_path):
         self._ib_only(tmp_path)
-        s = _scan_warned(tmp_path, NVIS_RDMA_LINK_TECH="roce", NVIS_FABRIC_DEFAULT_ROUTE_IFS="")
+        s = _scan_warned(tmp_path, NVIS_FABRIC_NETWORK="RoCE", NVIS_FABRIC_DEFAULT_ROUTE_IFS="")
         assert s["NVIS_FAB_LINK"] == "ib"
         assert s["NVIS_FAB_RAILS"] == "4"
-        assert "NVIS_RDMA_LINK_TECH=roce" in s["WARNING"]
+        assert "fabric network roce" in s["WARNING"]
 
     def test_a_stated_technology_the_node_has_is_honoured_over_auto(self, tmp_path):
         # IB rails and a routable RoCE NIC side by side: auto would take IB; a stated roce stands.
         self._ib_only(tmp_path)
         _dev(tmp_path, "mlx5_4", state="ACTIVE", link="Ethernet", rate=200, netdev="enp1s0", gids=[V4])
         assert _scan_warned(tmp_path, NVIS_FABRIC_DEFAULT_ROUTE_IFS="")["NVIS_FAB_LINK"] == "ib"
-        s = _scan_warned(tmp_path, NVIS_RDMA_LINK_TECH="roce", NVIS_FABRIC_DEFAULT_ROUTE_IFS="")
+        s = _scan_warned(tmp_path, NVIS_FABRIC_NETWORK="RoCE", NVIS_FABRIC_DEFAULT_ROUTE_IFS="")
         assert s["NVIS_FAB_LINK"] == "roce" and s["WARNING"] == ""
 
     def test_a_node_with_neither_keeps_the_statement_and_finds_nothing(self, tmp_path):
         _dev(tmp_path, "mlx5_0", state="DOWN", link="InfiniBand", rate=400)
-        s = _scan_warned(tmp_path, NVIS_RDMA_LINK_TECH="ib")
+        s = _scan_warned(tmp_path, NVIS_FABRIC_NETWORK="IB")
         assert s["NVIS_FAB_LINK"] == "ib" and s["NVIS_FAB_RAILS"] == "0" and s["WARNING"] == ""
+
+
+class TestTheFabricNetworkVariable:
+    """NVIS_FABRIC_NETWORK=IB|RoCE is how every script learns the cluster's protocol."""
+
+    def _both(self, root: Path) -> None:
+        # IB rails and a routable RoCE NIC side by side, so the declared protocol decides.
+        for i in range(4):
+            _dev(root, f"mlx5_{i}", state="ACTIVE", link="InfiniBand", rate=400,
+                 gids=[f"fe80:0000:0000:0000:a088:c203:00{i}5:fa3e"])
+        _dev(root, "mlx5_4", state="ACTIVE", link="Ethernet", rate=200, netdev="enp1s0", gids=[V4])
+
+    @pytest.mark.parametrize(("value", "link"), [
+        ("IB", "ib"), ("InfiniBand", "ib"), ("ib", "ib"), ("mlx", "ib"),
+        ("RoCE", "roce"), ("roce", "roce"), ("spx", "roce"), ("spectrumx", "roce"),
+    ])
+    def test_every_spelling_of_the_two_protocols_is_read(self, tmp_path, value, link):
+        self._both(tmp_path)
+        assert _scan(tmp_path, NVIS_FABRIC_NETWORK=value, NVIS_FABRIC_DEFAULT_ROUTE_IFS="")["NVIS_FAB_LINK"] == link
+
+    def test_it_wins_over_the_deprecated_name(self, tmp_path):
+        self._both(tmp_path)
+        s = _scan(tmp_path, NVIS_FABRIC_NETWORK="RoCE", NVIS_RDMA_LINK_TECH="ib", NVIS_FABRIC_DEFAULT_ROUTE_IFS="")
+        assert s["NVIS_FAB_LINK"] == "roce"
+
+    def test_the_deprecated_name_still_works_alone(self, tmp_path):
+        self._both(tmp_path)
+        assert _scan(tmp_path, NVIS_RDMA_LINK_TECH="roce", NVIS_FABRIC_DEFAULT_ROUTE_IFS="")["NVIS_FAB_LINK"] == "roce"
+
+    def test_a_remote_scan_carries_it_to_the_node(self, tmp_path):
+        # The node sees only what nvis_fabric_scan_node ships: a fake "ssh" that drops the caller's
+        # copy of the variable proves the protocol arrives in the shipped script.
+        self._both(tmp_path / "sys")
+        fake_ssh = tmp_path / "fake-ssh"
+        fake_ssh.write_text("#!/bin/bash\nexec env -u NVIS_FABRIC_NETWORK bash -s\n")
+        fake_ssh.chmod(0o755)
+        s = _run(tmp_path / "sys", f'nvis_fabric_scan_node node1 "{fake_ssh}"',
+                 NVIS_FABRIC_NETWORK="RoCE", NVIS_FABRIC_DEFAULT_ROUTE_IFS="")
+        assert s["NVIS_FAB_LINK"] == "roce"
+
+    def test_the_rdma_helpers_resolve_it_the_same_way(self, tmp_path):
+        out = _run(tmp_path, f'source "{SCRIPTS / "nvis-rdma-common.inc.sh"}"; '
+                             'echo "T=$(nvis_rdma_normalize_link_tech_raw "$(nvis_fabric_network)")"',
+                   NVIS_FABRIC_NETWORK="RoCE", NVIS_RDMA_LINK_TECH="ib")
+        assert out["T"] == "roce"
+
+
+class TestARenamedSetting:
+    def test_a_saved_legacy_key_keeps_its_value_under_the_new_name(self, tmp_path):
+        import json
+
+        import config_env
+
+        f = tmp_path / "job_env_overrides.json"
+        f.write_text(json.dumps({"NVIS_RDMA_LINK_TECH": "roce"}))
+        assert config_env._read_job_env_file_raw(f)["NVIS_FABRIC_NETWORK"] == "roce"
+        f.write_text(json.dumps({"NVIS_RDMA_LINK_TECH": "roce", "NVIS_FABRIC_NETWORK": "IB"}))
+        assert config_env._read_job_env_file_raw(f)["NVIS_FABRIC_NETWORK"] == "IB"
 
 
 class TestTheEdges:

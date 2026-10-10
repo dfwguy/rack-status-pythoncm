@@ -21,8 +21,9 @@
 # Selection heuristic (works across GB200/GB300/B300/VR200/HGX + IB or RoCE):
 #   1. Consider every RDMA device whose port 1 is state=ACTIVE, except bonds (mlx5_bond_*,
 #      the OOB bond0) and the NVSwitch-attached HCA (one PCIe device with 4 functions).
-#   2. Split by link_layer: InfiniBand vs Ethernet(RoCE). Pick the technology
-#      (NVIS_RDMA_LINK_TECH: ib|roce|auto; auto = IB if any active IB port exists, else RoCE).
+#   2. Split by link_layer: InfiniBand vs Ethernet(RoCE). Pick the technology from the cluster's
+#      fabric network (NVIS_FABRIC_NETWORK: IB|RoCE|auto, see nvis_fabric_network; auto = IB if
+#      any active IB port exists, else RoCE).
 #      A stated technology (the cluster's fabric.scaleout, else its platform's default) is an
 #      expectation the node confirms: when the node has no candidate of that technology but does
 #      have the other, the node's own wins, with a warning naming the mismatch. A platform
@@ -59,7 +60,8 @@
 #   nvis_fabric_report          — human-readable classification (+ expected-vs-actual if NVIS_FABRIC_EXPECT_*)
 #
 # Env inputs (the cluster's fabric record projects the first three -- catalog.models.ClusterFabric):
-#   NVIS_RDMA_LINK_TECH      ib | roce | auto   (default auto)
+#   NVIS_FABRIC_NETWORK      IB | RoCE | auto   the cluster's fabric protocol (default auto); the
+#                            deprecated NVIS_RDMA_LINK_TECH is read only when this is unset
 #   NVIS_FABRIC_HCA          NCCL_IB_HCA value naming the compute plane, e.g. roce_vf_r (default: detect)
 #   NVIS_FABRIC_ADDR_FAMILY  ipv4 | ipv6        (default: detect from the compute GIDs)
 #   GPUS_PER_NODE            gpu count for the gate (default: nvidia-smi -L count, else 4)
@@ -137,10 +139,19 @@ _nvis_fabric_common_prefix() {
 #   NVIS_FAB_HCA_PIN=roce_vf_r         NCCL_IB_HCA to pin, or empty to leave NCCL to auto-detect
 #   NVIS_FAB_ADDR_FAMILY=ipv6|ipv4|    RoCE address family, empty when not determinable / IB
 #   NVIS_FAB_NS_IFNAME=<netdev>
+# The fabric protocol the cluster declares, raw: NVIS_FABRIC_NETWORK (IB | RoCE), projected from the
+# cluster record's fabric.scaleout, else its platform's, with an operator's Settings value between
+# the two. NVIS_RDMA_LINK_TECH is the deprecated name, read only when the new one is unset; "auto"
+# when nothing is declared. Every script decides how to find the compute interfaces from this, so
+# it is defined here, in the one file nvis_fabric_scan_node ships to a node.
+nvis_fabric_network() {
+  printf '%s' "${NVIS_FABRIC_NETWORK:-${NVIS_RDMA_LINK_TECH:-auto}}"
+}
+
 nvis_fabric_scan() {
-  local want="${NVIS_RDMA_LINK_TECH:-auto}"
-  want="$(printf '%s' "${want}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-  [[ "${want}" == "mlx" ]] && want=ib
+  local want
+  want="$(nvis_fabric_network | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+  [[ "${want}" == "mlx" || "${want}" == "infiniband" ]] && want=ib
   [[ "${want}" == "spectrumx" || "${want}" == "spx" ]] && want=roce
 
   local ibroot="${NVIS_FABRIC_SYSFS:-/sys/class/infiniband}"
@@ -190,7 +201,7 @@ nvis_fabric_scan() {
   local -i n_ib="${#ib[@]}" n_roce="${#roce[@]}"
   if [[ "$link" == ib && $n_ib -eq 0 && $n_roce -gt 0 ]] || [[ "$link" == roce && $n_roce -eq 0 && $n_ib -gt 0 ]]; then
     local found=ib; [[ "$link" == ib ]] && found=roce
-    echo "nvis_fabric: WARNING: NVIS_RDMA_LINK_TECH=${want} but this node has no ${link} compute port;" \
+    echo "nvis_fabric: WARNING: fabric network ${want} but this node has no ${link} compute port;" \
          "using the ${found} rails it does have -- correct the cluster's fabric.scaleout" >&2
     link=$found
   fi
@@ -367,7 +378,7 @@ _nvis_fabric_apply() {
   local gpus; gpus="$(_nvis_fabric_gpu_count)"
   if [[ -n "${NVIS_FAB_RAILS:-}" && "${NVIS_FAB_RAILS}" -gt 0 && "${NVIS_FAB_RAILS}" -lt "${gpus}" ]]; then
     echo "nvis_fabric: WARNING: only ${NVIS_FAB_RAILS} compute rail(s) found for ${gpus} GPUs" \
-         "(link=${NVIS_FAB_LINK} rate=${NVIS_FAB_RATE}G) — check NVIS_RDMA_LINK_TECH / cabling" >&2
+         "(link=${NVIS_FAB_LINK} rate=${NVIS_FAB_RATE}G) — check the cluster's fabric network / cabling" >&2
   fi
   if [[ -z "${NVIS_FAB_IB_HCA:-}" ]]; then
     echo "nvis_fabric: WARNING: no compute rails detected; device selection left to per-rank auto-detect" \
@@ -456,6 +467,7 @@ nvis_fabric_scan_node() {
   # + a call to the scanner. Piped as one stdin stream to `bash -s` on the node
   # (can't use both a file redirect and a heredoc for stdin).
   {
+    [[ -n "${NVIS_FABRIC_NETWORK:-}" ]] && printf 'export NVIS_FABRIC_NETWORK=%q\n' "${NVIS_FABRIC_NETWORK}"
     [[ -n "${NVIS_RDMA_LINK_TECH:-}" ]] && printf 'export NVIS_RDMA_LINK_TECH=%q\n' "${NVIS_RDMA_LINK_TECH}"
     [[ -n "${NVIS_FABRIC_NS_IFNAME:-}" ]] && printf 'export NVIS_FABRIC_NS_IFNAME=%q\n' "${NVIS_FABRIC_NS_IFNAME}"
     [[ -n "${NVIS_FABRIC_HCA:-}" ]] && printf 'export NVIS_FABRIC_HCA=%q\n' "${NVIS_FABRIC_HCA}"

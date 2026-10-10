@@ -238,12 +238,13 @@ def high_overlay(
     # P2P owns the node cache: launchers verify the image is there and never copy it from the head
     # (lib/node_images.inc.sh). A missing image is a campaign to run, not a 40 GiB NFS fan-out.
     _put(out, "NVIS_NODE_IMAGES_P2P", "1" if cluster.p2p_enabled else "")
-    # How this site's compute fabric is wired and addressed, where it differs from the platform
-    # (blank = detect on the node). In the HIGH overlay, so a scale-out the cluster states beats
-    # the platform's low-precedence fabric_defaults(). Read by lib/fabric.inc.sh; NVIS_ forwards
-    # over SSH, and the sbatch carries it to the ranks with --export=ALL.
+    # The cluster's fabric protocol (NVIS_FABRIC_NETWORK=IB|RoCE) and how its compute fabric is
+    # addressed, where it differs from the platform (blank = inherit / detect on the node). In the
+    # HIGH overlay, so the protocol the cluster states beats the platform's low-precedence
+    # fabric_defaults(). Read by lib/fabric.inc.sh; NVIS_ forwards over SSH, and the sbatch
+    # carries it to the ranks with --export=ALL.
     fab = cluster.fabric
-    _put(out, "NVIS_RDMA_LINK_TECH", fab.scaleout)
+    _put(out, "NVIS_FABRIC_NETWORK", models.FABRIC_NETWORK_ENV.get(fab.scaleout, ""))
     _put(out, "NVIS_FABRIC_ADDR_FAMILY", fab.addr_family)
     _put(out, "NVIS_FABRIC_HCA", fab.compute_hca)
     _put(out, "RACK_CLUSTER_NAME", cluster.name)
@@ -295,7 +296,8 @@ def fabric_defaults(platform: models.Platform) -> dict[str, str]:
     """Derive low-precedence fabric env from the platform's expected fabric shape.
 
     Feeds ``bin/scripts/lib/fabric.inc.sh``:
-      * ``NVIS_RDMA_LINK_TECH`` selects IB vs RoCE rail classification.
+      * ``NVIS_FABRIC_NETWORK`` (``IB`` | ``RoCE``) is the platform's fabric protocol, which
+        decides how the scripts find the compute interfaces; a cluster's own statement wins.
       * ``NVIS_FABRIC_EXPECT_RAILS`` / ``NVIS_FABRIC_EXPECT_RATE`` let the fabric
         probe flag detected-vs-expected discrepancies (e.g. an 800G RA at 400G).
     The per-node ``ns_ifname`` is intentionally NOT forced here so the on-node
@@ -303,8 +305,7 @@ def fabric_defaults(platform: models.Platform) -> dict[str, str]:
     """
     f = platform.fabric
     out: dict[str, str] = {}
-    if f.scaleout in ("ib", "roce"):
-        _put(out, "NVIS_RDMA_LINK_TECH", f.scaleout)
+    _put(out, "NVIS_FABRIC_NETWORK", models.FABRIC_NETWORK_ENV.get(f.scaleout, ""))
     gpn = platform.geometry.gpus_per_node
     if f.rails_per_gpu > 0 and gpn > 0:
         _put(out, "NVIS_FABRIC_EXPECT_RAILS", str(f.rails_per_gpu * gpn))

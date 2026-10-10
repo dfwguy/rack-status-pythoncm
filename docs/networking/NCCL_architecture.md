@@ -174,7 +174,7 @@ reduction. The real fix is a container HPC-X plugin exporting the v11 ABI.
 ### On requirement 5, why auto-detect is the default
 
 `lib/fabric.inc.sh` classifies rails per node: ACTIVE ports only → split by `link_layer` → pick the
-technology (`NVIS_RDMA_LINK_TECH=ib|roce|auto`) → keep only the **top line rate**, which drops
+technology (the cluster's fabric network, `NVIS_FABRIC_NETWORK=IB|RoCE|auto`) → keep only the **top line rate**, which drops
 slower BlueField-3 storage NICs. It exports *nothing* device-specific by default
 (`NVIS_FABRIC_PIN_DEVICES=0`) so each rank discovers its own HCAs. Set `NVIS_FABRIC_PIN_DEVICES=1`
 only for homogeneous single-node runs.

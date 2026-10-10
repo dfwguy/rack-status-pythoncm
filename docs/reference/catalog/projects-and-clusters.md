@@ -212,7 +212,7 @@ only where it is not.
 
 | Field | Values | Exported as | Purpose |
 |---|---|---|---|
-| `scaleout` | blank, `ib`, `roce` | `NVIS_RDMA_LINK_TECH` | Overrides the platform's `fabric.scaleout`. Blank inherits it. |
+| `scaleout` | blank, `ib`, `roce` | `NVIS_FABRIC_NETWORK` (`IB`, `RoCE`) | The cluster's fabric network: the protocol its compute fabric runs, which every script uses to decide how to find the interfaces. Shown as **Fabric network** in the cluster form. Blank inherits the platform's `fabric.scaleout`. When a node has no port of the stated protocol but does have the other, the scripts use what the node has and warn. |
 | `addr_family` | blank, `ipv4`, `ipv6` | `NVIS_FABRIC_ADDR_FAMILY` | RoCE address family; becomes `NCCL_IB_ADDR_FAMILY`. Blank reads it off the compute GIDs. |
 | `compute_hca` | an `NCCL_IB_HCA` value | `NVIS_FABRIC_HCA` | The devices (or name prefix) that are the compute plane, e.g. `roce_vf_r`. Blank detects. Device names or prefixes, comma-separated, optionally led by `^` or `=`; nothing a shell would interpret. |
 

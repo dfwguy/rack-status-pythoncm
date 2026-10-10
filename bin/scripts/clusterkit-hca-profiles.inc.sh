@@ -18,7 +18,7 @@ _nv_ck_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 _ck_resolve_link_tech() {
   local raw
-  raw="${RACK_CLUSTERKIT_LINK_TECH:-${NVIS_RDMA_LINK_TECH:-auto}}"
+  raw="${RACK_CLUSTERKIT_LINK_TECH:-$(nvis_fabric_network)}"
   nvis_rdma_normalize_link_tech_raw "$raw"
 }
 
@@ -50,7 +50,7 @@ _ck_apply_hca_profile() {
     return 1
   fi
   if [[ "$fam" != "$tech" ]]; then
-    echo "ERROR: HCA profile '${prof}' is for ${fam}, but link technology is ${tech}. Fix RACK_CLUSTERKIT_HCA_PROFILE or RACK_CLUSTERKIT_LINK_TECH / NVIS_RDMA_LINK_TECH." >&2
+    echo "ERROR: HCA profile '${prof}' is for ${fam}, but link technology is ${tech}. Fix RACK_CLUSTERKIT_HCA_PROFILE or RACK_CLUSTERKIT_LINK_TECH / the cluster's fabric network (NVIS_FABRIC_NETWORK)." >&2
     return 1
   fi
 

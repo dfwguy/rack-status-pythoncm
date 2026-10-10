@@ -151,6 +151,15 @@ describe("compute fabric", () => {
     expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "", addr_family: "ipv6", compute_hca: "roce_vf_r" });
   });
 
+  it("states the cluster's fabric network and saves it", async () => {
+    await openNewCluster();
+    fireEvent.change(screen.getByPlaceholderText("e.g. Pod A"), { target: { value: "NC" } });
+    choose(/Fabric network/i, /^RoCE$/);
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
+    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "roce", addr_family: "", compute_hca: "" });
+  });
+
   it("opens a cluster stored before the field existed, and saves it as all-detect", async () => {
     // The running backend omits `fabric` until it is rebuilt; the editor must not crash on that.
     const legacy = {

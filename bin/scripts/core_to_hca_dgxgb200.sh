@@ -22,10 +22,10 @@ _script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "${_script_dir}/nvis-rdma-common.inc.sh" ]]; then
   # shellcheck disable=SC1091
   . "${_script_dir}/nvis-rdma-common.inc.sh"
-  _rdma_tech=$(nvis_rdma_normalize_link_tech_raw "${RACK_CLUSTERKIT_LINK_TECH:-${NVIS_RDMA_LINK_TECH:-auto}}") || exit 1
+  _rdma_tech=$(nvis_rdma_normalize_link_tech_raw "${RACK_CLUSTERKIT_LINK_TECH:-$(nvis_fabric_network)}") || exit 1
   if [[ "${_rdma_tech}" == "roce" ]]; then
     echo "ERROR: core_to_hca_dgxgb200.sh expects InfiniBand mlx5 HCAs with sysfs local_cpulist, but link technology resolved to RoCE/Spectrum-X." >&2
-    echo "       Use ClusterKit with RACK_CLUSTERKIT_LINK_TECH=roce (or NVIS_RDMA_LINK_TECH) and a RoCE HCA profile, or set NVIS_CLUSTERKIT_MAPPER to core_to_hca_clusterkit_roce_numactl.sh." >&2
+    echo "       Use ClusterKit with RACK_CLUSTERKIT_LINK_TECH=roce (or the cluster's fabric network, NVIS_FABRIC_NETWORK) and a RoCE HCA profile, or set NVIS_CLUSTERKIT_MAPPER to core_to_hca_clusterkit_roce_numactl.sh." >&2
     exit 1
   fi
 fi

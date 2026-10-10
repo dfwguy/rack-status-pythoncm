@@ -1211,7 +1211,7 @@ def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[o
         "NVIS_CLUSTERKIT_HPCX_INIT",
         "RACK_CLUSTERKIT_PARTITION",
         "RACK_CLUSTERKIT_EXTRA_OPTS",
-        "NVIS_RDMA_LINK_TECH",
+        "NVIS_FABRIC_NETWORK",
         "RACK_CLUSTERKIT_LINK_TECH",
         "RACK_CLUSTERKIT_HCA_PROFILE",
         "RACK_CLUSTERKIT_UCX_TLS",

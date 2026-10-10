@@ -15,8 +15,8 @@
 # Expects: NVIS_BIN_SCRIPTS, RACK_CLUSTERKIT_RACK, SLURM_SUBMIT_DIR=log_dir.
 # Optional: RACK_CLUSTER_PRODUCT_LINE / RACK_PRODUCT_LINE (mlx/IB: selects core_to_hca_dgxgb200 vs dgxgb300),
 #            NVIS_CLUSTERKIT_MAPPER (full path override for --mapper),
-#            NVIS_RDMA_LINK_TECH — global default when RACK_CLUSTERKIT_LINK_TECH is unset (auto | mlx | ib | roce | spectrumx | spx).
-#            RACK_CLUSTERKIT_LINK_TECH — same values; overrides NVIS_RDMA_LINK_TECH for this job (default auto).
+#            NVIS_FABRIC_NETWORK — the cluster's fabric protocol, used when RACK_CLUSTERKIT_LINK_TECH is unset (IB | RoCE | auto | mlx | spectrumx | spx).
+#            RACK_CLUSTERKIT_LINK_TECH — same values; overrides NVIS_FABRIC_NETWORK for this job.
 #              auto: mlx when /sys/class/infiniband/mlx5_*/device/local_cpulist is readable; else RoCE / Spectrum-X.
 #            RACK_CLUSTERKIT_HCA_PROFILE — preset rail/device table (default empty = built-in default per link family):
 #              mlx: gb300_mlx4 (4× mlx5_0..3), b300_mlx8 (8× mlx5_0,1,8..13).

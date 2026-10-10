@@ -202,7 +202,6 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
         "tool_param_defaults": {
             "GPU_MODEL_FLAG": "b200",
             "RACK_CLUSTER_PRODUCT_LINE": "b200",
-            "NVIS_RDMA_LINK_TECH": "roce",
             "CUDA_MAJ": "12",
         },
         "fabric": {"scaleout": "roce", "rails_per_gpu": 1, "rail_rate_gbps": 400, "ns_ifname": "bond0"},

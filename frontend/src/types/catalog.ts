@@ -196,7 +196,8 @@ export interface ClusterEvidence {
  * states the answer here, per cluster, instead of editing a script.
  */
 export interface ClusterFabric {
-  /** "" inherits the platform's `fabric.scaleout`; otherwise "ib" or "roce". */
+  /** The cluster's fabric network (protocol): "" inherits the platform's `fabric.scaleout`;
+   * otherwise "ib" or "roce". Scripts receive it as NVIS_FABRIC_NETWORK=IB|RoCE. */
   scaleout: string;
   /** "" reads it off the compute GIDs; otherwise "ipv4" or "ipv6" (NCCL_IB_ADDR_FAMILY). */
   addr_family: string;

@@ -905,6 +905,11 @@ class ClusterGeometry:
 
 #: Scale-out technology a cluster may state; blank inherits the platform's ``fabric.scaleout``.
 CLUSTER_FABRIC_SCALEOUT = ("", "ib", "roce")
+#: The fabric protocol as every launcher receives it, ``NVIS_FABRIC_NETWORK=IB|RoCE``: projected from
+#: the cluster's ``fabric.scaleout`` (high overlay), else the platform's (low overlay), so the
+#: cluster's statement wins and an operator's Settings value sits between the two. Scripts decide
+#: how to find the compute interfaces from it (``lib/fabric.inc.sh``: ``nvis_fabric_network``).
+FABRIC_NETWORK_ENV: dict[str, str] = {"ib": "IB", "roce": "RoCE"}
 #: RoCE address family a cluster may state; blank lets the scan read it off the compute GIDs.
 CLUSTER_FABRIC_ADDR_FAMILIES = ("", "ipv4", "ipv6")
 #: An ``NCCL_IB_HCA`` value: an optional ``^``/``=`` modifier, then comma-separated device names or
@@ -922,8 +927,10 @@ class ClusterFabric:
     OVS uplink PFs (``roce_r1..4``), addressed over IPv6 only, while the 400G NICs a rate-based pick
     would choose are its management plane. ``bin/scripts/lib/fabric.inc.sh`` detects all of that
     unaided; every field here is an override for a site where detection is wrong, and blank means
-    "detect". Projected per cluster (``catalog.context``) as ``NVIS_RDMA_LINK_TECH``,
-    ``NVIS_FABRIC_ADDR_FAMILY`` and ``NVIS_FABRIC_HCA``, which forward over SSH by their prefix.
+    "detect". ``scaleout`` is the cluster's fabric protocol, InfiniBand or RoCE (blank inherits the
+    platform's). Projected per cluster (``catalog.context``) as ``NVIS_FABRIC_NETWORK`` (``IB`` or
+    ``RoCE``, see ``FABRIC_NETWORK_ENV``), ``NVIS_FABRIC_ADDR_FAMILY`` and ``NVIS_FABRIC_HCA``, which
+    forward over SSH by their prefix.
     """
 
     scaleout: str = ""  # "" (platform's) | ib | roce

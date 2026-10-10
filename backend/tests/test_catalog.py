@@ -159,7 +159,7 @@ class TestSeed:
         assert platform.geometry.nvlink_domain == 0
         assert not platform.has_capability("nvlink")
         assert context.fabric_defaults(platform) == {
-            "NVIS_RDMA_LINK_TECH": "roce",
+            "NVIS_FABRIC_NETWORK": "RoCE",
             "NVIS_FABRIC_EXPECT_RAILS": "8",
             "NVIS_FABRIC_EXPECT_RATE": "400",
         }

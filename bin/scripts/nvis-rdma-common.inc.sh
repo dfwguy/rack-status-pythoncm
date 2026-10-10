@@ -10,8 +10,9 @@
 # shellcheck shell=bash
 # Shared RDMA / interconnect helpers for NVIS scripts (source, do not execute).
 #
-# NVIS_RDMA_LINK_TECH — auto (default) | mlx | ib | roce | spectrumx | spx
-#   auto: use classic IB mlx5 sysfs CPU affinity when readable; otherwise treat as RoCE / Spectrum-X style.
+# NVIS_FABRIC_NETWORK — the cluster's fabric protocol: IB | RoCE, or auto (default) | mlx | infiniband |
+#   spectrumx | spx. auto: use classic IB mlx5 sysfs CPU affinity when readable; otherwise treat as
+#   RoCE / Spectrum-X style. The deprecated NVIS_RDMA_LINK_TECH is read only when it is unset.
 #
 # Typical usage from another script:
 #   _NVIS_SCR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -31,6 +32,11 @@ if [[ -n "${_NVIS_RDMA_DIR}" && -f "${_NVIS_RDMA_DIR}/lib/fabric.inc.sh" ]]; the
   # shellcheck disable=SC1091
   . "${_NVIS_RDMA_DIR}/lib/fabric.inc.sh"
 fi
+# The cluster's fabric protocol comes from lib/fabric.inc.sh; where that include is absent, the
+# same reading of the same variables, so every script resolves it one way.
+if ! declare -F nvis_fabric_network >/dev/null 2>&1; then
+  nvis_fabric_network() { printf '%s' "${NVIS_FABRIC_NETWORK:-${NVIS_RDMA_LINK_TECH:-auto}}"; }
+fi
 
 # True when at least one mlx5_* device exposes a non-empty local_cpulist (DGX IB-style).
 nvis_rdma_mlx_infiniband_usable() {
@@ -49,7 +55,7 @@ nvis_rdma_mlx_infiniband_usable() {
 }
 
 # Print mlx or roce (stdout). On invalid input, print to stderr and return 1.
-# Argument: raw token (e.g. value of NVIS_RDMA_LINK_TECH).
+# Argument: raw token (e.g. the value of nvis_fabric_network).
 nvis_rdma_normalize_link_tech_raw() {
   local raw up
   raw="${1:-auto}"
@@ -64,7 +70,7 @@ nvis_rdma_normalize_link_tech_raw() {
         printf roce
       fi
       ;;
-    MLX | IB)
+    MLX | IB | INFINIBAND)
       printf mlx
       ;;
     ROCE | SPECTRUMX | SPX)
@@ -80,7 +86,7 @@ nvis_rdma_normalize_link_tech_raw() {
 # Space-separated ibdev names (no :port) for UCX_NET_DEVICES construction.
 nvis_rdma_list_ibdevs_for_mode() {
   local tech
-  tech=$(nvis_rdma_normalize_link_tech_raw "${NVIS_RDMA_LINK_TECH:-auto}") || return 1
+  tech=$(nvis_rdma_normalize_link_tech_raw "$(nvis_fabric_network)") || return 1
   if [[ "$tech" == "mlx" ]]; then
     nvis_rdma_list_mlx_ibdevs || return 1
   else
@@ -92,7 +98,7 @@ nvis_rdma_list_mlx_ibdevs() {
   # Prefer the shared classifier: ACTIVE + InfiniBand + top rate (drops BF3 storage).
   if declare -F nvis_fabric_scan >/dev/null 2>&1; then
     local _scan _hca
-    _scan="$(NVIS_RDMA_LINK_TECH=ib nvis_fabric_scan 2>/dev/null)"
+    _scan="$(NVIS_FABRIC_NETWORK=IB nvis_fabric_scan 2>/dev/null)"
     _hca="$(printf '%s\n' "${_scan}" | sed -n 's/^NVIS_FAB_IB_HCA=//p')"
     if [[ -n "${_hca}" ]]; then
       printf '%s' "${_hca//,/ }"
@@ -146,7 +152,7 @@ nvis_rdma_list_roce_ibdevs() {
 # Comma-separated dev:1 list suitable for UCX_NET_DEVICES (best-effort for multirail).
 nvis_rdma_default_ucx_net_devices() {
   local tech
-  tech=$(nvis_rdma_normalize_link_tech_raw "${NVIS_RDMA_LINK_TECH:-auto}") || return 1
+  tech=$(nvis_rdma_normalize_link_tech_raw "$(nvis_fabric_network)") || return 1
   local -a devs=()
   read -r -a devs <<<"$(nvis_rdma_list_ibdevs_for_mode)" || return 1
   local out="" d
