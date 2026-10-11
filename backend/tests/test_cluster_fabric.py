@@ -43,11 +43,13 @@ def _cluster(**fabric):
 class TestTheRecord:
     def test_defaults_are_blank_and_a_cluster_without_one_still_loads(self):
         f = models.Cluster.from_dict({"id": "c1", "name": "C1"}).fabric
-        assert (f.scaleout, f.addr_family, f.compute_hca) == ("", "", "")
+        assert (f.scaleout, f.addr_family, f.compute_hca, f.rail_rate_gbps) == ("", "", "", 0)
 
     def test_values_are_normalised_and_round_trip(self):
         c = _cluster(scaleout=" RoCE ", addr_family="IPv6", compute_hca=" roce_vf_r ")
-        assert c.to_dict()["fabric"] == {"scaleout": "roce", "addr_family": "ipv6", "compute_hca": "roce_vf_r"}
+        assert c.to_dict()["fabric"] == {
+            "scaleout": "roce", "addr_family": "ipv6", "compute_hca": "roce_vf_r", "rail_rate_gbps": 0,
+        }
 
     @pytest.mark.parametrize(
         "good", ["roce_vf_r", "roce_vf_r1,roce_vf_r2", "=roce_vf_r1:1,roce_vf_r2:1", "^mlx5_12,mlx5_13", "mlx5_0"]
@@ -72,6 +74,21 @@ class TestTheRecord:
         problems = _cluster(scaleout="ethernet", addr_family="v6").validate()
         assert any("fabric.scaleout" in p for p in problems)
         assert any("fabric.addr_family" in p for p in problems)
+
+
+class TestTheRailRate:
+    def test_it_round_trips_and_a_garbage_value_reads_as_not_stated(self):
+        assert _cluster(rail_rate_gbps=200).fabric.rail_rate_gbps == 200
+        assert _cluster(rail_rate_gbps="fast").fabric.rail_rate_gbps == 0
+        assert _cluster(rail_rate_gbps=True).fabric.rail_rate_gbps == 0  # a bool is not a rate
+
+    @pytest.mark.parametrize("bad", [-1, 3201, 200000])
+    def test_a_rate_outside_the_sane_range_is_refused(self, bad):
+        assert any("fabric.rail_rate_gbps" in p for p in _cluster(rail_rate_gbps=bad).validate())
+
+    @pytest.mark.parametrize("ok", [0, 100, 200, 400, 800, 3200])
+    def test_sane_rates_validate(self, ok):
+        assert not any("rail_rate_gbps" in p for p in _cluster(rail_rate_gbps=ok).validate())
 
 
 # --- the projection ----------------------------------------------------------------------------
@@ -106,10 +123,41 @@ class TestTheProjection:
         platform = models.Platform.from_dict({"id": "p", "name": "P", "fabric": {"scaleout": ""}})
         assert "NVIS_FABRIC_NETWORK" not in context.fabric_defaults(platform)
 
+    def test_the_cluster_states_its_own_rail_rate(self):
+        env = context.high_overlay(None, _cluster(scaleout="roce", rail_rate_gbps=200))
+        assert env["NVIS_FABRIC_EXPECT_RATE"] == "200"
+        assert "NVIS_FABRIC_EXPECT_RATE" not in context.high_overlay(None, _cluster())
+
+    def _gb300(self, scaleout="ib"):
+        return models.Platform.from_dict({
+            "id": "gb300", "name": "GB300", "geometry": {"gpus_per_node": 4},
+            "fabric": {"scaleout": scaleout, "rails_per_gpu": 1, "rail_rate_gbps": 800},
+        })
+
+    def test_a_platforms_rate_does_not_follow_it_onto_a_cluster_on_the_other_protocol(self):
+        # gb300-nvl72 is an 800G IB shape; NscaleTX-NC is a GB300 on Spectrum-X RoCE with 200G VFs.
+        # Projecting the platform's 800 flagged every healthy NC rail and drained the node.
+        env = context.fabric_defaults(self._gb300("ib"), _cluster(scaleout="roce"))
+        assert "NVIS_FABRIC_EXPECT_RATE" not in env
+        assert "NVIS_FABRIC_EXPECT_RAILS" not in env
+
+    @pytest.mark.parametrize("stated", ["", "ib"])
+    def test_a_platforms_rate_still_applies_where_the_cluster_runs_its_protocol(self, stated):
+        env = context.fabric_defaults(self._gb300("ib"), _cluster(scaleout=stated))
+        assert env["NVIS_FABRIC_EXPECT_RATE"] == "800"
+        assert env["NVIS_FABRIC_EXPECT_RAILS"] == "4"
+
+    def test_without_a_cluster_the_platform_applies_as_before(self):
+        assert context.fabric_defaults(self._gb300("ib"))["NVIS_FABRIC_EXPECT_RATE"] == "800"
+
+    def test_low_overlay_hands_the_cluster_to_the_platform_rule(self):
+        low = context.low_overlay(self._gb300("ib"), _cluster(scaleout="roce"))
+        assert "NVIS_FABRIC_EXPECT_RATE" not in low
+
     def test_the_names_forward_over_ssh(self):
         from transport.factory import FORWARD_ENV_PREFIXES
 
-        for key in ("NVIS_FABRIC_NETWORK", "NVIS_FABRIC_ADDR_FAMILY", "NVIS_FABRIC_HCA"):
+        for key in ("NVIS_FABRIC_NETWORK", "NVIS_FABRIC_ADDR_FAMILY", "NVIS_FABRIC_HCA", "NVIS_FABRIC_EXPECT_RATE"):
             assert key.startswith(FORWARD_ENV_PREFIXES), key
 
 

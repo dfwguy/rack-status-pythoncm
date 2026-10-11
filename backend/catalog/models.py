@@ -912,6 +912,7 @@ CLUSTER_FABRIC_SCALEOUT = ("", "ib", "roce")
 FABRIC_NETWORK_ENV: dict[str, str] = {"ib": "IB", "roce": "RoCE"}
 #: RoCE address family a cluster may state; blank lets the scan read it off the compute GIDs.
 CLUSTER_FABRIC_ADDR_FAMILIES = ("", "ipv4", "ipv6")
+CLUSTER_FABRIC_MAX_RAIL_RATE_GBPS = 3200  # a generous ceiling: catches 200000, not 1600
 #: An ``NCCL_IB_HCA`` value: an optional ``^``/``=`` modifier, then comma-separated device names or
 #: name prefixes, each with an optional ``:port``. Nothing else -- it is exported into a shell.
 _NCCL_IB_HCA_RE = re.compile(r"^[\^=]?[A-Za-z0-9_.-]+(:[0-9]+)?(,[A-Za-z0-9_.-]+(:[0-9]+)?)*$")
@@ -929,14 +930,18 @@ class ClusterFabric:
     unaided; every field here is an override for a site where detection is wrong, and blank means
     "detect". ``scaleout`` is the cluster's fabric protocol, InfiniBand or RoCE (blank inherits the
     platform's). Projected per cluster (``catalog.context``) as ``NVIS_FABRIC_NETWORK`` (``IB`` or
-    ``RoCE``, see ``FABRIC_NETWORK_ENV``), ``NVIS_FABRIC_ADDR_FAMILY`` and ``NVIS_FABRIC_HCA``, which
-    forward over SSH by their prefix.
+    ``RoCE``, see ``FABRIC_NETWORK_ENV``), ``NVIS_FABRIC_ADDR_FAMILY``, ``NVIS_FABRIC_HCA`` and
+    ``NVIS_FABRIC_EXPECT_RATE`` (from ``rail_rate_gbps``), which forward over SSH by their prefix.
     """
 
     scaleout: str = ""  # "" (platform's) | ib | roce
     addr_family: str = ""  # "" (detect) | ipv4 | ipv6
     #: The ``NCCL_IB_HCA`` value naming the compute plane (e.g. ``roce_vf_r``); blank = detect.
     compute_hca: str = ""
+    #: The line rate every compute rail should train at, in Gb/s (200 for NC's Spectrum-X VFs, 400
+    #: or 800 for IB). 0 = not stated: the platform's rate applies only where this cluster runs the
+    #: platform's own fabric protocol, else nothing is expected (see ``context.fabric_defaults``).
+    rail_rate_gbps: int = 0
 
     @classmethod
     def from_dict(cls, d: Any) -> ClusterFabric:
@@ -945,6 +950,7 @@ class ClusterFabric:
             scaleout=_as_str(d.get("scaleout")).strip().lower(),
             addr_family=_as_str(d.get("addr_family")).strip().lower(),
             compute_hca=_as_str(d.get("compute_hca")).strip(),
+            rail_rate_gbps=_as_int(d.get("rail_rate_gbps"), 0),
         )
 
     def validate(self) -> list[str]:
@@ -959,6 +965,11 @@ class ClusterFabric:
             problems.append(
                 "fabric.compute_hca must be an NCCL_IB_HCA value: device names or name prefixes, "
                 f"comma-separated, optionally led by ^ or = (got {self.compute_hca!r})"
+            )
+        if not 0 <= self.rail_rate_gbps <= CLUSTER_FABRIC_MAX_RAIL_RATE_GBPS:
+            problems.append(
+                f"fabric.rail_rate_gbps must be 0 (not stated) to {CLUSTER_FABRIC_MAX_RAIL_RATE_GBPS} Gb/s "
+                f"(got {self.rail_rate_gbps})"
             )
         return problems
 

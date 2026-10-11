@@ -85,19 +85,35 @@ fi
 # IB rails are 800G NDR; RoCE rails are uniform per site (200G VFs on NC, 400G elsewhere), so a
 # RoCE rail is held to the fastest rail on the node, not to a number from another site.
 expected_ib_ports="${RACK_AUDIT_EXPECTED_IB_PORTS:-$expected_gpus}"
+derive_rate() {
+  local d r top=0
+  if [[ "$fab_link" == roce ]]; then
+    for d in "${rails[@]:-}"; do
+      [[ -n "$d" ]] || continue
+      r=$(grep -Eo '^[0-9]+' "$ibroot/$d/ports/1/rate" 2>/dev/null | head -1 || true)
+      [[ "${r:-0}" -gt "$top" ]] && top=${r:-0}
+    done
+    printf '%s' "$top"
+  else
+    printf 800
+  fi
+}
 if [[ -n "${RACK_AUDIT_EXPECTED_IB_RATE_GBPS:-}" ]]; then
   expected_ib_rate="$RACK_AUDIT_EXPECTED_IB_RATE_GBPS"
 elif [[ -n "${NVIS_FABRIC_EXPECT_RATE:-}" ]]; then
-  expected_ib_rate="$NVIS_FABRIC_EXPECT_RATE"
-elif [[ "$fab_link" == roce ]]; then
-  expected_ib_rate=0
-  for dev in "${rails[@]:-}"; do
-    [[ -n "$dev" ]] || continue
-    _r=$(grep -Eo '^[0-9]+' "$ibroot/$dev/ports/1/rate" 2>/dev/null | head -1 || true)
-    [[ "${_r:-0}" -gt "$expected_ib_rate" ]] && expected_ib_rate=${_r:-0}
-  done
+  # The expectation arrives from the catalog: the cluster's own fabric.rail_rate_gbps, or its
+  # platform's. A platform describes a family of sites, so its rate means nothing on a node that
+  # runs the other protocol (gb300-nvl72's 800G IB against NC's 200G RoCE VFs drained healthy
+  # nodes). When the stated protocol and what this node runs disagree, say so and derive instead.
+  _stated=$(printf '%s' "${NVIS_FABRIC_NETWORK:-${NVIS_RDMA_LINK_TECH:-}}" | tr '[:upper:]' '[:lower:]')
+  if [[ -n "$fab_link" && -n "$_stated" && "$_stated" != auto && "$_stated" != "$fab_link" ]]; then
+    warn rate_expectation "expected rate ${NVIS_FABRIC_EXPECT_RATE}G ignored: configured for ${_stated}, this node runs ${fab_link}"
+    expected_ib_rate=$(derive_rate)
+  else
+    expected_ib_rate="$NVIS_FABRIC_EXPECT_RATE"
+  fi
 else
-  expected_ib_rate=800
+  expected_ib_rate=$(derive_rate)
 fi
 
 gpu_count=$(nvidia-smi -L 2>/dev/null | grep -c '^GPU ' || true)

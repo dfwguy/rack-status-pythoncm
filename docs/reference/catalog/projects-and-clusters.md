@@ -37,7 +37,7 @@ every login, and what keeps it away from a deployment that upgrades.
 | `site_prefix` | string | The leading token in this site's rack ids. Used to group a multirack launch. |
 | `naming` | object | The three templates — see [Geometry and hostnames](../../explanation/geometry-and-hostnames.md). |
 | `geometry` | object | `pods`, `rows_per_pod`, `racks_per_row`, `trays_per_rack`. |
-| `fabric` | object | How this site's compute fabric is wired and addressed, where it differs from the platform: `scaleout`, `addr_family`, `compute_hca`. All blank = detect on each node; see below. |
+| `fabric` | object | How this site's compute fabric is wired and addressed, where it differs from the platform: `scaleout`, `addr_family`, `compute_hca`, `rail_rate_gbps`. All blank/0 = detect on each node; see below. |
 | `nccl_env` | object | Variables this cluster adds to every NCCL-using launch, one list per span: `node`, `rack`, `multirack`. All empty = the scripts' defaults; see below. |
 | `scalable_units` | list | This cluster's SU-to-rack mapping. Empty derives it from the platform's `fabric.racks_per_su`; see below. |
 | `connection` | object | How the app reaches the cluster, below. |
@@ -216,6 +216,7 @@ only where it is not.
 | `scaleout` | blank, `ib`, `roce` | `NVIS_FABRIC_NETWORK` (`IB`, `RoCE`) | The cluster's fabric network: the protocol its compute fabric runs, which every script uses to decide how to find the interfaces. Shown as **Fabric network** in the cluster form. Blank inherits the platform's `fabric.scaleout`. When a node has no port of the stated protocol but does have the other, the scripts use what the node has and warn. |
 | `addr_family` | blank, `ipv4`, `ipv6` | `NVIS_FABRIC_ADDR_FAMILY` | RoCE address family; becomes `NCCL_IB_ADDR_FAMILY`. Blank reads it off the compute GIDs. |
 | `compute_hca` | an `NCCL_IB_HCA` value | `NVIS_FABRIC_HCA` | The devices (or name prefix) that are the compute plane, e.g. `roce_vf_r`. Blank detects. Device names or prefixes, comma-separated, optionally led by `^` or `=`; nothing a shell would interpret. |
+| `rail_rate_gbps` | `0`–`3200` | `NVIS_FABRIC_EXPECT_RATE` | The line rate each compute rail should train at, in Gb/s (Nscale NC's Spectrum-X VF rails: `200`). `0` = not stated. A platform's `fabric.rail_rate_gbps` describes a family of sites, so it is projected only where this cluster runs the platform's own protocol: an 800G InfiniBand platform's rate is not applied to a RoCE cluster. Where nothing is expected, the network audit holds each RoCE rail to the fastest rail on the node. |
 
 What detection does, so you can tell when it is wrong. A RoCE rail is an ACTIVE port with a
 **routable** GID (not zero, not `fe80::`) whose netdev does **not** carry a default route; bonds and

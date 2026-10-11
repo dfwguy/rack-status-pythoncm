@@ -203,6 +203,9 @@ export interface ClusterFabric {
   addr_family: string;
   /** An NCCL_IB_HCA value naming the compute plane, e.g. "roce_vf_r"; "" detects. */
   compute_hca: string;
+  /** The line rate every compute rail should train at, in Gb/s (NC's RoCE VFs are 200). 0 = not
+   * stated: the platform's rate applies only where the cluster runs the platform's own protocol. */
+  rail_rate_gbps: number;
 }
 
 /** The span a launch runs over, which picks one of a cluster's NCCL environment lists. */

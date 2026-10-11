@@ -52,7 +52,7 @@ const SetupWizard = lazy(() =>
 
 /** All blank: the on-node fabric scan decides. Also the fallback for a cluster stored before the field existed. */
 function emptyFabric(): ClusterFabric {
-  return { scaleout: "", addr_family: "", compute_hca: "" };
+  return { scaleout: "", addr_family: "", compute_hca: "", rail_rate_gbps: 0 };
 }
 
 /** No variables at any span: every launch runs with the scripts' own defaults. */
@@ -682,8 +682,10 @@ export function ProjectsView() {
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginTop: -4 }}>
             Fabric network is the protocol the cluster's compute fabric runs; every script receives it as
             NVIS_FABRIC_NETWORK and finds the interfaces by it. Address family and HCAs: blank = detect on each node.
+            Rail rate is the line rate each compute rail should train at; 0 = not stated, and the audits derive it
+            from the rails themselves.
           </Text>
-          <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 2 }}>
+          <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 2 }}>
             <FormField name="cl-fab-scaleout" slotLabel="Fabric network">
               <Select
                 items={[
@@ -718,6 +720,14 @@ export function ProjectsView() {
                 value={clusterDraft?.cluster.fabric?.compute_hca || ""}
                 onValueChange={(v) => setFabric({ compute_hca: v })}
                 placeholder="Detect (e.g. roce_vf_r)"
+              />
+            </FormField>
+            <FormField name="cl-fab-rate" slotLabel="Rail rate (Gb/s)">
+              <TextInput
+                inputMode="numeric"
+                value={(clusterDraft?.cluster.fabric?.rail_rate_gbps ?? 0).toString()}
+                onValueChange={(v) => setFabric({ rail_rate_gbps: intOr(v, 0) })}
+                placeholder="0 = derive (e.g. 200)"
               />
             </FormField>
           </Box>

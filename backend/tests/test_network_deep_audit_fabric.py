@@ -122,6 +122,39 @@ class TestRoceIpv6Site:
         assert "ib_link_rate" in out["codes"]
 
 
+class TestRateExpectationFromTheCatalog:
+    """The platform's rate (gb300-nvl72: 800G IB) reached the audit as NVIS_FABRIC_EXPECT_RATE and
+    drained healthy NC nodes. A rate from the other protocol is ignored, loudly; the cluster's own wins."""
+
+    def _nc(self, tmp_path):
+        root = tmp_path / "ib"
+        _nc_node(root)
+        _link_up(root)
+        return root
+
+    def test_an_ib_platform_rate_is_ignored_on_a_node_that_runs_roce(self, tmp_path):
+        # The protocol was inherited from the platform (IB) but the node runs RoCE.
+        out = _audit(tmp_path, self._nc(tmp_path), NVIS_FABRIC_NETWORK="IB", NVIS_FABRIC_EXPECT_RATE="800")
+        assert out["codes"] == [], out["reason"]
+        assert any("rate_expectation" in w and "ignored" in w for w in out["warnings"])
+        assert out["metrics"]["expected_rail_rate_gbps"] == 200
+
+    def test_with_the_protocol_unstated_nothing_contradicts_the_expectation(self, tmp_path):
+        # Unstated protocol: nothing contradicts the expectation, so it is honoured (the operator's call).
+        out = _audit(tmp_path, self._nc(tmp_path), NVIS_FABRIC_EXPECT_RATE="800")
+        assert "ib_link_rate" in out["codes"]
+
+    def test_a_rate_the_cluster_states_for_its_own_rails_is_honoured(self, tmp_path):
+        out = _audit(tmp_path, self._nc(tmp_path), NVIS_FABRIC_NETWORK="RoCE", NVIS_FABRIC_EXPECT_RATE="200")
+        assert out["codes"] == []
+        assert out["metrics"]["expected_rail_rate_gbps"] == 200
+
+    def test_a_cluster_stated_rate_above_what_the_rails_train_at_still_fails(self, tmp_path):
+        out = _audit(tmp_path, self._nc(tmp_path), NVIS_FABRIC_NETWORK="RoCE", NVIS_FABRIC_EXPECT_RATE="400")
+        # Same protocol as the node, so it is a real expectation and 200G rails fall short of it.
+        assert "ib_link_rate" in out["codes"]
+
+
 class TestInfiniBandSite:
     def _ib_node(self, root: Path, rate: int = 800) -> None:
         for i in range(4):

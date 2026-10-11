@@ -251,6 +251,10 @@ def high_overlay(
     _put(out, "NVIS_FABRIC_NETWORK", models.FABRIC_NETWORK_ENV.get(fab.scaleout, ""))
     _put(out, "NVIS_FABRIC_ADDR_FAMILY", fab.addr_family)
     _put(out, "NVIS_FABRIC_HCA", fab.compute_hca)
+    # The rate the cluster states for its own rails; beats the platform's (low overlay), which
+    # fabric_defaults() only projects where the cluster runs the platform's protocol.
+    if fab.rail_rate_gbps > 0:
+        _put(out, "NVIS_FABRIC_EXPECT_RATE", str(fab.rail_rate_gbps))
     _put(out, "RACK_CLUSTER_NAME", cluster.name)
     # The active ids, so `script_tree` can pick a project's own copy of a script without
     # importing the catalog. Every other per-cluster value already reaches its consumer this
@@ -296,7 +300,7 @@ def geometry_defaults(platform: models.Platform, cluster: models.Cluster | None 
     return out
 
 
-def fabric_defaults(platform: models.Platform) -> dict[str, str]:
+def fabric_defaults(platform: models.Platform, cluster: models.Cluster | None = None) -> dict[str, str]:
     """Derive low-precedence fabric env from the platform's expected fabric shape.
 
     Feeds ``bin/scripts/lib/fabric.inc.sh``:
@@ -304,16 +308,24 @@ def fabric_defaults(platform: models.Platform) -> dict[str, str]:
         decides how the scripts find the compute interfaces; a cluster's own statement wins.
       * ``NVIS_FABRIC_EXPECT_RAILS`` / ``NVIS_FABRIC_EXPECT_RATE`` let the fabric
         probe flag detected-vs-expected discrepancies (e.g. an 800G RA at 400G).
+    A platform describes a *family* of sites, so its rail expectations hold only where the cluster
+    runs the platform's own protocol: gb300-nvl72 says ``ib`` at 800G, and NscaleTX-NC, a GB300
+    site on Spectrum-X RoCE with 200G VF rails, is not that. When the cluster states a different
+    ``fabric.scaleout`` the platform's rate and rail count are not projected -- an expectation
+    from another fabric flagged every healthy NC rail and drained the node. The cluster states its
+    own with ``fabric.rail_rate_gbps`` (high overlay).
     The per-node ``ns_ifname`` is intentionally NOT forced here so the on-node
     auto-detect stays authoritative (the profile value is a documentation hint).
     """
     f = platform.fabric
     out: dict[str, str] = {}
     _put(out, "NVIS_FABRIC_NETWORK", models.FABRIC_NETWORK_ENV.get(f.scaleout, ""))
+    stated = cluster.fabric.scaleout if cluster is not None else ""
+    same_fabric = not stated or not f.scaleout or stated == f.scaleout
     gpn = platform.geometry.gpus_per_node
-    if f.rails_per_gpu > 0 and gpn > 0:
+    if same_fabric and f.rails_per_gpu > 0 and gpn > 0:
         _put(out, "NVIS_FABRIC_EXPECT_RAILS", str(f.rails_per_gpu * gpn))
-    if f.rail_rate_gbps > 0:
+    if same_fabric and f.rail_rate_gbps > 0:
         _put(out, "NVIS_FABRIC_EXPECT_RATE", str(f.rail_rate_gbps))
     # Scalable Unit shape. Published only when the platform actually models it, so a
     # script can tell "no SU model" from "an SU of one rack".
@@ -341,7 +353,7 @@ def low_overlay(
         return {}
     out: dict[str, str] = {}
     out.update(geometry_defaults(platform, cluster))
-    out.update(fabric_defaults(platform))
+    out.update(fabric_defaults(platform, cluster))
     # platform tool_param_defaults are defaults too (env/Settings/per-call win).
     for k, v in platform.tool_param_defaults.items():
         _put(out, k, v)

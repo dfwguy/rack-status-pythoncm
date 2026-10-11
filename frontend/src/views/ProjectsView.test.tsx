@@ -148,7 +148,17 @@ describe("compute fabric", () => {
     fireEvent.change(screen.getByPlaceholderText("Detect (e.g. roce_vf_r)"), { target: { value: "roce_vf_r" } });
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
-    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "", addr_family: "ipv6", compute_hca: "roce_vf_r" });
+    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "", addr_family: "ipv6", compute_hca: "roce_vf_r", rail_rate_gbps: 0 });
+  });
+
+  it("states the rail rate and saves it as a number", async () => {
+    await openNewCluster();
+    fireEvent.change(screen.getByPlaceholderText("e.g. Pod A"), { target: { value: "NC" } });
+    choose(/Fabric network/i, /^RoCE$/);
+    fireEvent.change(screen.getByPlaceholderText("0 = derive (e.g. 200)"), { target: { value: "200" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
+    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "roce", addr_family: "", compute_hca: "", rail_rate_gbps: 200 });
   });
 
   it("states the cluster's fabric network and saves it", async () => {
@@ -157,7 +167,7 @@ describe("compute fabric", () => {
     choose(/Fabric network/i, /^RoCE$/);
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
-    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "roce", addr_family: "", compute_hca: "" });
+    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "roce", addr_family: "", compute_hca: "", rail_rate_gbps: 0 });
   });
 
   it("saves a new cluster with node commands as before: through the head node, without sudo", async () => {
@@ -215,7 +225,7 @@ describe("compute fabric", () => {
     expect((screen.getByPlaceholderText("Detect (e.g. roce_vf_r)") as HTMLInputElement).value).toBe("");
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
-    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "", addr_family: "", compute_hca: "" });
+    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "", addr_family: "", compute_hca: "", rail_rate_gbps: 0 });
   });
 });
 
@@ -257,7 +267,7 @@ describe("NCCL environment", () => {
       site_prefix: "",
       naming: { rack_id_template: "", ct_id_template: "", nvsw_id_template: "", ct_joiner: "-ct", slurm_hostlist: "" },
       geometry: { pods: 1, rows_per_pod: 0, racks_per_row: 0, trays_per_rack: 0 },
-      fabric: { scaleout: "roce", addr_family: "", compute_hca: "" },
+      fabric: { scaleout: "roce", addr_family: "", compute_hca: "", rail_rate_gbps: 0 },
       // No nccl_env: a backend from before the field omits it.
       connection: {
         exec_mode: "", ssh_host: "", ssh_user: "", ssh_key: "", remote_base_path: "",
