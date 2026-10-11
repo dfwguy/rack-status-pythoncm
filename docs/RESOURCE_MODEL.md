@@ -139,6 +139,7 @@ email-shaped login (`user:rkoike@nvidia.com`, 22 bytes) is still well inside the
 | `rack.gpu` | rack id + node list | site slug + hostnames | reset |
 | `rack.bmc` | node list | hostnames | recover, set_mac |
 | `rack.services` | rack id + node list | site slug + hostnames | restart |
+| `rack.node` | node list | hostnames | reboot (from the node itself, for nodes Slurm cannot reboot) |
 | `rack.lock` | rack id | site slug | claim, release |
 | `node` | hostname | hostname | read |
 | `node.issues` | hostname | hostname | sync |

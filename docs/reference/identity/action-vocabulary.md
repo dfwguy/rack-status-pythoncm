@@ -10,7 +10,7 @@ Every action the product declares, which is what a policy's `actions` field may 
 **Generated from the live registry** — a route without a declaration cannot appear here,
 and the build gate in `backend/tests/test_action_coverage.py` fails if one exists.
 
-200 actions across 56 services: 64 reads and 136 mutations.
+201 actions across 57 services: 64 reads and 137 mutations.
 
 A read-only role is `["*:read", "*:list"]` — the two read verbs — rather than an
 enumeration of the reads below.
@@ -65,6 +65,7 @@ case does not match.
 | [`rack.bmc`](#rackbmc) | instance | 2 | Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts. |
 | [`rack.gpu`](#rackgpu) | instance | 1 | Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts. |
 | [`rack.lock`](#racklock) | instance | 3 | — |
+| [`rack.node`](#racknode) | instance | 1 | Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts. |
 | [`rack.power`](#rackpower) | instance | 1 | Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts. |
 | [`rack.services`](#rackservices) | instance | 1 | Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts. |
 | [`report`](#report) | instance | 3 | Generated reports: the archive, per-node reports, and the post-run acceptance report. |
@@ -652,6 +653,18 @@ Identified by `rack`, `rack_id`, `racks` on the request. The identifier is **cas
 | `rack.lock:claim` | mutate | instance | `POST rack_locks_api.api_rack_locks_claim` |
 | `rack.lock:list` | read | instance | `GET rack_locks_api.api_rack_locks_get` |
 | `rack.lock:release` | mutate | instance | `DELETE rack_locks_api.api_rack_locks_release` |
+
+## `rack.node`
+
+Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts.
+
+Owned by `backend/api/rack_power.py`.
+
+Identified by `rack`, `rack_id`, `racks`, `specs`, `nodes`, `node` on the request. The identifier is **case-folded**, so a `deny` must be written in lower case.
+
+| Action | Kind | Scope | Routes |
+|---|---|---|---|
+| `rack.node:reboot` | mutate | instance | `POST rack_power.api_node_reboot_async` |
 
 ## `rack.power`
 

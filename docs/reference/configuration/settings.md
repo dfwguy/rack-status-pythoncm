@@ -11,7 +11,7 @@ Every environment variable the backend reads, found by scanning the source rathe
 importing it — a variable read inside a function body is never reached by an import, so only
 the source knows the whole set.
 
-**362 settings.** 19 are *declared* in
+**365 settings.** 19 are *declared* in
 `backend/config_registry.py`, which is the set `rackstatus.toml` can carry, the required-
 setting preflight can demand, and `rackstatus.toml.example` lists. 175 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
@@ -54,12 +54,12 @@ scan simply cannot point at a call site.
 
 ## Read outside the resolution ladder
 
-249 of them are read only via `os.environ`, so a cluster overlay and the
+252 of them are read only via `os.environ`, so a cluster overlay and the
 Settings screen cannot influence them — the setting is process-wide. New code should
 prefer `_eget` (`core-designs.mdc` §5); these are the ones that predate the rule or
 genuinely belong to the process rather than to a cluster.
 
-They are not listed here — 249 names in a paragraph is not something
+They are not listed here — 252 names in a paragraph is not something
 anyone reads.
 The table below marks each one `environment` in its `Reader` column, which answers the
 same question setting by setting, where you are already looking.
@@ -293,6 +293,9 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-nemo-xrack-disabled"></a>`RACK_NEMO_XRACK_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/validation_runs.py` |
 | <a id="s-rack-nemo-xrack-timeout"></a>`RACK_NEMO_XRACK_TIMEOUT` | ladder | `7200` | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/api/validation_runs.py` |
 | <a id="s-rack-node-issues-file"></a>`RACK_NODE_ISSUES_FILE` | environment |  | Persisted per-node issue annotations. | `backend/node_issues.py` |
+| <a id="s-rack-node-reboot-disabled"></a>`RACK_NODE_REBOOT_DISABLED` | environment |  | Refuse `/api/node-reboot-async` (the node-side reboot for nodes Slurm cannot reboot). | `backend/api/rack_power.py` |
+| <a id="s-rack-node-reboot-dry-run"></a>`RACK_NODE_REBOOT_DRY_RUN` | environment |  | Report the node-side reboot without running it or asking Slurm which nodes are busy. | `backend/api/rack_power.py` |
+| <a id="s-rack-node-reboot-timeout"></a>`RACK_NODE_REBOOT_TIMEOUT` | environment | `120` | Seconds to wait for each node to accept `systemctl --no-block reboot`. Default 120. | `backend/api/rack_power.py` |
 | <a id="s-rack-node-shape-smi-timeout-sec"></a>`RACK_NODE_SHAPE_SMI_TIMEOUT_SEC` | environment | `30` | — | `backend/native_status.py` |
 | <a id="s-rack-node-shape-ttl-sec"></a>`RACK_NODE_SHAPE_TTL_SEC` | environment | `900` | — | `backend/native_status.py` |
 | <a id="s-rack-node-ssh-key"></a>`RACK_NODE_SSH_KEY` | environment |  | See `docs/ENVIRONMENT.md` | `backend/host_exec.py` |
@@ -378,7 +381,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-slurm-sacct-timeout"></a>`RACK_SLURM_SACCT_TIMEOUT` | environment | `60` | — | `backend/slurm_query.py` |
 | <a id="s-rack-slurm-scancel-disabled"></a>`RACK_SLURM_SCANCEL_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/slurm_ops.py` |
 | <a id="s-rack-slurm-scontrol-show-job-disabled"></a>`RACK_SLURM_SCONTROL_SHOW_JOB_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/slurm_ops.py` |
-| <a id="s-rack-slurm-scontrol-timeout"></a>`RACK_SLURM_SCONTROL_TIMEOUT` | environment | `120` | See `docs/ENVIRONMENT.md` | `backend/api/slurm_ops.py`, `backend/slurm_admin.py` +1 |
+| <a id="s-rack-slurm-scontrol-timeout"></a>`RACK_SLURM_SCONTROL_TIMEOUT` | environment | `120` | See `docs/ENVIRONMENT.md` | `backend/api/rack_power.py`, `backend/api/slurm_ops.py` +2 |
 | <a id="s-rack-slurm-sinfo-r-disabled"></a>`RACK_SLURM_SINFO_R_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/slurm_queries.py` |
 | <a id="s-rack-slurm-skip-module-load"></a>`RACK_SLURM_SKIP_MODULE_LOAD` | environment |  | Skip 'module load slurm' before scheduler commands, for sites where Slurm is already on PATH. | `backend/platforms/base.py` |
 | <a id="s-rack-slurm-squeue-disabled"></a>`RACK_SLURM_SQUEUE_DISABLED` | environment |  | See `docs/ENVIRONMENT.md` | `backend/api/dashboard.py`, `backend/api/slurm_queries.py` |

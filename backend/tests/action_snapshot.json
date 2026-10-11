@@ -1242,6 +1242,12 @@
   "variant": "async"
  },
  {
+  "endpoint": "rack_power.api_node_reboot_async",
+  "method": "POST",
+  "action": "rack.node:reboot",
+  "variant": "async"
+ },
+ {
   "endpoint": "rack_power.api_power_on",
   "method": "POST",
   "action": "rack.power:on",

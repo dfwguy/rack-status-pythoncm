@@ -43,7 +43,8 @@ def _cluster(**connection):
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for k in ("RACK_NODE_SUDO", "RACK_DIRECT_NODE_SSH", "RACK_NODE_SSH_USER", "RACK_NODE_SSH_KEY",
-              "RACK_GPU_RESET_SCRIPT", "RACK_GPU_RESET_DRY_RUN", "RACK_SERVICES_RESTART_DRY_RUN"):
+              "RACK_GPU_RESET_SCRIPT", "RACK_GPU_RESET_DRY_RUN", "RACK_SERVICES_RESTART_DRY_RUN",
+              "RACK_NODE_REBOOT_DRY_RUN", "RACK_NODE_REBOOT_DISABLED"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -248,3 +249,62 @@ def test_the_reboot_route_targets_the_named_nodes(monkeypatch):
         pytest.skip("route requires a session in this app configuration")
     assert r.status_code == 200 and r.get_json()["ok"] is True
     assert seen == {"target": NODE, "reason": "nvis-nvlink-fix: reboot"}
+
+
+# ---------------------------------------------------------------- the node-side reboot
+
+
+def _reboot_rig(monkeypatch, *, busy_out="", squeue_rc=0):
+    import slurm_admin
+
+    calls = {"scontrol": [], "nodes": []}
+    monkeypatch.setattr(rack_power, "_expand_pdsh_w_slurm_nodenames", lambda w: w)
+    monkeypatch.setattr(host_exec, "run_slurm_on_host",
+                        lambda cmd, **kw: types.SimpleNamespace(returncode=squeue_rc, stdout=busy_out, stderr="boom"))
+    monkeypatch.setattr(slurm_admin, "_run_scontrol",
+                        lambda args: calls["scontrol"].append(args) or {"ok": True})
+
+    def fake_nodes(hosts, cmd, **kw):
+        calls["nodes"].append((hosts, cmd))
+        return [NodeResult(h, "", "", 0) for h in hosts]
+
+    monkeypatch.setattr(host_exec, "run_on_nodes", fake_nodes)
+    return calls
+
+
+def test_a_node_slurm_cannot_reboot_is_rebooted_from_the_node(monkeypatch):
+    calls = _reboot_rig(monkeypatch)
+    out = rack_power.run_node_reboot(NODE)
+    assert out["returncode"] == 0 and out["skipped_nodes"] == []
+    assert calls["scontrol"] == [["cancel_reboot", NODE]], "a pending Slurm reboot must not fire a second time"
+    assert calls["nodes"] == [([NODE], "systemctl --no-block reboot")]
+
+
+def test_a_node_running_a_job_is_never_rebooted(monkeypatch):
+    other = "sys1-gso1-p-phy-gpu30-su22"
+    calls = _reboot_rig(monkeypatch, busy_out="sys1-gso1-p-phy-gpu30-su22\n")
+    out = rack_power.run_node_reboot(f"{NODE},{other}")
+    assert calls["nodes"] == [([NODE], "systemctl --no-block reboot")]
+    assert out["skipped_nodes"] == [other] and out["returncode"] == 1
+    assert "skipped 1 node(s) running a job" in rack_power._node_job_error("node reboot", out)
+
+
+def test_when_slurm_cannot_be_asked_nothing_is_rebooted(monkeypatch):
+    calls = _reboot_rig(monkeypatch, squeue_rc=1)
+    with pytest.raises(OSError, match="squeue failed"):
+        rack_power.run_node_reboot(NODE)
+    assert calls["nodes"] == [] and calls["scontrol"] == []
+
+
+def test_the_reboot_route_takes_hostnames_only(monkeypatch):
+    import app as app_module
+
+    started = []
+    monkeypatch.setattr(rack_power, "_node_reboot_worker", lambda jid, w: started.append(w))
+    client = app_module.app.test_client()
+    r = client.post("/api/node-reboot-async", json={"specs": [NODE]})
+    if r.status_code in (401, 403):
+        pytest.skip("route requires a session in this app configuration")
+    assert r.status_code == 200 and r.get_json()["kind"] == "node-reboot"
+    assert client.post("/api/node-reboot-async", json={"specs": ["a;reboot"]}).status_code == 400
+    assert client.post("/api/node-reboot-async", json={"specs": []}).status_code == 400

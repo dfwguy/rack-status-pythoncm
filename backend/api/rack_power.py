@@ -50,6 +50,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -159,13 +160,82 @@ def _run_node_command(pdsh_w: str, command: str, *, timeout: int, dry_run: bool,
 
 
 def _node_job_error(what: str, result: dict) -> str | None:
-    failed = result.get("failed_nodes") or []
     if result.get("returncode") == 0:
         return None
+
+    def _names(nodes: list[str]) -> str:
+        return ", ".join(nodes[:10]) + (f" (+{len(nodes) - 10} more)" if len(nodes) > 10 else "")
+
+    failed = result.get("failed_nodes") or []
+    skipped = result.get("skipped_nodes") or []
+    parts = []
     if failed:
-        shown = ", ".join(failed[:10]) + (f" (+{len(failed) - 10} more)" if len(failed) > 10 else "")
-        return f"{what} failed on {len(failed)} node(s): {shown} (see stderr)"
-    return f"{what} exited non-zero (see stdout/stderr)"
+        parts.append(f"{what} failed on {len(failed)} node(s): {_names(failed)} (see stderr)")
+    if skipped:
+        parts.append(f"skipped {len(skipped)} node(s) running a job: {_names(skipped)}")
+    return "; ".join(parts) or f"{what} exited non-zero (see stdout/stderr)"
+
+
+def _nodes_running_jobs(hosts: list[str]) -> set[str]:
+    """Which of *hosts* Slurm shows running a job. Raises when Slurm cannot be asked: a check
+    that cannot read its input must not report the nodes free."""
+    from universal_parser import expand_nodelist
+
+    if not hosts:
+        return set()
+    proc = host_exec.run_slurm_on_host(
+        _get_platform().squeue_cmd(f"-h -w {shlex.quote(','.join(hosts))} -o %N"),
+        timeout=max(5, _env_int("RACK_SLURM_SCONTROL_TIMEOUT", 120)),
+    )
+    if proc.returncode != 0:
+        raise OSError(f"squeue failed (rc={proc.returncode}): {(proc.stderr or '').strip()[:200]}")
+    busy: set[str] = set()
+    for line in (proc.stdout or "").split():
+        busy.update(expand_nodelist(line))
+    return busy & set(hosts)
+
+
+def run_node_reboot(pdsh_w: str) -> dict:
+    """Reboot the nodes *pdsh_w* names from the node itself: ``systemctl --no-block reboot``.
+
+    For nodes Slurm cannot reboot: ``scontrol reboot`` is delivered by the node's slurmd, and a
+    node Slurm holds INVALID or DOWN never gets it -- on Nscale NC gpu105-su21 (one GPU failed
+    to initialise, so it registered 3 GPUs of 4) took "reboot issued" and timed out without
+    rebooting. This runs through the cluster's node route (direct or via the head, under sudo
+    when the cluster says so), so it reaches the node whatever Slurm thinks of it.
+
+    A node Slurm shows running a job is skipped, never rebooted. A Slurm reboot still pending
+    for a target is cancelled first, so Slurm does not reboot it a second time once it is back.
+    ``--no-block`` queues the reboot and returns, so the node can answer before it goes down.
+    """
+    from slurm_admin import _run_scontrol
+
+    hosts = _node_hosts(pdsh_w)
+    dry = os.environ.get("RACK_NODE_REBOOT_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
+    busy = set() if dry else _nodes_running_jobs(hosts)
+    targets = [h for h in hosts if h not in busy]
+    skipped = [h for h in hosts if h in busy]
+    if not targets:
+        return {
+            "returncode": 1, "stdout": "", "stderr": "", "pdsh_w": ",".join(hosts),
+            "command_display": "", "failed_nodes": [], "skipped_nodes": skipped,
+        }
+    if not dry:
+        cancelled = _run_scontrol(["cancel_reboot", ",".join(targets)])
+        if not cancelled.get("ok"):
+            # Nothing pending is the usual answer; it is not a reason to stop.
+            _logger.info("cancel_reboot before node reboot: %s", (cancelled.get("stderr") or "")[:200])
+    result = _run_node_command(
+        ",".join(targets),
+        "systemctl --no-block reboot",
+        timeout=max(30, _env_int("RACK_NODE_REBOOT_TIMEOUT", 120)),
+        dry_run=dry,
+        dry_env="RACK_NODE_REBOOT_DRY_RUN",
+    )
+    result["skipped_nodes"] = skipped
+    if skipped:
+        result["returncode"] = 1
+    return result
 
 
 def run_services_restart(pdsh_w: str) -> dict:
@@ -259,8 +329,12 @@ def run_rack_uptime_pdsh(rack: str) -> dict:
     return payload
 
 
-def _services_restart_worker(job_id: str, pdsh_w: str) -> None:
-    """Run services-restart pdsh in a background thread."""
+def _node_action_worker(job_id: str, pdsh_w: str, what: str, run: Callable[[str], dict]) -> None:
+    """Run a per-node action (services restart, GPU reset, node reboot) in a background thread.
+
+    The job is ``done`` only when every node succeeded; otherwise ``error`` names the nodes that
+    did not (``failed_nodes``) and those the action left alone (``skipped_nodes``).
+    """
 
     def _patch(**kwargs: object) -> None:
         finished = None
@@ -279,7 +353,7 @@ def _services_restart_worker(job_id: str, pdsh_w: str) -> None:
             phase="running",
             started_running_at=datetime.now(timezone.utc).isoformat(),
         )
-        result = run_services_restart(pdsh_w)
+        result = run(pdsh_w)
         ok = result.get("returncode") == 0
         _patch(
             phase="done" if ok else "error",
@@ -291,10 +365,11 @@ def _services_restart_worker(job_id: str, pdsh_w: str) -> None:
             command_display=result.get("command_display", ""),
             pdsh_w=result.get("pdsh_w", ""),
             failed_nodes=result.get("failed_nodes", []),
-            error=_node_job_error("services restart", result),
+            skipped_nodes=result.get("skipped_nodes", []),
+            error=_node_job_error(what, result),
         )
     except Exception as e:
-        _logger.debug("_services_restart_worker: ignoring error", exc_info=True)
+        _logger.debug("_node_action_worker(%s): ignoring error", what, exc_info=True)
         _patch(
             phase="error",
             ok=False,
@@ -307,56 +382,18 @@ def _services_restart_worker(job_id: str, pdsh_w: str) -> None:
             error=str(e),
         )
     _reset_job_purge_later(job_id)
+
+
+def _services_restart_worker(job_id: str, pdsh_w: str) -> None:
+    _node_action_worker(job_id, pdsh_w, "services restart", run_services_restart)
 
 
 def _gpu_reset_worker(job_id: str, pdsh_w: str) -> None:
-    """Run gpu_reset.sh in a background thread."""
+    _node_action_worker(job_id, pdsh_w, "GPU reset", run_gpu_reset)
 
-    def _patch(**kwargs: object) -> None:
-        finished = None
-        with _reset_jobs_lock:
-            row = _reset_jobs.get(job_id)
-            if row is not None:
-                row.update(kwargs)
-                # Snapshot inside the lock; push outside it so the lake call never holds the mutex.
-                if str(kwargs.get("phase") or "") in ("done", "error"):
-                    finished = dict(row)
-        if finished is not None:
-            _lake_push_job(job_id, finished)
 
-    try:
-        _patch(
-            phase="running",
-            started_running_at=datetime.now(timezone.utc).isoformat(),
-        )
-        result = run_gpu_reset(pdsh_w)
-        ok = result.get("returncode") == 0
-        _patch(
-            phase="done" if ok else "error",
-            ok=ok,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=result.get("returncode"),
-            stdout=result.get("stdout", ""),
-            stderr=result.get("stderr", ""),
-            command_display=result.get("command_display", ""),
-            pdsh_w=result.get("pdsh_w", ""),
-            failed_nodes=result.get("failed_nodes", []),
-            error=_node_job_error("GPU reset", result),
-        )
-    except Exception as e:
-        _logger.debug("_gpu_reset_worker: ignoring error", exc_info=True)
-        _patch(
-            phase="error",
-            ok=False,
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            returncode=-1,
-            stdout="",
-            stderr="",
-            command_display="",
-            pdsh_w=pdsh_w,
-            error=str(e),
-        )
-    _reset_job_purge_later(job_id)
+def _node_reboot_worker(job_id: str, pdsh_w: str) -> None:
+    _node_action_worker(job_id, pdsh_w, "node reboot", run_node_reboot)
 
 
 def power_specs_from_ct_down_unk(raw: str | None) -> list[str]:
@@ -1194,6 +1231,39 @@ def api_services_restart_async():
         daemon=True,
     ).start()
     return jsonify({"ok": True, "job_id": job_id, "kind": "services", "rack": rk})
+
+
+@bp.route("/api/node-reboot-async", methods=["POST"])
+@action("rack.node:reboot", variant="async")
+def api_node_reboot_async():
+    """POST JSON {\"specs\": [\"host\", …]} — reboot nodes from the node itself; poll
+    GET /api/reset-job-status?job_id=…
+
+    For nodes Slurm cannot reboot (INVALID, DOWN); a node Slurm manages is better rebooted with
+    ``/api/scheduler-reboot``, which waits for its jobs. Nodes running a job are skipped.
+    """
+    if os.environ.get("RACK_NODE_REBOOT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
+        return jsonify({"ok": False, "error": "node reboot disabled (RACK_NODE_REBOOT_DISABLED)"}), 403
+    body = request.get_json(silent=True) or {}
+    specs_raw = body.get("specs")
+    if not isinstance(specs_raw, list) or not specs_raw or not all(isinstance(x, str) for x in specs_raw):
+        return jsonify({"ok": False, "error": 'send JSON {"specs": ["host", ...]}'}), 400
+    hosts = [x.strip() for x in specs_raw if x.strip()]
+    if not hosts or not all(_HOSTNAME_RE.fullmatch(h) for h in hosts):
+        return jsonify({"ok": False, "error": "specs must be node hostnames"}), 400
+    pdsh_w = ",".join(hosts)
+    job_id = str(uuid.uuid4())
+    with _reset_jobs_lock:
+        _reset_jobs[job_id] = {
+            "job_id": job_id,
+            "kind": "node-reboot",
+            "operator": _operator_from_request(),
+            "rack": "",
+            "phase": "starting",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    threading.Thread(target=_node_reboot_worker, args=(job_id, pdsh_w), daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id, "kind": "node-reboot", "nodes": hosts})
 
 
 @bp.route("/api/rack-uptime", methods=["POST"])
