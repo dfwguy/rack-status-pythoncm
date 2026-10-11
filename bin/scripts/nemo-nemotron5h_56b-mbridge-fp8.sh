@@ -133,15 +133,27 @@ if [ $single_rack -eq 1 ]; then
   export NCCL_IB_DISABLE=1
   export UCX_NET_DEVICES=${ns_nic}
 else
-  export UCX_TLS=rc
   # Cross-rack plane: this node's exact rails (=list), the RoCE address family and the cluster's
   # stated plane, all from lib/fabric.inc.sh -- never a guessed mlx5_0..3, which mixed IB and RoCE
   # NICs on one cluster and named no rail at all on GB300 NscaleTX-NC (rails roce_vf_r1..4, IPv6).
+  # MPI's own transport then follows the fabric network: RC on InfiniBand rails, TCP on the routable
+  # bootstrap netdev over RoCE (see nvis_fabric_mpi_xrack_transport).
   if declare -F nvis_fabric_export_pinned >/dev/null 2>&1; then
     nvis_fabric_export_pinned || echo "WARN: no compute rails detected; NCCL/UCX auto-detect the cross-rack plane"
   else
     echo "WARN: lib/fabric.inc.sh not loaded; NCCL/UCX auto-detect the cross-rack plane"
   fi
+  if declare -F nvis_fabric_mpi_xrack_transport >/dev/null 2>&1; then
+    nvis_fabric_mpi_xrack_transport
+  else
+    export UCX_TLS=rc
+  fi
+fi
+# NVLS: on within one NVLink domain; across racks, off where the GPU fabric CliqueId is unset (see
+# nvis_fabric_xrack_nvls). NVIS_NEMO_NVLS_ENABLE, when the launch sets it, always wins.
+_nvls_default=1
+if [ $single_rack -eq 0 ] && declare -F nvis_fabric_xrack_nvls >/dev/null 2>&1; then
+  _nvls_default="$(nvis_fabric_xrack_nvls)"
 fi
 export NCCL_SOCKET_IFNAME=${ns_nic}
 export OMPI_MCA_btl_tcp_if_include=${ns_nic}
@@ -155,7 +167,7 @@ export OMPI_MCA_btl_openib_warn_default_gid_prefix=0
 export OMPI_MCA_coll_hcoll_enable=0
 export SLURM_CPU_BIND=none
 #
-export NCCL_NVLS_ENABLE=1
+export NCCL_NVLS_ENABLE=${NVIS_NEMO_NVLS_ENABLE:-${_nvls_default}}
 #export NCCL_CUMEM_ENABLE=1
 #export NCCL_CUMEM_HOST_ENABLE=0
 # MNNVL (multi-node NVLink) is only valid WITHIN one NVL72 / IMEX domain (a single rack =
@@ -263,7 +275,7 @@ srun -N ${SLURM_NNODES} --ntasks-per-node=1 enroot remove -f pyxis_nemo &>/dev/n
 # NCCL pre-flight verbosity — default WARN (quiet). Override from the UI/launch (NVIS_NCCL_DEBUG=
 # INFO|TRACE) to diagnose a silent cross-rack hang: INFO names the stuck rank/peer connection.
 export NCCL_DEBUG="${NVIS_NCCL_DEBUG:-WARN}"
-export NCCL_NVLS_ENABLE=${NVIS_NEMO_NVLS_ENABLE:-1}
+export NCCL_NVLS_ENABLE=${NVIS_NEMO_NVLS_ENABLE:-${_nvls_default}}
 
 # NCCL pre-flight selector: which collectives to run before NeMo training (space/comma
 # list of: allreduce alltoall allgather). Default = all three (original behavior). The
@@ -410,7 +422,7 @@ export NCCL_DEBUG="${NVIS_NCCL_DEBUG:-INFO}"
 # grouped2" / "Cuda failure 226 invalid peer access over nvlink". Documented workaround: UB_SKIPMC=1
 # (UserBuffers fall back to IPC; keeps NVLS for NCCL). Set NVIS_NEMO_UB_SKIPMC=1 (and optionally
 # NVIS_NEMO_NVLS_ENABLE=0) for BF16 acceptance on GB200 if the full-multicast path is unstable.
-export NCCL_NVLS_ENABLE=${NVIS_NEMO_NVLS_ENABLE:-1}
+export NCCL_NVLS_ENABLE=${NVIS_NEMO_NVLS_ENABLE:-${_nvls_default}}
 export UB_SKIPMC=${NVIS_NEMO_UB_SKIPMC:-0}
 # export MAX_STEPS=2010 #For stress test, you can set a large number for MAX_STEPS. 
 #export MAX_STEPS=110

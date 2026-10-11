@@ -437,6 +437,44 @@ nvis_fabric_export_compute() {
 # A caller's own NCCL_IB_HCA / UCX_NET_DEVICES, or the cluster's NVIS_FABRIC_HCA, still win.
 # Returns 1 and pins nothing when no rail was found, so the caller decides; it never falls back to
 # a guessed mlx5_N list (which is what every caller used to do).
+# MPI's own transport in a job that spans racks. NCCL carries the data on the compute rails; MPI only
+# bootstraps and moves small control traffic. On InfiniBand, RC on the rails is what the launchers
+# have always used and it works: RC addresses peers by LID and needs no routed GID. On RoCE the rails
+# sit in routed per-node subnets (Nscale NC: one VRF per rail, a /64 per node), and UCX, which has no
+# address-family selector, picks a link-local GID that cannot leave the node's subnet -- NeMo
+# multirack job 165605 died in MPI_Allgather on "ibv_create_ah(... dgid=fe80::...) ... roce_vf_r1
+# failed: Connection timed out". There MPI goes over TCP on the routable bootstrap netdev, as the
+# single-rack NeMo launch and the host-mpirun NCCL launch already do on that cluster. Reads
+# NVIS_FAB_LINK / NVIS_FAB_NS_IFNAME from a scan eval'd into the caller (nvis_fabric_export*).
+nvis_fabric_mpi_xrack_transport() {
+  if [[ "${NVIS_FAB_LINK:-}" == "roce" ]]; then
+    export UCX_TLS=tcp
+    export UCX_NET_DEVICES="${NVIS_FAB_NS_IFNAME:-$(_nvis_fabric_ns_ifname)}"
+  else
+    export UCX_TLS=rc
+  fi
+  echo "nvis_fabric: cross-rack MPI over UCX_TLS=${UCX_TLS} UCX_NET_DEVICES=${UCX_NET_DEVICES:-<auto>} (link=${NVIS_FAB_LINK:-?})" >&2
+}
+
+# NCCL_NVLS_ENABLE for a job that spans NVLink domains: prints 1, or 0 when this node's GPU reports
+# the unset fabric CliqueId. NCCL groups NVLS multicast teams by CliqueId; when every domain reports
+# the sentinel 32766 (0x7ffe) while each ClusterUUID differs, NCCL tries to bind one team across
+# separate NVSwitch fabrics and hangs silently in ncclCommInitRank -- see
+# .cursor/rules/multirack-nccl-hcoll-nvls.mdc (B). Nscale NC reported 32766 on every rack checked
+# (2026-10-11). The site's fix is a unique CliqueId per domain; until then NVLS stays off across
+# racks and on within one. A caller's explicit setting should win over this default.
+nvis_fabric_xrack_nvls() {
+  local clique
+  clique="$(nvidia-smi -q -i 0 2>/dev/null | awk -F: '/CliqueId/ { gsub(/[[:space:]]/, "", $2); print $2; exit }')"
+  if [[ "${clique}" == "32766" ]]; then
+    echo "nvis_fabric: WARNING: GPU fabric CliqueId is unset (32766) on $(hostname); NVLS off for this" \
+         "cross-rack job -- give each NVLink domain a unique CliqueId to restore it" >&2
+    printf 0
+  else
+    printf 1
+  fi
+}
+
 nvis_fabric_export_pinned() {
   local had_hca="${NCCL_IB_HCA:-}" had_ucx="${UCX_NET_DEVICES:-}"
   _nvis_fabric_apply "$(nvis_fabric_scan)"

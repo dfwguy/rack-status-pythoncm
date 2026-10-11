@@ -354,6 +354,69 @@ class TestARenamedSetting:
         assert config_env._read_job_env_file_raw(f)["NVIS_FABRIC_NETWORK"] == "IB"
 
 
+class TestCrossRackMpiAndNvls:
+    """What a job spanning racks needs beyond NCCL's rails: MPI's own transport, and NVLS.
+
+    Nscale NC NeMo multirack job 165605 (2026-10-11) died in MPI_Allgather: the batch script pinned
+    MPI's UCX to the RoCE rails with RC, UCX picked a link-local GID (dgid=fe80::...) that cannot leave
+    a node's routed subnet, and every endpoint timed out. Its racks also all report the unset fabric
+    CliqueId 32766, which hangs NVLS in ncclCommInitRank across racks.
+    """
+
+    def _transport(self, root: Path, **env: str | None) -> dict[str, str]:
+        return _run(root, 'eval "$(nvis_fabric_scan)"; nvis_fabric_mpi_xrack_transport 2>/dev/null; '
+                          'echo "UCX_TLS=${UCX_TLS:-}"; echo "UCX_NET_DEVICES=${UCX_NET_DEVICES:-}"', **env)
+
+    def test_over_roce_mpi_takes_tcp_on_the_routable_bootstrap_netdev(self, tmp_path):
+        _nc_node(tmp_path)
+        t = self._transport(tmp_path, NVIS_FABRIC_NETWORK="RoCE")
+        assert t == {"UCX_TLS": "tcp", "UCX_NET_DEVICES": "enP22s22f0np0"}
+
+    def test_over_infiniband_mpi_keeps_rc_on_the_rails(self, tmp_path):
+        for i in range(4):
+            _dev(tmp_path, f"mlx5_{i}", state="ACTIVE", link="InfiniBand", rate=400,
+                 gids=[f"fe80:0000:0000:0000:a088:c203:00{i}5:fa3e"])
+        t = self._transport(tmp_path, NVIS_FABRIC_NETWORK="IB", NVIS_FABRIC_DEFAULT_ROUTE_IFS="",
+                            UCX_NET_DEVICES="mlx5_0:1,mlx5_1:1")
+        assert t == {"UCX_TLS": "rc", "UCX_NET_DEVICES": "mlx5_0:1,mlx5_1:1"}
+
+    def _nvls(self, tmp_path: Path, clique: str | None) -> tuple[str, str]:
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        if clique is not None:
+            smi = bin_dir / "nvidia-smi"
+            smi.write_text("#!/bin/bash\n"
+                           "echo '    Fabric'\n"
+                           f"echo '        CliqueId                          : {clique}'\n"
+                           "echo '        ClusterUUID                       : 65792be7-e2bc-42f5-a98d-f62b94f367c0'\n")
+            smi.chmod(0o755)
+        script = f'source "{FABRIC}"\nnvis_fabric_xrack_nvls\n'
+        r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30, check=False,
+                           env={"PATH": f"{bin_dir}:/usr/bin:/bin"})
+        assert r.returncode == 0, r.stderr
+        return r.stdout.strip(), r.stderr
+
+    def test_the_unset_clique_turns_nvls_off_across_racks_and_says_why(self, tmp_path):
+        out, err = self._nvls(tmp_path, "32766")
+        assert out == "0"
+        assert "CliqueId is unset (32766)" in err
+
+    def test_a_real_clique_keeps_nvls(self, tmp_path):
+        assert self._nvls(tmp_path, "4097")[0] == "1"
+
+    def test_without_nvidia_smi_nvls_stays_on(self, tmp_path):
+        assert self._nvls(tmp_path, None)[0] == "1"
+
+    def test_the_nemo_batch_script_decides_nvls_before_every_use_and_lets_the_launch_win(self):
+        lines = (SCRIPTS / "nemo-nemotron5h_56b-mbridge-fp8.sh").read_text().splitlines()
+        decided = next(n for n, line in enumerate(lines) if line.startswith("_nvls_default=1"))
+        uses = [n for n, line in enumerate(lines) if line.startswith("export NCCL_NVLS_ENABLE=")]
+        assert uses and all(n > decided for n in uses)
+        assert all(lines[n] == "export NCCL_NVLS_ENABLE=${NVIS_NEMO_NVLS_ENABLE:-${_nvls_default}}" for n in uses), (
+            "every NVLS export must default to the decided value, the launch's own setting first")
+        assert any("nvis_fabric_mpi_xrack_transport" in line for line in lines)
+
+
 class TestTheEdges:
     def test_no_pin_when_nothing_else_is_active(self, tmp_path):
         for r in (1, 2):
