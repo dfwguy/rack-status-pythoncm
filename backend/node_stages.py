@@ -15,7 +15,9 @@ stages, and the rack page shows them per host.
 - **Stage 1** is the single-node NCCL run (the Stage-1 launcher with one host as its target). Its
   evidence is the run's result log, which the native rack workers attribute to the host it covered
   (``native_status._is_partial_rack_log``), and, while the job is still in Slurm, the open
-  ``scope="node"`` activity that launched it.
+  ``scope="node"`` activity that launched it. A failed Stage 1 carries ``reason`` when the log says
+  why (``native_status.stage_failure_reason``); a job that never started still leaves a log saying so
+  (``collect_llmb_nccl_log.sh``), so a launched node is never left "pending".
 - **Stage 2** is a single-node LLM training run. The NeMo Stage-2 recipe does not fit one node
   (the 56B GB300 config runs out of memory on 4 GPUs, and no smaller GB300 config ships in the
   container), so the node's Stage 2 is the bring-up framework's single-node LLM job, read with that
@@ -71,6 +73,11 @@ def stage1_state(probe: dict[str, Any] | None, live_jid: str, running: set[str])
         out["state"] = "done"
     else:
         out["state"] = "fail"
+        # What stopped it (the log scan's words), so a fabric that is not up or an image that is
+        # not on the node reads differently from a slow link -- they are fixed by different people.
+        reason = str(probe.get("fail_reason") or "").strip()
+        if reason:
+            out["reason"] = reason
     return out
 
 

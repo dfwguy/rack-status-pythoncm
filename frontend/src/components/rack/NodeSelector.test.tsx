@@ -68,6 +68,31 @@ describe("NodeSelector", () => {
     expect(within(legacy).getByLabelText(/Stage 1 — single-node NCCL: not started/)).toBeTruthy();
   });
 
+  it("says why a node's Stage 1 failed", () => {
+    const host = "sys1-gso1-p-phy-gpu19-su19";
+    render(
+      <NodeSelector
+        nodes={nodes}
+        selected={new Set()}
+        onSelectionChange={vi.fn()}
+        nodeStages={{
+          [host]: {
+            node: host,
+            rack: "U20",
+            stage1: { state: "fail", job_id: "125831", reason: "NVLink fabric not initialized (CUDA: system not yet initialized)" },
+            stage2: { state: "pending" },
+          },
+        }}
+      />,
+    );
+    const row = screen.getByText("U20-ct01").closest("tr")!;
+    expect(
+      within(row).getByLabelText(
+        "Stage 1 — single-node NCCL: fail (job 125831: NVLink fabric not initialized (CUDA: system not yet initialized))",
+      ),
+    ).toBeTruthy();
+  });
+
   it("leaves the Stages column out when the server sends no stages", () => {
     render(<NodeSelector nodes={nodes} selected={new Set()} onSelectionChange={vi.fn()} />);
     expect(screen.queryByRole("columnheader", { name: "Stages" })).toBeNull();

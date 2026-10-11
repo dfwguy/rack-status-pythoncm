@@ -71,7 +71,10 @@ export function NodeStageTags({ stages, stage2Source }: { stages?: NodeStagesRow
       short: "S1 NCCL",
       label: "Stage 1 — single-node NCCL",
       info: stages?.stage1,
-      detail: (i) => (i.job_id ? ` (job ${i.job_id})` : ""),
+      detail: (i) => {
+        const parts = [i.job_id ? `job ${i.job_id}` : "", i.reason ?? ""].filter(Boolean);
+        return parts.length ? ` (${parts.join(": ")})` : "";
+      },
     },
     {
       short: "S2 LLM",

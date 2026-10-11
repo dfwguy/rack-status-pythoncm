@@ -24,7 +24,7 @@ export interface NodeStageInfo {
   log?: string;
   /** Bring-up verdict word, e.g. ``DONE`` / ``FAIL`` (Stage 2). */
   status?: string;
-  /** Bring-up's reason for a failure (Stage 2). */
+  /** Why it failed: the bring-up's reason (Stage 2), or what the result log says stopped it (Stage 1). */
   reason?: string;
 }
 

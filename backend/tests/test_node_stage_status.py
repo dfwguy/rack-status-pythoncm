@@ -259,7 +259,8 @@ def test_the_snapshot_carries_each_nodes_evidence_and_status_does_not_serve_it(m
     )
     payload = st.node_stage_logs_payload()
     assert payload == {HOST: {"nccl": {"jid": 119310, "nccl_ok": True, "llm_ok": None,
-                                       "_path": f"/logs/{one}", "_mtime": 1.0, "_rack": "V20"}}}
+                                       "_path": f"/logs/{one}", "_mtime": 1.0, "_rack": "V20",
+                                       "fail_reason": ""}}}
 
 
 def test_node_stages_route_reads_the_snapshot(monkeypatch):
@@ -304,3 +305,99 @@ def test_node_stages_route_says_retry_while_the_inventory_loads(monkeypatch):
     if r.status_code in (401, 403):
         pytest.skip("route requires a session in this app configuration")
     assert r.status_code == 503 and r.headers.get("Retry-After") == "30"
+
+
+# ---------------------------------------------------------------- a failed run says so, and why
+
+FABRIC_HOST = "sys1-gso1-p-phy-gpu100-su31"
+# Nscale NC Slurm 125831: the NVLink fabric was not up, every test died at "Using devices", and the
+# log never printed a rank line -- so it was evidence for nobody and the node stayed "pending".
+NCCL_FABRIC_DOWN = f"""# NVIS: aggregated from llmb-run experiment microbenchmark_nccl_nccl_fp8_125831
+# job=125831 rack=X24 nodes=1 tests=24
+# --- 1_1_LOG_all_reduce_env1_args1_job125831_iter1 ---
+# nccl-tests version 2.17.8 nccl-headers=22902 nccl-library=22903
+# Collective test starting: all_reduce_perf_mpi
+#
+# Using devices
+{FABRIC_HOST}: Test CUDA failure util.cu:555 'system not yet initialized'
+ .. {FABRIC_HOST} pid 3252989: Test failure common.cu:1187
+"""
+
+# What collect_llmb_nccl_log.sh writes for a job that never started (Slurm 133870).
+NCCL_NOT_STARTED = f"""# NVIS: llmb-run job 133870 left no nccl-tests output; it did not start on its nodes
+# job=133870 rack=U24 nodes=1 tests=0
+NODELIST: {HOST}
+# NVIS-FAILURE: container did not start (pyxis): No such file or directory: /opt/containers/x.sqsh
+"""
+
+
+@pytest.mark.parametrize(
+    ("text", "host", "reason"),
+    [
+        (NCCL_FABRIC_DOWN, FABRIC_HOST, "NVLink fabric not initialized (CUDA: system not yet initialized)"),
+        (NCCL_NOT_STARTED, HOST, "container did not start (pyxis): No such file or directory: /opt/containers/x.sqsh"),
+        (NCCL_1N, HOST, ""),
+    ],
+)
+def test_a_partial_log_names_its_hosts_and_why_it_failed(monkeypatch, text, host, reason):
+    monkeypatch.setattr(native_status.host_exec, "read_text", lambda *_a, **_k: (text, {}))
+    assert native_status._scan_partial_log(PurePosixPath("/l/x.txt")) == ([host], reason)
+
+
+@pytest.mark.parametrize(
+    ("text", "reason"),
+    [
+        ("h: Test NCCL failure common.cu:1084 'remote process exited or there was a network error'",
+         "NCCL failure: remote process exited or there was a network error"),
+        ("h: Test CUDA failure common.cu:900 'out of memory'", "CUDA failure: out of memory"),
+        ("h: Test timeout common.cu:1 ", "nccl-tests timed out"),
+        ("# Avg bus bandwidth : 219.5", ""),
+    ],
+)
+def test_the_failure_reason_reads_like_an_operator_would_say_it(text, reason):
+    assert native_status.stage_failure_reason(text) == reason
+
+
+def test_a_node_whose_run_failed_reads_fail_with_the_reason(monkeypatch):
+    name = "cmods-NCCL-1Rack-X24-1N-125831.txt"
+    st, _ = _scan(
+        monkeypatch,
+        [(PurePosixPath(f"/logs/{name}"), 1_000_000_000, 10)],
+        {name: {"nccl_ok": False, "jid": 125831}},
+        {name: NCCL_FABRIC_DOWN},
+    )
+    probe = st.node_stage_logs_payload()[FABRIC_HOST]["nccl"]
+    assert node_stages.stage1_state(probe, "", set()) == {
+        "state": "fail", "job_id": "125831", "log": f"/logs/{name}",
+        "reason": "NVLink fabric not initialized (CUDA: system not yet initialized)",
+    }
+
+
+def test_a_pass_carries_no_reason():
+    assert "reason" not in node_stages.stage1_state({"nccl_ok": True, "jid": 1, "fail_reason": "x"}, "", set())
+
+
+def test_logs_scanned_before_failure_lines_counted_are_read_once_more(monkeypatch):
+    """A log cached with no hosts by the older scan must be re-read, or its node stays "pending"."""
+    name = "cmods-NCCL-1Rack-X24-1N-125831.txt"
+    old = {f"/logs/{name}": {"mtime_ns": 1_000_000_000, "size": 10, "hosts": [],
+                             "probe": {"nccl_ok": False, "jid": 125831}}}
+    saved = []
+    monkeypatch.setattr(native_status, "_glob_one_rack_logs", lambda _d: [(PurePosixPath(f"/logs/{name}"), 1_000_000_000, 10)])
+    monkeypatch.setattr(native_status, "_load_log_cache", lambda _p: old)
+    monkeypatch.setattr(native_status, "_save_log_cache", lambda _p, disk, _alive: saved.append(disk))
+    monkeypatch.setattr(native_status, "_rack_from_1rack_log", lambda _n: "X24")
+    monkeypatch.setattr(native_status, "_archive_completed_native_probe", lambda *_a, **_k: None)
+    monkeypatch.setattr(native_status.host_exec, "read_text", lambda *_a, **_k: (NCCL_FABRIC_DOWN, {}))
+    st = native_status.NativeRackTableState("k", PurePosixPath("/logs"))
+    st._worker_logs(lambda _p: pytest.fail("the probe itself is still cached"))
+    assert st.by_node_stage_log[FABRIC_HOST]["nccl"]["fail_reason"].startswith("NVLink fabric not initialized")
+    entry = saved[-1][f"/logs/{name}"]
+    assert entry["hosts"] == [FABRIC_HOST] and entry["scan"] == native_status._PARTIAL_LOG_SCAN_VERSION
+
+    # Scanned once, never again: the next pass reads the cache, not the file.
+    monkeypatch.setattr(native_status, "_load_log_cache", lambda _p: saved[-1])
+    monkeypatch.setattr(native_status.host_exec, "read_text", lambda *_a, **_k: pytest.fail("re-read a scanned log"))
+    st2 = native_status.NativeRackTableState("k", PurePosixPath("/logs"))
+    st2._worker_logs(lambda _p: pytest.fail("the probe itself is still cached"))
+    assert st2.by_node_stage_log[FABRIC_HOST]["nccl"]["fail_reason"].startswith("NVLink fabric")

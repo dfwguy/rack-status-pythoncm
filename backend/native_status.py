@@ -533,24 +533,64 @@ def _is_partial_rack_log(name: str) -> bool:
 _NCCL_RANK_HOST_RE = re.compile(r"^#\s+Rank\s+\d+\s+Group\s+\d+\s+Pid\s+\d+\s+on\s+(\S+)\s+device\b", re.MULTILINE)
 
 
-def _hosts_in_partial_log(path: Path) -> list[str]:
-    """The hosts a sub-rack run covered, read from the head of its log.
+# A test that fails before it lists its devices names its host only on the failure lines:
+#   "sys1-gso1-p-phy-gpu100-su31: Test CUDA failure util.cu:555 'system not yet initialized'"
+#   " .. sys1-gso1-p-phy-gpu100-su31 pid 3252989: Test failure common.cu:1187"
+_NCCL_FAIL_HOST_RE = re.compile(
+    r"^(?:\s*\.\.\s+(\S+)\s+pid\s+\d+:|(\S+):)\s+Test\s+(?:CUDA\s+|NCCL\s+)?(?:failure|timeout)\b", re.MULTILINE
+)
 
-    The basename carries the rack, not the host, so the content has to say: a NeMo job log opens
-    with ``NODELIST: <hosts>`` (the batch script echoes it), and an aggregated nccl-tests log
-    names every rank's host. Read through the connection, like the multirack rack scan.
+# Why a sub-rack run failed, in an operator's words; the first sign found wins. The collector's own
+# line comes first: it is written for a job that never started, and says what stopped it.
+_STAGE_FAILURE_SIGNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"^# NVIS-FAILURE:\s*(.+?)\s*$", re.MULTILINE), "{0}"),
+    (re.compile(r"system not yet initialized"), "NVLink fabric not initialized (CUDA: system not yet initialized)"),
+    (re.compile(r"Test CUDA failure\s+\S+\s+'([^']*)'"), "CUDA failure: {0}"),
+    (re.compile(r"Test NCCL failure\s+\S+\s+'([^']*)'"), "NCCL failure: {0}"),
+    (re.compile(r"Test timeout"), "nccl-tests timed out"),
+)
+
+# Bumped when the partial-log scan learns something new, so logs scanned before are read once more:
+# 2 = hosts also from failure lines, plus the failure reason.
+_PARTIAL_LOG_SCAN_VERSION = 2
+
+
+def stage_failure_reason(text: str) -> str:
+    for pattern, template in _STAGE_FAILURE_SIGNS:
+        m = pattern.search(text or "")
+        if m:
+            return template.format(*(g.strip() for g in m.groups()))[:300]
+    return ""
+
+
+def _scan_partial_log(path: Path) -> tuple[list[str], str]:
+    """The hosts a sub-rack run covered and, if it failed, why -- from the head of its log.
+
+    The basename carries the rack, not the host, so the content has to say: a NeMo job log and an
+    aggregated nccl-tests log open with ``NODELIST: <hosts>`` (the batch script and the collector
+    write it), and nccl-tests names every rank's host. A run whose tests failed before listing
+    their devices (an NVLink fabric that is not up) names its host only on its failure lines, which
+    count too: without them that run was evidence for nobody and its nodes stayed "pending". Read
+    through the connection, like the multirack rack scan.
     """
     max_b = max(8192, _env_int("RACK_PARTIAL_LOG_HOST_SCAN_BYTES", 262144))
     text, meta = host_exec.read_text(path, head_bytes=max_b, tail_bytes=0, whole_bytes=max_b)
     if meta.get("read_error"):
-        return []
+        return [], ""
     hosts: list[str] = []
     nodem = _NODELIST_LINE_RE.search(text)
     if nodem:
         hosts = expand_nodelist(nodem.group(1).strip())
     if not hosts or any("[" in h for h in hosts):
         hosts = list(dict.fromkeys(_NCCL_RANK_HOST_RE.findall(text)))
-    return sorted({h for h in hosts if is_valid_node_hostname(h)})
+    if not hosts:
+        hosts = list(dict.fromkeys(a or b for a, b in _NCCL_FAIL_HOST_RE.findall(text)))
+    return sorted({h for h in hosts if is_valid_node_hostname(h)}), stage_failure_reason(text)
+
+
+def _hosts_in_partial_log(path: Path) -> list[str]:
+    """The hosts a sub-rack run covered (see :func:`_scan_partial_log`)."""
+    return _scan_partial_log(path)[0]
 
 
 def _jobid_from_log_name(name: str) -> str | None:
@@ -2039,7 +2079,7 @@ class NativeRackTableState:
         restart and does not depend on which worker serves the request -- the same reason the
         rack rows live there.
         """
-        keep = ("jid", "nccl_ok", "llm_ok", "_path", "_mtime", "_rack")
+        keep = ("jid", "nccl_ok", "llm_ok", "_path", "_mtime", "_rack", "fail_reason")
         with self.lock:
             return {
                 host: {kind: {k: rec.get(k) for k in keep} for kind, rec in kinds.items()}
@@ -2087,13 +2127,15 @@ class NativeRackTableState:
                 m_this = mtime_ns / 1_000_000_000
                 kind = _stage_kind_of_log_bn(p.name)
                 hosts: list[str] = []
+                fail_reason = ""
                 if kind and _is_partial_rack_log(p.name):
-                    cached = disk[keyp].get("hosts") if isinstance(disk.get(keyp), dict) else None
-                    if isinstance(cached, list):
-                        hosts = [str(h) for h in cached]
+                    ent = disk[keyp] if isinstance(disk.get(keyp), dict) else {}
+                    if ent.get("scan") == _PARTIAL_LOG_SCAN_VERSION and isinstance(ent.get("hosts"), list):
+                        hosts = [str(h) for h in ent["hosts"]]
+                        fail_reason = str(ent.get("fail_reason") or "")
                     else:
-                        hosts = _hosts_in_partial_log(p)
-                        disk[keyp]["hosts"] = hosts
+                        hosts, fail_reason = _scan_partial_log(p)
+                        ent.update(hosts=hosts, fail_reason=fail_reason, scan=_PARTIAL_LOG_SCAN_VERSION)
                         dirty = True
                 _archive_completed_native_probe(
                     p,
@@ -2109,7 +2151,9 @@ class NativeRackTableState:
                         nbucket = self.by_node_stage_log.setdefault(host, {})
                         prev_n = nbucket.get(kind)
                         if prev_n is None or m_this >= float(prev_n.get("_mtime") or 0.0):
-                            nbucket[kind] = {**rec_d, "_path": str(p), "_mtime": m_this, "_rack": rk or ""}
+                            nbucket[kind] = {
+                                **rec_d, "_path": str(p), "_mtime": m_this, "_rack": rk or "", "fail_reason": fail_reason,
+                            }
                     if rk and full_rack:
                         prev = self.by_rack_log.get(rk)
                         replace = prev is None
