@@ -38,6 +38,15 @@ NVIS_NEMO_BATCH_SCRIPT="${NVIS_NEMO_BATCH_SCRIPT:-nemo-nemotron5h_56b-mbridge-fp
 [[ -f "${SCRIPT_DIR}/slurm-init.inc.sh" ]] && source "${SCRIPT_DIR}/slurm-init.inc.sh"
 
 # Filename tag: same specs as passed in (comma-separated if multiple argv).
+# --nodelist HOSTS: the exact hosts to run on, resolved by the caller (Rack Status takes them from the
+# placement the dashboard shows). The remaining arguments are then the rack ids, used only to name
+# the log and count the racks. Without it, each argument is a rack-ct spec expanded below.
+EXPLICIT_NODELIST=""
+case "${1:-}" in
+  --nodelist) EXPLICIT_NODELIST="${2:?--nodelist needs a value}"; shift 2 ;;
+  --nodelist=*) EXPLICIT_NODELIST="${1#*=}"; shift ;;
+esac
+
 spec_tag=""
 for _a in "$@"; do
   [[ -n "$spec_tag" ]] && spec_tag+=","
@@ -100,7 +109,11 @@ for _s in "${_specs[@]}"; do
 done
 
 hosts=()
-if nvis_nodes_resolve "${racks[@]}" 2>/dev/null && [[ -n "${NVIS_NODELIST:-}" ]]; then
+if [[ -n "${EXPLICIT_NODELIST}" ]]; then
+  nvis_nodes_resolve --nodelist "${EXPLICIT_NODELIST}" || exit $?
+  mapfile -t hosts < <(scontrol show hostname "${NVIS_NODELIST}" 2>/dev/null)
+  ((${#hosts[@]} > 0)) || { echo "run-nemo-xrack: --nodelist expanded to no hosts: ${EXPLICIT_NODELIST}" >&2; exit 1; }
+elif nvis_nodes_resolve "${racks[@]}" 2>/dev/null && [[ -n "${NVIS_NODELIST:-}" ]]; then
   mapfile -t hosts < <(scontrol show hostname "${NVIS_NODELIST}" 2>/dev/null)
 fi
 if ((${#hosts[@]} == 0)); then
@@ -155,7 +168,7 @@ fi
 # Cross-rack alltoall fix (keeps SHARP). The batch script defaults this to 1 too, but set it here so
 # the launcher is self-documenting and forwards it explicitly. Override with NVIS_NCCL_IGNORE_COLLNET_MISMATCH.
 export NVIS_NCCL_IGNORE_COLLNET_MISMATCH="${NVIS_NCCL_IGNORE_COLLNET_MISMATCH:-1}"
-: "${NEMO_SQSH_SRC:?set NEMO_SQSH_SRC to the configured nemo .sqsh image}"
+: "${NEMO_SQSH_SRC:?no NeMo image: add this tool (nemo-xrack) to the Required by of its image in Artifact Distribution -> Catalog, or set NEMO_SQSH_SRC}"
 _sqsh_b=$(basename "$NEMO_SQSH_SRC")
 _hostcsv="$(echo "${hosts[*]}" | tr ' ' ',')"
 if nvis_node_images_p2p; then

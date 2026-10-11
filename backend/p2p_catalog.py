@@ -33,6 +33,24 @@ def get_catalog(cluster_id: str, repo: Repo | None = None) -> models.P2pCatalog:
     return models.P2pCatalog.from_dict({**raw, "cluster_id": cluster_id})
 
 
+def image_for_tool(cluster_id: str, tool_id: str, repo: Repo | None = None) -> models.P2pCatalogImage | None:
+    """The image this cluster's catalog names for *tool_id* through ``required_by``, or ``None``.
+
+    ``required_by`` is how a tool names the image it runs (ROADMAP: a job names the catalog image it
+    needs rather than taking whichever file sorts first), so the choice is data an operator edits in
+    the Catalog Editor, not a path in a script or a launch body. Two images naming the same tool is
+    a catalog that has not decided, and raises ``ValueError`` rather than picking one.
+    """
+    want = (tool_id or "").strip()
+    if not want:
+        return None
+    named = [img for img in get_catalog(cluster_id, repo).images if want in img.required_by]
+    if len(named) > 1:
+        names = ", ".join(img.filename for img in named)
+        raise ValueError(f"more than one catalog image is required by {want!r} ({names}); keep exactly one")
+    return named[0] if named else None
+
+
 def has_catalog(cluster_id: str, repo: Repo | None = None) -> bool:
     """Whether an edited catalog exists for this cluster (vs. falling back to the shipped/file one)."""
     repo = repo or get_repo()

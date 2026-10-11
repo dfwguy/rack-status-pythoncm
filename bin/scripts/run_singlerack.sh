@@ -96,7 +96,7 @@ do
  rack="${2:-}"
  [[ -z "$rack" ]] && rack=$(echo "$r" | sed -E 's/(p[0-9]+-r[0-9]+)-ct.*/\1/')
  hosts=($(scontrol show hostname $r))
- : "${NEMO_SQSH_SRC:?set NEMO_SQSH_SRC to the head-node path of the nemo .sqsh image to stage into the node image cache}"
+ : "${NEMO_SQSH_SRC:?no NeMo image: add this tool (validation-singlerack) to the Required by of its image in Artifact Distribution -> Catalog, or set NEMO_SQSH_SRC}"
  _wl=$(echo "${hosts[*]}" | tr ' ' ',')
  # Into the cluster's node image cache (NVIS_NODE_CONTAINER_DIR; lib/node_images.inc.sh), never a
  # baked-in /raid/data: NC's nodes have no /raid. A warm cache is reused as-is; the helper exports

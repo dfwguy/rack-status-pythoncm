@@ -985,7 +985,7 @@ def plan_digest(fields: Mapping[str, Any]) -> str:
 #: sizes and every other flag the prepare decided. Digesting it covers target drift without having
 #: to enumerate per-endpoint semantics, which is why this works uniformly where the preset needed a
 #: hand-picked field list.
-_LEGACY_DIGEST_KEYS = ("cmd", "target", "rk", "rack", "racks", "nodes", "log_dir")
+_LEGACY_DIGEST_KEYS = ("cmd", "target", "rk", "rack", "racks", "nodes", "log_dir", "image")
 
 
 def launch_digest(prep: Mapping[str, Any]) -> str:

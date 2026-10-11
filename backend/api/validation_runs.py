@@ -55,10 +55,12 @@ from pathlib import Path
 
 import host_exec
 import native_status
+import p2p_catalog
 import script_tree
 import validation_presets
 from activity_hydration import _record_validation_activity
 from audit.actions import action
+from catalog import context as catalog_context
 from cluster_metadata import read_cluster_dashboard_metadata
 from config_env import (
     _eget,
@@ -164,6 +166,9 @@ def _prepared(
     if err is not None:
         return None, err
     assert prep is not None
+    image_error = _apply_tool_image(tool_id, body, prep)
+    if image_error is not None:
+        return None, image_error
     gate = reviewed_launch_error(body, prep)
     if gate is not None:
         return None, gate
@@ -505,6 +510,27 @@ def api_run_validation_async():
     )
 
 
+def _placed_rack_nodes(rack_ids: list[str]) -> tuple[list[str], tuple[object, int] | None]:
+    """The real hosts of *rack_ids*, from the placement the dashboard shows -- or ``([], None)``
+    where the hostname encodes the rack and a launcher can expand rack ids by itself.
+
+    The multirack launchers expand a rack id by hostname pattern (``<rack>-ctNN`` or a ``<rack>-``
+    prefix), which names no host where the hostname carries no rack: on Nscale NC rack Q5 has no
+    ``Q5-`` node, so a NCCL launch failed with "matched 0 Slurm nodes" and a NeMo launch ran
+    ``Q2-ct[01-18]``. Outside ``direct`` mode the members come from the node inventory, which placed
+    every node by the cluster manager's word; a rack with no placed node is refused.
+    """
+    if native_status._hostname_encodes_rack():
+        return [], None
+    nodes: list[str] = []
+    for rack in rack_ids:
+        members = _rack_node_hostnames_from_inventory(rack)
+        if not members:
+            return [], (jsonify({"ok": False, "error": f"no inventory nodes placed in rack {rack}"}), 409)
+        nodes.extend(members)
+    return nodes, None
+
+
 def _prepare_run_nemo_xrack(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
     """Parse POST body for ``run-nemo-xrack.sh`` (comma-separated rack-ct[inner] specs)."""
     if os.environ.get("RACK_NEMO_XRACK_DISABLED", "").strip().lower() in ("1", "true", "yes"):
@@ -540,9 +566,20 @@ def _prepare_run_nemo_xrack(body: dict) -> tuple[dict | None, tuple[object, int]
     script = _nemo_xrack_script_path()
     if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"run-nemo-xrack script not found: {script}"}), 500)
-    arg = ",".join(specs)
-    cmd = ["bash", str(script), arg]
-    display_cmd = "./" + script.name + " " + shlex.quote(arg)
+    rack_ids = sorted(seen)
+    nodes, err = _placed_rack_nodes(rack_ids)
+    if err is not None:
+        return None, err
+    if nodes:
+        # Real hosts, with the rack ids after them only to name the log and count the racks.
+        arg = ",".join(nodes)
+        cmd = ["bash", str(script), "--nodelist", arg, *rack_ids]
+        display_cmd = "./" + script.name + " --nodelist " + shlex.quote(arg) + "".join(
+            " " + shlex.quote(r) for r in rack_ids)
+    else:
+        arg = ",".join(specs)
+        cmd = ["bash", str(script), arg]
+        display_cmd = "./" + script.name + " " + shlex.quote(arg)
     timeout = max(300, _job_env_int("RACK_NEMO_XRACK_TIMEOUT", 7200))
     return (
         {
@@ -551,7 +588,8 @@ def _prepare_run_nemo_xrack(body: dict) -> tuple[dict | None, tuple[object, int]
             "display_cmd": display_cmd,
             "timeout": timeout,
             "arg": arg,
-            "racks": sorted(seen),
+            "racks": rack_ids,
+            "nodes": nodes,
             "env_updates": _launch_env_from_body(body),
         },
         None,
@@ -1435,17 +1473,12 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
             if not row.get("eligible"):
                 return None, (jsonify({"ok": False, "error": f"rack {rack}: {row.get('reason') or 'not eligible'}"}), 409)
             exact_nodes.extend(str(node) for node in row.get("nodes", []) if str(node).strip())
-    elif not native_status._hostname_encodes_rack():
-        # The launchers expand rack ids by hostname pattern, which names no host where the
-        # hostname carries no rack (Nscale NC: rack Q5 has no "Q5-" node, so every multirack
-        # launch failed with "matched 0 Slurm nodes"). Resolve the members here, from the
-        # placement the dashboard shows, and hand the launcher the real hosts.
-        for rack in rack_ids:
-            members = _rack_node_hostnames_from_inventory(rack)
-            if not members:
-                return None, (jsonify({"ok": False, "error": f"no inventory nodes placed in rack {rack}"}), 409)
-            exact_nodes.extend(members)
-        label_racks = rack_ids
+    else:
+        exact_nodes, placed_err = _placed_rack_nodes(rack_ids)
+        if placed_err is not None:
+            return None, placed_err
+        if exact_nodes:
+            label_racks = rack_ids
 
     # Multi-rack NCCL now runs the DIRECT path (run_nccl_mpi.sh → nccl_allreduce.sbatch:
     # host nccl-tests + mpirun, NCCL over the IB rails). This replaces the llmb-run
@@ -1560,6 +1593,50 @@ _CATALOG_TOOL_BY_KIND = {
     "validation": "validation-singlerack",
 }
 
+#: The variable a tool's launcher reads its container image from. Code owns only this contract (the
+#: launcher's input); WHICH image is data: the catalog image whose ``required_by`` names the tool.
+_TOOL_IMAGE_ENV = {
+    "validation-singlerack": "NEMO_SQSH_SRC",   # run_singlerack.sh
+    "nemo-xrack": "NEMO_SQSH_SRC",              # run-nemo-xrack.sh
+}
+
+
+def _apply_tool_image(tool_id: str | None, body: dict, prep: dict) -> tuple[object, int] | None:
+    """Give *prep* the image its tool's launcher needs.
+
+    In order: an image the launch names itself (its ``env``), the catalog image whose
+    ``required_by`` lists the tool, then the legacy Settings value; only a catalog naming two
+    images for one tool is refused. Before this, Rack Status had no
+    NeMo image of its own -- the agents that launched passed one by hand, and a launch from the UI
+    died in the script on "set NEMO_SQSH_SRC". The resolved path rides in ``prep["image"]``, which
+    the launch digest covers, so a reviewed plan cannot run a different image.
+    """
+    key = _TOOL_IMAGE_ENV.get(tool_id or "")
+    if not key:
+        return None
+    env = prep.setdefault("env_updates", {})
+    named = (_custom_env_from_body(body).get(key) or "").strip()
+    if named:
+        prep["image"] = named
+        return None
+    _project, cluster, _platform = catalog_context.resolve()
+    try:
+        image = p2p_catalog.image_for_tool(cluster.id, tool_id) if cluster is not None else None
+    except ValueError as exc:
+        return jsonify({"ok": False, "error": f"image catalog: {exc}"}), 409
+    if image is not None:
+        path = f"{validation_presets.shared_container_root().rstrip('/')}/{image.filename}"
+        env[key] = path
+        prep["image"] = path
+        return None
+    legacy = (_eget(key) or "").strip()
+    if legacy:
+        prep["image"] = legacy
+    # Nothing known here is not a refusal: a site may set the variable where the launcher runs (the
+    # SSH user's environment, a site init script), which this process cannot see. The launcher
+    # stops with a message naming the catalog's Required by when it truly has no image.
+    return None
+
 
 @bp.route("/api/launch/prepare", methods=["POST"])
 @action("validation:prepare_launch")
@@ -1599,6 +1676,9 @@ def api_prepare_launch():
     if err is not None:
         return err[0], err[1]
     assert prep is not None
+    image_error = _apply_tool_image(tool_id, launch_body, prep)
+    if image_error is not None:
+        return image_error
     return jsonify({
         "ok": True,
         "kind": kind,
