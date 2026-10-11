@@ -68,7 +68,7 @@ _NATIVE_LOG_JSON = _REPO_ROOT / "var" / "cache" / "native_log_analysis.json"
 # Deliberately shared by BOTH the single-rack and multirack caches below: they are produced by the
 # same probe path, so a logic change invalidates both. Giving them separate counters would let one
 # keep serving verdicts from superseded parse logic.
-_NATIVE_LOG_CACHE_VERSION = 2
+_NATIVE_LOG_CACHE_VERSION = 3  # 3: NCCL busbw counts only completed, unfailed nccl-tests tests
 
 
 def _job_env_overrides_file() -> Path:

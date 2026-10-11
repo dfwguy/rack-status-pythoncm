@@ -211,6 +211,8 @@ def test_scan_record_is_shaped_like_parser_json(analytics_module, tmp_path):
     p.write_text(
         "# Collective test starting: all_reduce_perf_mpi\n"
         f"{hdr}\n{row}\n"
+        "# Out of bounds values : 0 OK\n"
+        "# Avg bus bandwidth    : 916.00\n"
         "# Collective test concluded: all_reduce_perf_mpi\n" + _steps(30),
         encoding="utf-8",
     )

@@ -118,7 +118,7 @@ def test_rows_without_a_marker_or_header_are_not_armed(tmp_path):
 
 def test_a_bare_table_header_arms_the_marker_less_launcher(tmp_path):
     """The standalone nccl-tests launcher prints no "starting:" line, only the header."""
-    lines = [HDR, _row(8, 0.0), _row(1 << 30, 812.0)]
+    lines = [HDR, _row(8, 0.0), _row(1 << 30, 812.0), "# Out of bounds values : 0 OK", "# Avg bus bandwidth    : 406.0"]
     r = logscan.scan(_write(tmp_path, lines))
     assert r["nccl"]["armed"] is True
     assert r["nccl"]["peak_busbw_gbps"]["ar"] == 812.0

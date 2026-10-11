@@ -62,7 +62,7 @@ import sys
 from collections.abc import Iterator
 from typing import Any
 
-SCAN_VERSION = 1
+SCAN_VERSION = 2  # 2: peaks count only completed, unfailed tests (see COMPLETION in nccl_parse.inc.sh)
 
 # ---------------------------------------------------------------------------------------------
 # Output bounds. These cap what we KEEP, never what we read, so memory is O(1) in file size.
@@ -106,7 +106,8 @@ _CHATTER = b"NCCL INFO"
 #: roughly linear in the number of branches — the full kind list below measured 74 s here versus
 #: 8 s for these, on the same 973 MB file.
 _METRIC = re.compile(
-    rb"Collective test|Avg bus bandwidth|Out of bounds|out-of-place|busbw"
+    rb"Collective test|Avg bus bandwidth|Out of bounds|out-of-place|busbw|Test NCCL failure"
+    rb"|Test CUDA failure|Test failure|Test timeout"
     rb"|MODEL_TFLOP|train_step_timing|iteration|# job=|max_steps="
     rb"|Traceback|OutOfMemory|CUDA out of memory|error:"
     rb"|--num_gpus|--gpus_per_node|-gb |SLURM_NNODES=|NODELIST:|seq_len"
@@ -116,6 +117,8 @@ _COLL_START = re.compile(rb"^#\s*Collective test starting:\s*([a-z_]+)_perf(?:_m
 _COLL_END = re.compile(rb"^#\s*Collective test concluded:\s*([a-z_]+)?")
 _AVG_BW = re.compile(rb"Avg bus bandwidth\s*:\s*([0-9.]+)")
 _OOB = re.compile(rb"Out of bounds values\s*:\s*(\S+)")
+#: nccl-tests' own failure lines. One inside a test fails that collective for the whole file.
+_TEST_FAIL = re.compile(rb"Test (?:NCCL|CUDA) failure|Test failure|Test timeout")
 _TESTS = re.compile(rb"\btests=(\d+)\b")
 _DATA_ROW = re.compile(rb"^\s*\d+\s")
 
@@ -299,6 +302,12 @@ def scan(path: str, *, inventory: bool = True) -> dict[str, Any]:
     block: _NcclBlock | None = None
     peak_size: dict[str, int] = {}
     peak_bw: dict[str, float] = {}
+    # COMPLETION (nccl_parse.inc.sh): a test's largest row is pending until nccl-tests prints its
+    # "# Avg bus bandwidth" line; a failure line inside a test fails that collective for the file.
+    t_code: str | None = None      # peak code of the open test ("ar"/"aa"/"ag"/other), None = none
+    t_size = -1
+    t_bw = 0.0
+    failed_codes: set[str] = set()
     started = concluded = 0
     expected_tests = 0
     oob: list[str] = []
@@ -359,16 +368,11 @@ def scan(path: str, *, inventory: bool = True) -> dict[str, Any]:
                                 block = None
                         if block is not None:
                             block.add(sz, bw)
-                        # Scalar peak, defined exactly as nccl_busbw_csv does it: a running
-                        # max-size per collective across the WHOLE file, ties going to the later
-                        # row. That is NOT the best block — an LLMB sweep runs all_reduce several
-                        # times (NVLS on/off, -G variants) and the scalar deliberately reports the
-                        # last configuration at the largest size, while series_by_collective below
-                        # reports the best. Taking the best here read ~3 GB/s high on nine logs.
-                        code = _SHORT.get(coll or "") if armed_marker else "ar"
-                        if code and sz >= peak_size.get(code, -1):
-                            peak_size[code] = sz
-                            peak_bw[code] = bw
+                        # The open test's largest row; it reaches the peak only when the test
+                        # completes (see the Avg bus bandwidth branch below).
+                        if t_code is not None and sz >= t_size:
+                            t_size = sz
+                            t_bw = bw
                         if (
                             coll == "all_reduce"
                             and not ar_first_done
@@ -389,6 +393,7 @@ def scan(path: str, *, inventory: bool = True) -> dict[str, Any]:
                 armed_marker = True
                 cur_coll = m.group(1).decode("ascii", "replace")
                 block = None
+                t_code, t_size = _SHORT.get(cur_coll), -1
                 continue
             if _COLL_END.match(raw):
                 concluded += 1
@@ -396,14 +401,33 @@ def scan(path: str, *, inventory: bool = True) -> dict[str, Any]:
                     ar_first_done = True
                 cur_coll = None
                 block = None
+                t_code = None
                 continue
             if b"out-of-place" in raw or (raw.startswith(b"#") and b"busbw" in raw):
                 armed_header = True
+                if not armed_marker:
+                    t_code, t_size = "ar", -1   # a marker-less log: the header opens the test
+            if _TEST_FAIL.search(raw):
+                fcode = _SHORT.get(cur_coll or "") if armed_marker else "ar"
+                if fcode:
+                    failed_codes.add(fcode)
+                t_code = None
+                continue
             m = _AVG_BW.search(raw)
             if m:
                 v = _f(m.group(1))
                 if v is not None and len(avg_bw) < MAX_OOB:
                     avg_bw.append(v)
+                # Scalar peak, defined exactly as nccl_busbw_csv does it: a running max-size per
+                # collective across the WHOLE file, ties going to the later test -- and only from
+                # tests that completed. That is NOT the best block: an LLMB sweep runs all_reduce
+                # several times (NVLS on/off, -G variants) and the scalar deliberately reports the
+                # last configuration at the largest size, while series_by_collective reports the
+                # best. Taking the best here read ~3 GB/s high on nine logs.
+                if t_code is not None and t_size >= 0 and t_size >= peak_size.get(t_code, -1):
+                    peak_size[t_code] = t_size
+                    peak_bw[t_code] = t_bw
+                t_code = None
                 continue
             m = _OOB.search(raw)
             if m:
@@ -472,7 +496,7 @@ def scan(path: str, *, inventory: bool = True) -> dict[str, Any]:
                 py_fatal = True
 
     # --- derive ---------------------------------------------------------------------------------
-    peaks = dict(peak_bw)
+    peaks = {c: bw for c, bw in peak_bw.items() if c not in failed_codes}
 
     # Per-collective series: the block with the best peak, i.e. the best achieved configuration
     # (an LLMB sweep runs each collective several times with different NVLS/-G settings).

@@ -37,25 +37,54 @@
 # The header is what keeps the marker-less standalone launcher working: it has no "starting:"
 # line, but it does print the header, so it stays armed while a NeMo log never arms at all.
 
-# Peak out-of-place busbw (GB/s) at the largest message size, per collective. Prints "ar,aa,ag".
+# COMPLETION (why an armed table row is still not enough)
+# ------------------------------------------------------
+# Arming proves the file holds an nccl-tests table; it does not prove a test finished. A run that
+# aborts mid-sweep leaves a header, a few rows and its NCCL_DEBUG=INFO noise -- Nscale NC multirack
+# job 138174 died with "Test NCCL failure ... remote process exited or there was a network error",
+# and a topology line of bare rank numbers (" 56 55 54 ...") was read as all_reduce busbw=49, so the
+# dashboard called the failed run done. nccl-tests ends every test it finishes with
+#     # Avg bus bandwidth    : 181.07
+# so a test's rows are held as pending and count only when that line arrives. A failure marker
+# (Test NCCL failure / Test CUDA failure / Test failure / Test timeout) inside a test fails that
+# collective for the whole file: a sweep that failed once has not passed, whatever another round
+# measured. A test begins at its "starting:" marker, or at the table header in a marker-less log.
+# Keep in step with nvis_logscan.py and universal_parser._extract_nccl, which apply the same rule.
+
+# Peak out-of-place busbw (GB/s) at the largest message size, per collective, from completed tests
+# only. Prints "ar,aa,ag"; a collective that failed anywhere in the file prints empty.
 nccl_busbw_csv() {
   awk '
-    /^#/ && /out-of-place/                                 { hdr=1 }
-    /^#/ && /size/ && /busbw/                              { hdr=1 }
-    /^# Collective test starting: all_reduce_perf(_mpi)?$/ { cur="ar"; seen=1; next }
-    /^# Collective test starting: alltoall_perf(_mpi)?$/   { cur="aa"; seen=1; next }
-    /^# Collective test starting: all_gather_perf(_mpi)?$/ { cur="ag"; seen=1; next }
-    /^# Collective test concluded:/                        { cur="";   next }
+    function begin_test(c) { tcol = c; tsz = -1; tbw = "" }
+    /^# Collective test starting: all_reduce_perf(_mpi)?$/ { cur="ar"; seen=1; begin_test("ar"); next }
+    /^# Collective test starting: alltoall_perf(_mpi)?$/   { cur="aa"; seen=1; begin_test("aa"); next }
+    /^# Collective test starting: all_gather_perf(_mpi)?$/ { cur="ag"; seen=1; begin_test("ag"); next }
+    /^# Collective test starting: /                        { cur="x";  seen=1; begin_test("x");  next }
+    /^# Collective test concluded:/                        { cur="";   tcol="";                   next }
+    /^#/ && (/out-of-place/ || (/size/ && /busbw/))        { hdr=1; if (!seen) begin_test("ar") }
+    /Test (NCCL|CUDA) failure|Test failure|Test timeout/   { f = seen ? cur : "ar"; if (f != "") failed[f] = 1; tcol = ""; next }
+    /Avg bus bandwidth/ {
+      if (tcol != "" && tsz >= 0) {
+        if      (tcol=="ar" && tsz>=ar_sz) { ar_sz=tsz; ar=tbw }
+        else if (tcol=="aa" && tsz>=aa_sz) { aa_sz=tsz; aa=tbw }
+        else if (tcol=="ag" && tsz>=ag_sz) { ag_sz=tsz; ag=tbw }
+      }
+      tcol = ""; next
+    }
     NF>=9 && $1 ~ /^[0-9]+$/ && $8 ~ /^[0-9]+(\.[0-9]+)?$/ {
       # No marker and no table header => this is not nccl-tests output. Skip, rather than
       # assuming all_reduce and charting whatever numbers happen to be on the line.
       if (!seen && !hdr) next
-      c = (seen ? cur : "ar"); sz = $1 + 0
-      if      (c=="ar" && sz>=ar_sz) { ar_sz=sz; ar=$8 }
-      else if (c=="aa" && sz>=aa_sz) { aa_sz=sz; aa=$8 }
-      else if (c=="ag" && sz>=ag_sz) { ag_sz=sz; ag=$8 }
+      if (tcol == "") next
+      sz = $1 + 0
+      if (sz >= tsz) { tsz = sz; tbw = $8 }
     }
-    END { print ar "," aa "," ag }
+    END {
+      if (failed["ar"]) ar = ""
+      if (failed["aa"]) aa = ""
+      if (failed["ag"]) ag = ""
+      print ar "," aa "," ag
+    }
   ' "$1"
 }
 
@@ -67,16 +96,22 @@ nccl_busbw_csv() {
 # i.e. a "starting:" marker, so they can never read a row out of an unmarked log.
 nccl_busbw_ext_csv() {
   awk '
-    /^# Collective test starting: reduce_scatter_perf(_mpi)?$/ { cur="rs"; next }
-    /^# Collective test starting: sendrecv_perf(_mpi)?$/       { cur="sr"; next }
+    /^# Collective test starting: reduce_scatter_perf(_mpi)?$/ { cur="rs"; tsz=-1; next }
+    /^# Collective test starting: sendrecv_perf(_mpi)?$/       { cur="sr"; tsz=-1; next }
     /^# Collective test starting: /                            { cur="";   next }
     /^# Collective test concluded:/                            { cur="";   next }
+    /Test (NCCL|CUDA) failure|Test failure|Test timeout/       { if (cur != "") failed[cur]=1; cur=""; next }
+    /Avg bus bandwidth/ {
+      # COMPLETION, as in nccl_busbw_csv: the test counts only once nccl-tests concludes it.
+      if      (cur=="rs" && tsz>=0 && tsz>=rs_sz) { rs_sz=tsz; rs=tbw }
+      else if (cur=="sr" && tsz>=0 && tsz>=sr_sz) { sr_sz=tsz; sr=tbw }
+      cur=""; next
+    }
     cur != "" && NF>=9 && $1 ~ /^[0-9]+$/ && $8 ~ /^[0-9]+(\.[0-9]+)?$/ {
       sz = $1 + 0
-      if      (cur=="rs" && sz>=rs_sz) { rs_sz=sz; rs=$8 }
-      else if (cur=="sr" && sz>=sr_sz) { sr_sz=sz; sr=$8 }
+      if (sz >= tsz) { tsz = sz; tbw = $8 }
     }
-    END { print rs "," sr }
+    END { if (failed["rs"]) rs = ""; if (failed["sr"]) sr = ""; print rs "," sr }
   ' "$1"
 }
 

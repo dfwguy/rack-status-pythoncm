@@ -213,3 +213,112 @@ def test_sniff_kind_classifies_real_sweeps_as_nccl(text):
 def test_sniff_kind_does_not_call_a_nemo_log_nccl():
     """universal_parser never matched bare 'NCCL INFO'; keep it that way."""
     assert up.sniff_kind("cmods-NEMO-1Rack-r01-18N-1.txt", NEMO_WITH_NCCL_DEBUG) == "nemo"
+
+
+# --- completion: an armed table is not a finished test ------------------------------------
+#
+# Nscale NC multirack job 138174 (2026-10-10): host mpirun, NCCL_DEBUG=INFO, aborted on
+# "Test NCCL failure ... remote process exited or there was a network error" after one row. A
+# topology line of bare rank numbers (" 56 55 54 ...") was read as all_reduce busbw=49, and the
+# Multirack table called the failed run done. A test's rows now count only once nccl-tests ends it
+# with "# Avg bus bandwidth"; a failure line in a test fails that collective for the file. All three
+# parsers must agree, so every case below is checked against each.
+
+sys.path.insert(0, str(REPO_ROOT / "bin" / "scripts"))
+import nvis_logscan as logscan  # noqa: E402
+
+_HDR = """\
+#                                                              out-of-place                       in-place
+#       size         count      type   redop    root     time   algbw   busbw  #wrong     time   algbw   busbw  #wrong
+"""
+_END = "# Out of bounds values : 0 OK\n# Avg bus bandwidth    : 300.00\n"
+
+
+def _row(size: int, bw: float) -> str:
+    return f"{size:>12} {size // 4:>13}     float     sum      -1   100.00   {bw:.2f}   {bw:.2f}       0   100.00   {bw:.2f}   {bw:.2f}       0\n"
+
+
+ABORTED_MULTIRACK = (
+    "nccl_allreduce: nodes=72 np=288 gpus/node=4 sizes=8..16G rounds=5\n"
+    "===== nccl_allreduce round 1/5 =====\n" + _HDR + _row(8, 0.0)
+    + "  56  55  54  53  52  51  50  49  48  47  46  45\n"
+    + "sys1-gso1-p-phy-gpu75-su19: Test NCCL failure all_reduce.cu:507 'remote process exited or there was a network error / '\n"
+    + "nccl_allreduce: round 1/5 FAILED rc=3 (stopping)\n"
+)
+SECOND_ROUND_FAILS = (
+    "===== nccl_allreduce round 1/2 =====\n" + _HDR + _row(8, 0.0) + _row(1 << 34, 798.53) + _END
+    + "===== nccl_allreduce round 2/2 =====\n" + _HDR + _row(8, 0.0)
+    + "sys1-gso1-p-phy-gpu24-su19: Test NCCL failure common.cu:528 'remote process exited or there was a network error / '\n"
+)
+TWO_CLEAN_ROUNDS = (_HDR + _row(8, 0.0) + _row(1 << 34, 798.53) + _END) * 2
+
+
+def _marked(coll: str, body: str, *, done: bool = True) -> str:
+    return (f"# Collective test starting: {coll}_perf_mpi\n" + _HDR + body
+            + (_END if done else "") + f"# Collective test concluded: {coll}_perf_mpi\n")
+
+
+# alltoall ran three times: twice clean, once the GPU was not ready (cmods-NCCL-1Rack-X2-1N-126266).
+LLMB_ONE_ALLTOALL_FAILED = (
+    _marked("all_reduce", _row(1 << 30, 480.0))
+    + _marked("alltoall", _row(1 << 30, 580.0))
+    + _marked("alltoall", "sys1-gso1-p-phy-gpu12-su32: Test CUDA failure util.cu:555 'system not yet initialized'\n", done=False)
+    + _marked("alltoall", _row(1 << 30, 581.0))
+    + _marked("reduce_scatter", _row(1 << 30, 300.0))
+    + _marked("sendrecv", "sys1-gso1-p-phy-gpu12-su32: Test CUDA failure util.cu:555 'system not yet initialized'\n", done=False)
+)
+# A failure line between two tests of a marked log belongs to no collective.
+FAILURE_BETWEEN_TESTS = (
+    _marked("all_reduce", _row(1 << 30, 480.0))
+    + "sys1-gso1-p-phy-gpu12-su32: Test failure common.cu:1187\n"
+    + _marked("alltoall", _row(1 << 30, 580.0))
+)
+
+
+def _three(tmp_path: Path, text: str) -> tuple[str, dict, dict]:
+    """(shell "ar,aa,ag", logscan peaks, universal_parser peaks) for one log text."""
+    log = _write(tmp_path, "nccl-mpi_U20+U21+U22+U23_138174.out", text)
+    shell = _sh("nccl_busbw_csv", log).strip()
+    scan = logscan.scan(str(log), inventory=False)["nccl"]["peak_busbw_gbps"]
+    bag = up._MetricBag()
+    up._extract_nccl(text, bag)
+    py = {m["labels"]["collective"]: m["value"] for m in bag.as_list() if m["name"] == "nccl_busbw_peak"}
+    return shell, scan, py
+
+
+def test_an_aborted_run_reports_no_bandwidth(tmp_path):
+    shell, scan, py = _three(tmp_path, ABORTED_MULTIRACK)
+    assert shell == ",,"
+    assert scan == {}
+    assert py == {}
+
+
+def test_a_later_round_that_fails_fails_the_collective(tmp_path):
+    shell, scan, py = _three(tmp_path, SECOND_ROUND_FAILS)
+    assert shell == ",,"
+    assert "ar" not in scan
+    assert "all_reduce" not in py
+
+
+def test_clean_rounds_still_report_their_peak(tmp_path):
+    shell, scan, py = _three(tmp_path, TWO_CLEAN_ROUNDS)
+    assert shell == "798.53,,"
+    assert scan == {"ar": 798.53}
+    assert py == {"all_reduce": 798.53}
+
+
+def test_one_failed_iteration_fails_only_its_collective(tmp_path):
+    shell, scan, py = _three(tmp_path, LLMB_ONE_ALLTOALL_FAILED)
+    assert shell == "480.00,,"
+    assert scan.get("ar") == 480.0 and "aa" not in scan
+    assert scan.get("rs") == 300.0 and "sr" not in scan
+    assert py.get("all_reduce") == 480.0 and "alltoall" not in py
+    log = _write(tmp_path, "x.txt", LLMB_ONE_ALLTOALL_FAILED)
+    assert _sh("nccl_busbw_ext_csv", log).strip() == "300.00,"
+
+
+def test_a_failure_between_tests_fails_neither_neighbour(tmp_path):
+    shell, scan, py = _three(tmp_path, FAILURE_BETWEEN_TESTS)
+    assert shell == "480.00,580.00,"
+    assert scan == {"ar": 480.0, "aa": 580.0}
+    assert py == {"all_reduce": 480.0, "alltoall": 580.0}

@@ -878,6 +878,8 @@ _NCCL_LLMB_EXPECTED_RE = re.compile(r"^#\s*job=\S+.*\btests=(\d+)\b", re.MULTILI
 #   #       size   count   type   redop   root   time   algbw   busbw #wrong   …
 _NCCL_TABLE_HDR_RE = re.compile(r"^#.*(?:out-of-place|size.*busbw)")
 _NCCL_AVG_RE = re.compile(r"^#\s*Avg bus bandwidth\s*:\s*([\d.]+)", re.MULTILINE)
+#: nccl-tests' own failure lines; one inside a test fails that collective (COMPLETION, below).
+_NCCL_TEST_FAIL_RE = re.compile(r"Test (?:NCCL|CUDA) failure|Test failure|Test timeout")
 
 
 def _extract_nccl(text: str, bag: _MetricBag) -> dict[str, Any]:
@@ -893,26 +895,51 @@ def _extract_nccl(text: str, bag: _MetricBag) -> dict[str, Any]:
     as a real result. The header is what keeps the marker-less standalone nccl-tests launcher
     working: it prints no ``starting:`` line but does print the header. Mirrors the awk's
     ``hdr`` gate in nccl_parse.inc.sh — keep the two in step.
+
+    COMPLETION: arming proves a table, not a finished test. A test's largest row counts only once
+    nccl-tests ends it with ``# Avg bus bandwidth``, and a failure line inside a test (``Test NCCL
+    failure``, ``Test CUDA failure``, ``Test failure``, ``Test timeout``) fails that collective for
+    the whole file -- Nscale NC multirack job 138174 aborted on a network error and still charted
+    all_reduce at 49 GB/s, read from a line of rank numbers. Same rule as nccl_parse.inc.sh.
     """
     cur = ""
     seen_marker = False
     seen_header = False
     peak: dict[str, tuple[int, float]] = {}
+    test: str | None = None          # collective of the open test; None = no test open
+    test_row: tuple[int, float] | None = None
+    failed: set[str] = set()
     for raw in text.splitlines():
         line = raw.rstrip()
         if not line:
             continue
+        if _NCCL_TEST_FAIL_RE.search(line):
+            fc = cur if seen_marker else "all_reduce"
+            if fc:
+                failed.add(fc)
+            test = None
+            continue
         if line.lstrip().startswith("#"):
             if _NCCL_TABLE_HDR_RE.search(line):
                 seen_header = True
+                if not seen_marker:
+                    test, test_row = "all_reduce", None
             m = _NCCL_START_RE.match(line.lstrip())
             if m:
                 cur = _NCCL_COLL_MAP.get(m.group(1).replace("_mpi", ""), m.group(1))
                 seen_marker = True
+                test, test_row = cur, None
                 continue
             if "Collective test concluded" in line:
                 cur = ""
+                test = None
                 continue
+            if "Avg bus bandwidth" in line:
+                if test and test_row is not None:
+                    prev = peak.get(test)
+                    if prev is None or test_row[0] >= prev[0]:
+                        peak[test] = test_row
+                test = None
             continue
         if not (seen_marker or seen_header):
             continue
@@ -926,13 +953,13 @@ def _extract_nccl(text: str, bag: _MetricBag) -> dict[str, Any]:
             busbw = float(f[7])
         except ValueError:
             continue
-        coll = cur if seen_marker else "all_reduce"
-        if not coll:
+        if not test:
             continue
-        prev = peak.get(coll)
-        if prev is None or size >= prev[0]:
-            peak[coll] = (size, busbw)
+        if test_row is None or size >= test_row[0]:
+            test_row = (size, busbw)
 
+    for coll in failed:
+        peak.pop(coll, None)
     for coll, (size, bw) in peak.items():
         bag.add("nccl_busbw_peak", bw, "GB/s", {"collective": coll, "size_bytes": size})
 
