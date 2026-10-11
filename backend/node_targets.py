@@ -131,6 +131,36 @@ def launch_scope_for_target(target: str) -> tuple[str, list[str]]:
     return "node", hosts
 
 
+def nccl_env_scope(rack_count: int, node_count: int) -> str:
+    """Which of a cluster's ``nccl_env`` lists (``models.NCCL_ENV_SCOPES``) a launch receives.
+
+    The span NCCL actually runs over, which is not the evidence scope above: a launch on 16 of a
+    rack's 18 nodes is node *evidence* (``launch_scope_for_target``), but NCCL still runs it inside
+    one rack's NVLink domain, so it takes the rack list. More than one rack is ``multirack`` -- the
+    scale-out fabric carries traffic; exactly one node is ``node``; anything else is ``rack``. A caller
+    that knows nodes but not their racks passes ``rack_count=0`` and gets ``rack`` for several nodes.
+    """
+    if rack_count > 1:
+        return "multirack"
+    if node_count == 1:
+        return "node"
+    return "rack"
+
+
+def nccl_env_scope_for_target(target: str) -> str:
+    """``nccl_env_scope`` for a single-rack launch target (a hostlist, or a rack template).
+
+    A target that does not expand to plain hostnames is a template the site resolves later, which
+    is always a whole rack.
+    """
+    from universal_parser import expand_nodelist
+
+    hosts = [h for h in expand_nodelist((target or "").strip()) if h]
+    if not hosts or any("[" in h or not is_valid_node_hostname(h) for h in hosts):
+        return "rack"
+    return nccl_env_scope(1, len(hosts))
+
+
 def validation_target_for_rack(rack: str, override: str | None) -> str:
     """Build the node target for run_singlerack.sh / sysinfo / pdsh.
 

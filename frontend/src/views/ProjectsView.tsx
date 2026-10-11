@@ -9,7 +9,7 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import { useCallback, useEffect, useState, lazy, Suspense } from "react";
+import { useCallback, useEffect, useRef, useState, lazy, Suspense } from "react";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import { Plus, Pencil, Trash2, CheckCircle2, Server, FolderKanban, Wand2, FileCode2, UploadCloud } from "lucide-react";
@@ -38,9 +38,10 @@ import {
   saveProject,
 } from "../services/catalogService";
 import { useActiveCluster } from "../context/ActiveClusterContext";
-import type { CatalogVocab, Cluster, ClusterFabric, Platform, Project } from "../types/catalog";
+import type { CatalogVocab, Cluster, ClusterFabric, ClusterNcclEnv, NcclEnvScope, Platform, Project } from "../types/catalog";
 import { intOr } from "../lib/catalogForm";
 import { bootstrapProjectScripts, deployScripts } from "../services/setupService";
+import { NcclEnvField } from "../components/NcclEnvField";
 
 // Lazy AND conditionally rendered: the wizard is a whole second form, and this screen is on the
 // initial route. Loading it for everyone to serve the rare "set up another cluster" click is
@@ -54,6 +55,18 @@ function emptyFabric(): ClusterFabric {
   return { scaleout: "", addr_family: "", compute_hca: "" };
 }
 
+/** No variables at any span: every launch runs with the scripts' own defaults. */
+function emptyNcclEnv(): ClusterNcclEnv {
+  return { node: {}, rack: {}, multirack: {} };
+}
+
+/** The three spans, in the order a cluster is brought up, with which launches each one reaches. */
+const NCCL_ENV_SPANS: ReadonlyArray<[NcclEnvScope, string, string]> = [
+  ["node", "Single node", "Launches on one node."],
+  ["rack", "Single rack", "Launches inside one rack, including part of a rack."],
+  ["multirack", "Multi-rack", "Launches across racks, over the scale-out fabric."],
+];
+
 function emptyCluster(): Cluster {
   return {
     id: "",
@@ -66,6 +79,7 @@ function emptyCluster(): Cluster {
     naming: { rack_id_template: "", ct_id_template: "", nvsw_id_template: "", ct_joiner: "-ct", slurm_hostlist: "" },
     geometry: { pods: 1, rows_per_pod: 0, racks_per_row: 0, trays_per_rack: 0 },
     fabric: emptyFabric(),
+    nccl_env: emptyNcclEnv(),
     connection: {
       exec_mode: "",
       ssh_host: "",
@@ -102,7 +116,13 @@ export function ProjectsView() {
   const [error, setError] = useState<string | null>(null);
 
   const [projectDraft, setProjectDraft] = useState<Partial<Project> | null>(null);
-  const [clusterDraft, setClusterDraft] = useState<{ projectId: string; cluster: Cluster; isNew: boolean } | null>(null);
+  // ``session`` numbers each opening of the editor. Fields that hold their own text (the NCCL
+  // environment lists) are keyed by it, so opening another cluster -- or this one again after a
+  // cancel -- starts from the stored record rather than from what the last edit left typed.
+  const [clusterDraft, setClusterDraft] = useState<
+    { projectId: string; cluster: Cluster; isNew: boolean; session: number } | null
+  >(null);
+  const editSession = useRef(0);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -203,6 +223,10 @@ export function ProjectsView() {
   const setFabric = (patch: Partial<ClusterFabric>) =>
     setClusterDraft((d) =>
       d ? { ...d, cluster: { ...d.cluster, fabric: { ...(d.cluster.fabric ?? emptyFabric()), ...patch } } } : d,
+    );
+  const setNcclEnv = (scope: NcclEnvScope, env: Record<string, string>) =>
+    setClusterDraft((d) =>
+      d ? { ...d, cluster: { ...d.cluster, nccl_env: { ...(d.cluster.nccl_env ?? emptyNcclEnv()), [scope]: env } } } : d,
     );
   // An SU id must be a slug (backend valid_id: ^[a-z0-9][a-z0-9._-]*$); derive it from the
   // label so the operator only types a human name and the racks.
@@ -340,7 +364,7 @@ export function ProjectsView() {
                   <Button variant="outlined" size="small" startIcon={<Pencil size={14} />} onClick={() => setProjectDraft({ id: p.id, name: p.name, customer: p.customer, description: p.description })}>
                     Edit
                   </Button>
-                  <Button variant="outlined" size="small" startIcon={<Plus size={14} />} onClick={() => setClusterDraft({ projectId: p.id, cluster: emptyCluster(), isNew: true })}>
+                  <Button variant="outlined" size="small" startIcon={<Plus size={14} />} onClick={() => setClusterDraft({ projectId: p.id, cluster: emptyCluster(), isNew: true, session: ++editSession.current })}>
                     Cluster
                   </Button>
                   <Button variant="outlined" size="small" startIcon={<FileCode2 size={14} />} onClick={() => void onUpdateScripts(p)}>
@@ -378,7 +402,7 @@ export function ProjectsView() {
                               Set active
                             </Button>
                           )}
-                          <Button variant="outlined" size="small" startIcon={<Pencil size={14} />} onClick={() => setClusterDraft({ projectId: p.id, cluster: { ...c, fabric: c.fabric ?? emptyFabric() }, isNew: false })}>
+                          <Button variant="outlined" size="small" startIcon={<Pencil size={14} />} onClick={() => setClusterDraft({ projectId: p.id, cluster: { ...c, fabric: c.fabric ?? emptyFabric() }, isNew: false, session: ++editSession.current })}>
                             Edit
                           </Button>
                           <Button variant="outlined" color="error" size="small" startIcon={<Trash2 size={14} />} onClick={() => void onDeleteCluster(p, c)}>
@@ -697,6 +721,27 @@ export function ProjectsView() {
               />
             </FormField>
           </Box>
+
+          <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>NCCL environment</Text>
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginTop: -4 }}>
+            Variables added to every NCCL launch on this cluster (NCCL tests, NeMo, LLMB) by the span it runs over,
+            so a site&apos;s fabric tuning lives here instead of in the shared scripts. Each launch gets only its
+            span&apos;s list, and variables set in a launch&apos;s own options win. One KEY=VALUE per line.
+          </Text>
+          {clusterDraft && (
+            <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 2 }}>
+              {NCCL_ENV_SPANS.map(([scope, label, help]) => (
+                <NcclEnvField
+                  key={`${clusterDraft.session}-${scope}`}
+                  name={`cl-nccl-${scope}`}
+                  label={label}
+                  help={help}
+                  value={clusterDraft.cluster.nccl_env?.[scope] ?? {}}
+                  onChange={(env) => setNcclEnv(scope, env)}
+                />
+              ))}
+            </Box>
+          )}
 
           <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>Site geometry</Text>
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginTop: -4 }}>

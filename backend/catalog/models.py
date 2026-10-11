@@ -963,6 +963,77 @@ class ClusterFabric:
         return problems
 
 
+#: Bounds on operator-supplied launch environment. One definition for both places an operator can
+#: hand a job variables -- the launch dialog's "Extra environment variables" (validated per request
+#: in ``api.validation_runs``) and a cluster's ``nccl_env`` (validated when the record is saved) --
+#: because the two end in the same job environment, so a name or value one accepts must not be one
+#: the other refuses. Names are POSIX-ish; values are single-line (a newline would end the variable
+#: inside the generated job script) and capped, as is the count.
+LAUNCH_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+LAUNCH_ENV_MAX_VARS = 32
+LAUNCH_ENV_MAX_VALUE_LEN = 2048
+
+#: The span of a launch, as the cluster's NCCL environment is keyed: one node, one rack's NVLink
+#: domain, or several racks over the scale-out fabric. NCCL behaves differently in each -- inside a
+#: rack nothing touches the RDMA network, across racks everything does -- so a site tunes them apart.
+NCCL_ENV_SCOPES = ("node", "rack", "multirack")
+
+
+@dataclass
+class ClusterNcclEnv:
+    """Environment variables this cluster adds to every NCCL-using launch, per launch span.
+
+    The site's tuning for its own fabric -- a network plugin, a channel count, an HCA pin -- stated
+    once on the record instead of edited into the shared launchers, which every other cluster also
+    runs. A launch receives only its own span's list (``NCCL_ENV_SCOPES``; the lists do not inherit
+    from one another), layered under the launch dialog's variables, which win on a clash. Names are
+    also advertised in ``NVIS_EXTRA_ENV_KEYS`` so multi-node launchers forward them to every rank.
+    """
+
+    node: dict[str, str] = field(default_factory=dict)
+    rack: dict[str, str] = field(default_factory=dict)
+    multirack: dict[str, str] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: Any) -> ClusterNcclEnv:
+        d = _as_dict(d)
+
+        def _env(key: str) -> dict[str, str]:
+            raw = d.get(key)
+            if not isinstance(raw, dict):
+                return {}
+            # A number is a value an operator means (``NCCL_MIN_NCHANNELS: 16``), not a blank.
+            return {
+                str(k).strip(): str(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else _as_str(v)
+                for k, v in raw.items()
+            }
+
+        return cls(**{scope: _env(scope) for scope in NCCL_ENV_SCOPES})
+
+    def for_scope(self, scope: str) -> dict[str, str]:
+        """The variables for one launch span; empty for a span this record does not know."""
+        return dict(getattr(self, scope)) if scope in NCCL_ENV_SCOPES else {}
+
+    def validate(self) -> list[str]:
+        problems: list[str] = []
+        for scope in NCCL_ENV_SCOPES:
+            env = self.for_scope(scope)
+            if len(env) > LAUNCH_ENV_MAX_VARS:
+                problems.append(
+                    f"nccl_env.{scope} has {len(env)} variables; at most {LAUNCH_ENV_MAX_VARS} are allowed"
+                )
+            for key, value in env.items():
+                if not LAUNCH_ENV_KEY_RE.match(key):
+                    problems.append(f"nccl_env.{scope}: {key!r} is not an environment variable name")
+                elif "\n" in value or "\r" in value:
+                    problems.append(f"nccl_env.{scope}.{key} must be a single line")
+                elif len(value) > LAUNCH_ENV_MAX_VALUE_LEN:
+                    problems.append(
+                        f"nccl_env.{scope}.{key} is longer than {LAUNCH_ENV_MAX_VALUE_LEN} characters"
+                    )
+        return problems
+
+
 @dataclass
 class Endpoint:
     """One place the app can execute: a host, or a hop *through* another endpoint.
@@ -1198,6 +1269,8 @@ class Cluster:
     geometry: ClusterGeometry = field(default_factory=ClusterGeometry)
     # How this site's compute fabric is wired and addressed, where that differs from the platform.
     fabric: ClusterFabric = field(default_factory=ClusterFabric)
+    # Variables this site adds to NCCL-using launches, per launch span (node / rack / multirack).
+    nccl_env: ClusterNcclEnv = field(default_factory=ClusterNcclEnv)
     connection: ClusterConnection = field(default_factory=ClusterConnection)
     # Empty means "derive from the platform's racks_per_su"; see scalable_units_for().
     scalable_units: list[ClusterScalableUnit] = field(default_factory=list)
@@ -1228,6 +1301,7 @@ class Cluster:
             naming=ClusterNaming.from_dict(d.get("naming")),
             geometry=ClusterGeometry.from_dict(d.get("geometry")),
             fabric=ClusterFabric.from_dict(d.get("fabric")),
+            nccl_env=ClusterNcclEnv.from_dict(d.get("nccl_env")),
             connection=ClusterConnection.from_dict(d.get("connection")),
             scalable_units=(
                 [ClusterScalableUnit.from_dict(s) for s in sus_raw]
@@ -1285,6 +1359,7 @@ class Cluster:
             )
         problems.extend(self._validate_scalable_units())
         problems.extend(self.fabric.validate())
+        problems.extend(self.nccl_env.validate())
         problems.extend(self._validate_campaigns())
         return problems
 

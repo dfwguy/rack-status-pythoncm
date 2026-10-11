@@ -218,3 +218,78 @@ describe("compute fabric", () => {
     expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "", addr_family: "", compute_hca: "" });
   });
 });
+
+describe("NCCL environment", () => {
+  const savedProject = () => vi.mocked(catalogService.saveProject).mock.calls.at(-1)?.[0] as Project;
+  const span = (label: string) => screen.getByRole("textbox", { name: label }) as HTMLTextAreaElement;
+
+  it("saves each span's KEY=VALUE lines as its own list, ignoring lines that are not variables", async () => {
+    await openNewCluster();
+    fireEvent.change(screen.getByPlaceholderText("e.g. Pod A"), { target: { value: "NC" } });
+    fireEvent.change(span("Multi-rack"), {
+      target: { value: "NCCL_NET_PLUGIN=/opt/spcx.so\n# a note\nNCCL_IB_DYNAMIC_FLOW=1\nnot a variable" },
+    });
+    fireEvent.change(span("Single rack"), { target: { value: "NCCL_MIN_NCHANNELS=16" } });
+    expect(screen.getByText(/2 variables\. 1 line ignored/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
+    expect(savedProject().clusters[0].nccl_env).toEqual({
+      node: {},
+      rack: { NCCL_MIN_NCHANNELS: "16" },
+      multirack: { NCCL_NET_PLUGIN: "/opt/spcx.so", NCCL_IB_DYNAMIC_FLOW: "1" },
+    });
+  });
+
+  it("keeps a half-typed line in the box while it is not yet a variable", async () => {
+    await openNewCluster();
+    fireEvent.change(span("Single node"), { target: { value: "NCCL_" } });
+    expect(span("Single node").value).toBe("NCCL_");
+  });
+
+  it("shows a stored list, and a cluster stored without one saves the span it was given", async () => {
+    const stored = {
+      id: "nc",
+      name: "NC",
+      platform_id: "",
+      cluster_manager: "bcm",
+      scheduler: "slurm",
+      rack_mapping_mode: "translate",
+      site_prefix: "",
+      naming: { rack_id_template: "", ct_id_template: "", nvsw_id_template: "", ct_joiner: "-ct", slurm_hostlist: "" },
+      geometry: { pods: 1, rows_per_pod: 0, racks_per_row: 0, trays_per_rack: 0 },
+      fabric: { scaleout: "roce", addr_family: "", compute_hca: "" },
+      // No nccl_env: a backend from before the field omits it.
+      connection: {
+        exec_mode: "", ssh_host: "", ssh_user: "", ssh_key: "", remote_base_path: "",
+        log_dir: "", workspace_dir: "", shared_container_dir: "", node_container_dir: "",
+      },
+      scalable_units: [],
+      campaigns: [],
+      evidence: { snapshot_path: "", healthcheck_root: "" },
+      p2p_enabled: false,
+    };
+    const withEnv = { ...stored, id: "nc2", name: "NC2", nccl_env: { node: {}, rack: {}, multirack: { NCCL_IB_DYNAMIC_FLOW: "1" } } };
+    const project = { ...PROJECT, clusters: [stored, withEnv] } as unknown as Project;
+    vi.mocked(catalogService.getVocab).mockResolvedValue(VOCAB);
+    vi.mocked(catalogService.listPlatforms).mockResolvedValue([]);
+    render(
+      <ActiveClusterContext.Provider value={{ ...clusterStub(), projects: [project] }}>
+        <ProjectsView />
+      </ActiveClusterContext.Provider>,
+    );
+    const edits = await screen.findAllByRole("button", { name: /^Edit$/ });
+    // Project Edit renders first, then one per cluster in order.
+    fireEvent.click(edits[edits.length - 1]);
+    await waitFor(() => expect(screen.getByText("NCCL environment")).toBeTruthy());
+    expect(span("Multi-rack").value).toBe("NCCL_IB_DYNAMIC_FLOW=1");
+    fireEvent.click(screen.getByRole("button", { name: /^Cancel$/ }));
+
+    fireEvent.click((await screen.findAllByRole("button", { name: /^Edit$/ }))[1]);
+    await waitFor(() => expect(screen.getByText("NCCL environment")).toBeTruthy());
+    expect(span("Multi-rack").value).toBe("");
+    fireEvent.change(span("Multi-rack"), { target: { value: "NCCL_IB_DYNAMIC_FLOW=1" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
+    expect(savedProject().clusters[0].nccl_env).toEqual({ node: {}, rack: {}, multirack: { NCCL_IB_DYNAMIC_FLOW: "1" } });
+  });
+});

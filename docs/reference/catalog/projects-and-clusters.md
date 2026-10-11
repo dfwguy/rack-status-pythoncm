@@ -38,6 +38,7 @@ every login, and what keeps it away from a deployment that upgrades.
 | `naming` | object | The three templates — see [Geometry and hostnames](../../explanation/geometry-and-hostnames.md). |
 | `geometry` | object | `pods`, `rows_per_pod`, `racks_per_row`, `trays_per_rack`. |
 | `fabric` | object | How this site's compute fabric is wired and addressed, where it differs from the platform: `scaleout`, `addr_family`, `compute_hca`. All blank = detect on each node; see below. |
+| `nccl_env` | object | Variables this cluster adds to every NCCL-using launch, one list per span: `node`, `rack`, `multirack`. All empty = the scripts' defaults; see below. |
 | `scalable_units` | list | This cluster's SU-to-rack mapping. Empty derives it from the platform's `fabric.racks_per_su`; see below. |
 | `connection` | object | How the app reaches the cluster, below. |
 
@@ -226,6 +227,34 @@ prefix (`roce_vf_r`, the same string on every node) and sets `NCCL_IB_ADDR_FAMIL
 InfiniBand is unchanged: IB GIDs sit on `fe80::/64` by design, so IB rails are still chosen by rate
 and left to per-rank auto-detect. All three values are projected per cluster in the high overlay, so
 `scaleout` beats the platform's default, and they forward over SSH by their `NVIS_` prefix.
+
+### nccl_env
+
+Variables a site adds to every launch that runs NCCL — the NCCL tests (node Stage 1, rack Stage 1,
+cross-rack), NeMo (single-rack and cross-rack) and LLMB — chosen by the span the launch covers. It
+is where a cluster's own fabric tuning goes, instead of an edit to the shared launchers that every
+other cluster also runs. Shown as **NCCL environment** in the cluster form, one `KEY=VALUE` per line.
+
+| List | A launch receives it when it covers | Example |
+|---|---|---|
+| `node` | exactly one node | `NCCL_DEBUG=WARN` |
+| `rack` | one rack's NVLink domain, including part of a rack | `NCCL_MIN_NCHANNELS=16` |
+| `multirack` | more than one rack, over the scale-out fabric | `NCCL_NET_PLUGIN=<hpcx>/nccl_spectrum-x_plugin/lib/libnccl-net-spcx.so` |
+
+A launch gets **only its own span's list**; the lists do not inherit from one another, so a variable
+every span needs is written in each. A partial rack counts as `rack`, not `node`: it is recorded as
+node evidence, but NCCL still runs it inside one NVLink domain.
+
+Precedence, lowest first: the cluster's list, then what the operator sets for that one launch (the
+NCCL debug level, the step count, the dialog's **Extra environment variables**). Every name from
+either source is listed in `NVIS_EXTRA_ENV_KEYS`, which multi-node launchers use to forward the
+variables to every rank, not only those on the `mpirun` host.
+
+The same bounds apply as in the launch dialog, because both end in the same job environment: names
+match `[A-Za-z_][A-Za-z0-9_]*`, values are a single line of at most 2048 characters, and a list holds
+at most 32 variables. A record that breaks them is refused when saved, with the reason. The
+validated presets (`/api/validation-presets`) do not take these variables: their recipes are
+code-owned and refuse operator environment by design.
 
 ## Connection
 

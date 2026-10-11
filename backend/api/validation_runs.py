@@ -25,8 +25,9 @@ site's absolute paths to every other site, and adding a test needs a deploy. New
 catalog documents and be launched through the preset routes -- do not add another run-* endpoint.
 
 Operator-supplied environment is the sharp edge. ``_custom_env_from_body`` and ``_launch_env_from_body``
-bound what reaches an sbatch: ``_ENV_KEY_RE`` for the names, ``_ENV_MAX_VARS`` and
-``_ENV_MAX_VALUE_LEN`` for the size, and ``_NEMO_MAX_STEPS_LIMIT`` / ``_NCCL_DEBUG_LEVELS`` for the two
+bound what reaches an sbatch: ``LAUNCH_ENV_KEY_RE`` for the names, ``LAUNCH_ENV_MAX_VARS`` and
+``LAUNCH_ENV_MAX_VALUE_LEN`` for the size (``catalog.models``, shared with a cluster's ``nccl_env``),
+and ``_NEMO_MAX_STEPS_LIMIT`` / ``_NCCL_DEBUG_LEVELS`` for the two
 knobs where a plausible-looking value is expensive rather than invalid -- a step count that never
 finishes holds a rack, and NCCL_DEBUG=TRACE on 90 nodes writes hundreds of MB of logs that the parser
 then has to read.
@@ -61,6 +62,7 @@ import validation_presets
 from activity_hydration import _record_validation_activity
 from audit.actions import action
 from catalog import context as catalog_context
+from catalog.models import LAUNCH_ENV_KEY_RE, LAUNCH_ENV_MAX_VALUE_LEN, LAUNCH_ENV_MAX_VARS
 from cluster_metadata import read_cluster_dashboard_metadata
 from config_env import (
     _eget,
@@ -87,6 +89,8 @@ from node_targets import (
     _scontrol_hostnames_preserving_case,
     _validation_ct_inner,
     launch_scope_for_target,
+    nccl_env_scope,
+    nccl_env_scope_for_target,
     validation_target_for_rack,
 )
 from paths import (
@@ -220,15 +224,6 @@ def _normalize_llama_nodes_spec(raw: object) -> str:
 _NCCL_DEBUG_LEVELS = ("VERSION", "WARN", "INFO", "TRACE")
 
 
-_ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-
-
-_ENV_MAX_VARS = 32
-
-
-_ENV_MAX_VALUE_LEN = 2048
-
-
 _NEMO_MAX_STEPS_LIMIT = 1_000_000
 
 
@@ -244,19 +239,40 @@ def _custom_env_from_body(body: dict) -> dict[str, str]:
     out: dict[str, str] = {}
     for k, v in extra.items():
         key = str(k).strip()
-        if not _ENV_KEY_RE.match(key):
+        if not LAUNCH_ENV_KEY_RE.match(key):
             continue
         val = str(v)
-        if "\n" in val or "\r" in val or len(val) > _ENV_MAX_VALUE_LEN:
+        if "\n" in val or "\r" in val or len(val) > LAUNCH_ENV_MAX_VALUE_LEN:
             continue
         out[key] = val
-        if len(out) >= _ENV_MAX_VARS:
+        if len(out) >= LAUNCH_ENV_MAX_VARS:
             break
     return out
 
 
-def _launch_env_from_body(body: dict) -> dict[str, str]:
-    """Per-launch env knobs parsed from the POST body: NCCL debug level + custom env vars.
+def _cluster_nccl_env(scope: str) -> dict[str, str]:
+    """The active cluster's ``nccl_env`` list for one launch span (``node_targets.nccl_env_scope``).
+
+    Read at launch, not projected into the process environment like the fabric fields, because
+    which list applies depends on the launch, not on the cluster. A catalog that cannot be read
+    yields no variables, never a refused launch -- the same stance as the config overlays.
+    """
+    try:
+        _project, cluster, _platform = catalog_context.resolve()
+    except Exception:  # never let a catalog problem break a launch
+        _logger.warning("cluster nccl_env unavailable; launching without it", exc_info=True)
+        return {}
+    return cluster.nccl_env.for_scope(scope) if cluster is not None else {}
+
+
+def _launch_env_from_body(body: dict, *, scope: str) -> dict[str, str]:
+    """Per-launch env: the cluster's NCCL variables for ``scope``, then the dialog's knobs on top.
+
+    ``scope`` is the launch's span (``node`` / ``rack`` / ``multirack``, from
+    ``node_targets.nccl_env_scope``) and selects which of the cluster's ``nccl_env`` lists applies.
+    Those are the site's standing tuning and the lowest layer here: everything the operator chose
+    for this one launch -- the NCCL debug level, the step count, the extra variables -- overrides them.
+    Required, not defaulted, so a new launch path cannot forget the cluster's settings silently.
 
     ``nccl_debug`` accepts VERSION/WARN/INFO/TRACE (case-insensitive). ``off``/``default``/
     empty/absent means "leave the script default" (no override). We set BOTH
@@ -271,7 +287,8 @@ def _launch_env_from_body(body: dict) -> dict[str, str]:
     cluster over SSH (the forward allowlist is bypassed for explicit ``env_extra`` keys)
     and are forwarded into the container by each launcher's ``--export=ALL``.
     """
-    out: dict[str, str] = {}
+    cluster_env = _cluster_nccl_env(scope)
+    out: dict[str, str] = dict(cluster_env)
     raw = body.get("nccl_debug")
     if raw is not None:
         lvl = str(raw).strip().upper()
@@ -291,12 +308,13 @@ def _launch_env_from_body(body: dict) -> dict[str, str]:
     # User-supplied vars win over the debug defaults above.
     custom = _custom_env_from_body(body)
     out.update(custom)
-    # Advertise the exact set of user-supplied keys so multi-node launchers can forward
-    # precisely these to remote ranks. nccl_allreduce.sbatch only propagates an explicit
-    # -x allowlist to orted on nodes other than the mpirun host; without this, a custom
-    # var (e.g. NCCL_NET_PLUGIN=none) would apply to local ranks only.
-    if custom:
-        out["NVIS_EXTRA_ENV_KEYS"] = " ".join(sorted(custom))
+    # Advertise the exact set of supplied keys -- the cluster's and the dialog's -- so multi-node
+    # launchers can forward precisely these to remote ranks. nccl_allreduce.sbatch only
+    # propagates an explicit -x allowlist to orted on nodes other than the mpirun host; without
+    # this, a custom var (e.g. NCCL_NET_PLUGIN=none) would apply to local ranks only.
+    forwarded = set(cluster_env) | set(custom)
+    if forwarded:
+        out["NVIS_EXTRA_ENV_KEYS"] = " ".join(sorted(forwarded))
     return out
 
 
@@ -384,7 +402,7 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
                     if (v := (_eget(k) or "").strip())
                 },
                 # Launch-dialog vars win over the stored Settings values.
-                **_launch_env_from_body(body),
+                **_launch_env_from_body(body, scope=nccl_env_scope_for_target(target)),
             },
         },
         None,
@@ -590,7 +608,7 @@ def _prepare_run_nemo_xrack(body: dict) -> tuple[dict | None, tuple[object, int]
             "arg": arg,
             "racks": rack_ids,
             "nodes": nodes,
-            "env_updates": _launch_env_from_body(body),
+            "env_updates": _launch_env_from_body(body, scope=nccl_env_scope(len(rack_ids), len(nodes))),
         },
         None,
     )
@@ -1001,7 +1019,7 @@ def _prepare_run_mnubergemm_stress(body: dict) -> tuple[dict | None, tuple[objec
     )
 
 
-def _llmb_env_updates(body: dict) -> dict[str, str]:
+def _llmb_env_updates(body: dict, *, scope: str) -> dict[str, str]:
     """Env for the llmb-run launchers.
 
     ``_eget()`` reads Settings out of ``var/cache/job_env_overrides.json``, which is NOT part
@@ -1014,7 +1032,7 @@ def _llmb_env_updates(body: dict) -> dict[str, str]:
         val = (_eget(key) or "").strip()
         if val:
             out[key] = val
-    out.update(_launch_env_from_body(body))
+    out.update(_launch_env_from_body(body, scope=scope))
     return out
 
 
@@ -1086,7 +1104,7 @@ def _prepare_run_nccl_fullrack(body: dict) -> tuple[dict | None, tuple[object, i
             (" --reservation " + shlex.quote(reservation)) if reservation else ""
         ) + (" --dry-run" if body.get("dry_run") else "") + node_arg_display
         timeout = max(120, _job_env_int("RACK_LLMB_NCCL_TIMEOUT", 14400))
-        env_updates.update(_llmb_env_updates(body))
+        env_updates.update(_llmb_env_updates(body, scope=nccl_env_scope_for_target(target)))
     else:
         # Cap the all_reduce sweep. Accept the legacy `end`/RACK_NCCL_FULLRACK_END knobs too.
         size_max = (
@@ -1118,7 +1136,7 @@ def _prepare_run_nccl_fullrack(body: dict) -> tuple[dict | None, tuple[object, i
         timeout = max(120, _job_env_int("RACK_NCCL_FULLRACK_TIMEOUT", 7200))
         # run_nccl_mpi.sh writes its Slurm --output under RACK_JOB_LOG_DIR (defaults to cwd; the
         # worker cwd is log_dir, but set it explicitly so the app log always lands in log_dir).
-        env_updates.update(_launch_env_from_body(body))
+        env_updates.update(_launch_env_from_body(body, scope=nccl_env_scope_for_target(target)))
     return (
         {
             "log_dir": log_dir,
@@ -1392,7 +1410,10 @@ def _prepare_run_llmb_nccl_container(body: dict) -> tuple[dict | None, tuple[obj
         "display_cmd": " ".join(shlex.quote(part) for part in cmd),
         "timeout": max(120, _job_env_int("RACK_LLMB_NCCL_CONTAINER_TIMEOUT", 43200)),
         "dry_run": dry_run,
-        "env_updates": {**_launch_env_from_body(body), "NVIS_PREPARED_NODE_COUNT": str(len(nodes))},
+        "env_updates": {
+            **_launch_env_from_body(body, scope=nccl_env_scope(len(racks), len(nodes))),
+            "NVIS_PREPARED_NODE_COUNT": str(len(nodes)),
+        },
         "campaign": campaign_id,
     }, None)
 
@@ -1544,7 +1565,7 @@ def _prepare_run_llmb_nccl(body: dict) -> tuple[dict | None, tuple[object, int] 
             "display_cmd": display_cmd,
             "timeout": timeout,
             "dry_run": dry_run,
-            "env_updates": _launch_env_from_body(body),
+            "env_updates": _launch_env_from_body(body, scope=nccl_env_scope(len(rack_ids), len(exact_nodes))),
         },
         None,
     )

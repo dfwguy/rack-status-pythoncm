@@ -205,6 +205,18 @@ export interface ClusterFabric {
   compute_hca: string;
 }
 
+/** The span a launch runs over, which picks one of a cluster's NCCL environment lists. */
+export type NcclEnvScope = "node" | "rack" | "multirack";
+
+/**
+ * Variables this cluster adds to every NCCL-using launch (NCCL tests, NeMo, LLMB), per span.
+ *
+ * The site's own fabric tuning -- a network plugin, a channel count -- stated on the record instead
+ * of edited into the shared launchers. A launch gets only its span's list (they do not inherit from
+ * one another), and the launch dialog's own variables win over it.
+ */
+export type ClusterNcclEnv = Record<NcclEnvScope, Record<string, string>>;
+
 export interface ClusterConnection {
   exec_mode: string;
   ssh_host: string;
@@ -250,6 +262,8 @@ export interface Cluster {
   geometry: ClusterGeometry;
   /** Per-site fabric overrides; all blank = detect on the node. */
   fabric: ClusterFabric;
+  /** Per-span variables for NCCL-using launches; all empty = launch with the scripts' defaults. */
+  nccl_env: ClusterNcclEnv;
   connection: ClusterConnection;
   /** Empty means "derive from the platform's `fabric.racks_per_su`", not "one SU". */
   scalable_units: ClusterScalableUnit[];

@@ -27,37 +27,37 @@ from api import validation_runs
 
 
 def test_max_steps_sets_both_run_and_label_thresholds():
-    env = validation_runs._launch_env_from_body({"max_steps": 50})
+    env = validation_runs._launch_env_from_body({"max_steps": 50}, scope="multirack")
     assert env["NVIS_NEMO_MAX_STEPS"] == "50"
     assert env["NEMO_TARGET_STEPS"] == "50"
 
 
 def test_max_steps_soak_value():
-    env = validation_runs._launch_env_from_body({"max_steps": 2010})
+    env = validation_runs._launch_env_from_body({"max_steps": 2010}, scope="multirack")
     assert env["NVIS_NEMO_MAX_STEPS"] == "2010"
     assert env["NEMO_TARGET_STEPS"] == "2010"
 
 
 def test_max_steps_absent_leaves_script_default():
-    env = validation_runs._launch_env_from_body({})
+    env = validation_runs._launch_env_from_body({}, scope="multirack")
     assert "NVIS_NEMO_MAX_STEPS" not in env
     assert "NEMO_TARGET_STEPS" not in env
 
 
 def test_max_steps_rejects_out_of_range_and_non_numeric():
     for bad in (0, -5, "fifty", None, 10**9):
-        env = validation_runs._launch_env_from_body({"max_steps": bad})
+        env = validation_runs._launch_env_from_body({"max_steps": bad}, scope="multirack")
         assert "NVIS_NEMO_MAX_STEPS" not in env, bad
 
 
 def test_max_steps_rejects_bool_masquerading_as_int():
     """``True`` is an int in Python; it must not become ``NVIS_NEMO_MAX_STEPS=1``."""
-    assert "NVIS_NEMO_MAX_STEPS" not in validation_runs._launch_env_from_body({"max_steps": True})
+    assert "NVIS_NEMO_MAX_STEPS" not in validation_runs._launch_env_from_body({"max_steps": True}, scope="multirack")
 
 
 def test_step_selector_composes_with_nccl_debug_and_custom_env():
     env = validation_runs._launch_env_from_body(
-        {"max_steps": 50, "nccl_debug": "INFO", "env": {"FOO": "1"}}
+        {"max_steps": 50, "nccl_debug": "INFO", "env": {"FOO": "1"}}, scope="multirack"
     )
     assert env["NVIS_NEMO_MAX_STEPS"] == "50"
     assert env["NCCL_DEBUG"] == "INFO"
@@ -67,6 +67,6 @@ def test_step_selector_composes_with_nccl_debug_and_custom_env():
 def test_custom_env_can_override_the_selector():
     """Explicit KEY=VALUE wins, matching the documented precedence for the env textarea."""
     env = validation_runs._launch_env_from_body(
-        {"max_steps": 50, "env": {"NVIS_NEMO_MAX_STEPS": "110"}}
+        {"max_steps": 50, "env": {"NVIS_NEMO_MAX_STEPS": "110"}}, scope="multirack"
     )
     assert env["NVIS_NEMO_MAX_STEPS"] == "110"
