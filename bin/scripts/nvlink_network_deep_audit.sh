@@ -12,14 +12,93 @@
 set -uo pipefail
 
 expected_gpus="${RACK_AUDIT_EXPECTED_GPUS:-4}"
-expected_ib_ports="${RACK_AUDIT_EXPECTED_IB_PORTS:-4}"
-expected_ib_rate="${RACK_AUDIT_EXPECTED_IB_RATE_GBPS:-800}"
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+ibroot="${NVIS_FABRIC_SYSFS:-/sys/class/infiniband}"
 codes=()
 reasons=()
 warnings=()
-fail() { codes+=("$1"); reasons+=("$2"); }
-warn() { warnings+=("$1: $2"); }
+# A code is reported once however many rails trip it, and each reason is clipped: the whole
+# record is one stdout line the fan-out must carry intact, and a line cut mid-JSON reads as
+# "structured audit result missing" -- a failed node reported as inconclusive.
+fail() {
+  local c
+  for c in "${codes[@]:-}"; do
+    [[ "$c" == "$1" ]] && { reasons+=("${2:0:160}"); return; }
+  done
+  codes+=("$1"); reasons+=("${2:0:160}")
+}
+warn() { warnings+=("$1: ${2:0:160}"); }
+
+# Which devices are the compute rails, and what protocol they speak, comes from the shared
+# classifier -- the cluster's fabric network (NVIS_FABRIC_NETWORK: IB|RoCE|auto) and what this
+# node actually exposes -- never a device-name or link-rate literal here. Hardcoding "every
+# non-bond device must be 800 Gb/s" was right for IB / RoCE-IPv4 rails and wrong for GB300
+# Spectrum-X RoCE-IPv6, where the rails are 200G VFs (roce_vf_r*) beside 400G management NICs
+# and DOWN OVS uplink PFs (roce_r*).
+fab_link=""; fab_pin=""; fab_rails=""
+if [[ -r "$script_dir/lib/fabric.inc.sh" ]]; then
+  # shellcheck source=lib/fabric.inc.sh
+  source "$script_dir/lib/fabric.inc.sh"
+  _fab_scan=$(nvis_fabric_scan 2>/dev/null || true)
+  if [[ "$_fab_scan" == *NVIS_FAB_IB_HCA=* ]]; then
+    eval "$_fab_scan"
+    fab_link="${NVIS_FAB_LINK:-}"; fab_pin="${NVIS_FAB_HCA_PIN:-}"; fab_rails="${NVIS_FAB_IB_HCA:-}"
+  fi
+fi
+
+# Rails to check: what the scan selected, plus any device the cluster's compute-plane name
+# covers but that is not ACTIVE (a rail that went down must be reported, not silently dropped
+# from the scan). Without the classifier, fall back to every non-bond device.
+rails=()
+if [[ -n "$fab_link" ]]; then
+  [[ -n "$fab_rails" ]] && IFS=',' read -r -a rails <<< "$fab_rails"
+  # RoCE rails are named by a shared prefix (roce_vf_r1..4); a down one is no longer selected, and
+  # the classifier's pin degrades to an exact list that omits it, so add the prefix explicitly.
+  # (Not for IB: mlx5_ would also sweep in the management NICs.)
+  _pin_list="$fab_pin"
+  if [[ "$fab_link" == roce && ${#rails[@]} -gt 1 ]]; then
+    _pin_list="${_pin_list:+$_pin_list,}$(_nvis_fabric_common_prefix "${rails[@]}")"
+  fi
+  if [[ -n "$_pin_list" ]]; then
+    IFS=',' read -r -a _pins <<< "$_pin_list"
+    for dev_path in "$ibroot"/*; do
+      [[ -e "$dev_path" ]] || continue
+      dev=${dev_path##*/}
+      [[ "$dev" == *bond* ]] && continue
+      [[ " ${rails[*]:-} " == *" $dev "* ]] && continue
+      for _p in "${_pins[@]}"; do
+        _p=${_p#^}; _p=${_p#=}; _p=${_p%%:*}
+        [[ -n "$_p" && "$dev" == "$_p"* ]] && { rails+=("$dev"); break; }
+      done
+    done
+  fi
+else
+  warn fabric_scan "fabric classifier unavailable; auditing every non-bond RDMA device"
+  for dev_path in "$ibroot"/*; do
+    [[ -e "$dev_path" ]] || continue
+    dev=${dev_path##*/}
+    [[ "$dev" == *bond* ]] || rails+=("$dev")
+  done
+fi
+
+# Expectations: operator override, else derived from the fabric. Rails = GPUs per node. Rate:
+# IB rails are 800G NDR; RoCE rails are uniform per site (200G VFs on NC, 400G elsewhere), so a
+# RoCE rail is held to the fastest rail on the node, not to a number from another site.
+expected_ib_ports="${RACK_AUDIT_EXPECTED_IB_PORTS:-$expected_gpus}"
+if [[ -n "${RACK_AUDIT_EXPECTED_IB_RATE_GBPS:-}" ]]; then
+  expected_ib_rate="$RACK_AUDIT_EXPECTED_IB_RATE_GBPS"
+elif [[ -n "${NVIS_FABRIC_EXPECT_RATE:-}" ]]; then
+  expected_ib_rate="$NVIS_FABRIC_EXPECT_RATE"
+elif [[ "$fab_link" == roce ]]; then
+  expected_ib_rate=0
+  for dev in "${rails[@]:-}"; do
+    [[ -n "$dev" ]] || continue
+    _r=$(grep -Eo '^[0-9]+' "$ibroot/$dev/ports/1/rate" 2>/dev/null | head -1 || true)
+    [[ "${_r:-0}" -gt "$expected_ib_rate" ]] && expected_ib_rate=${_r:-0}
+  done
+else
+  expected_ib_rate=800
+fi
 
 gpu_count=$(nvidia-smi -L 2>/dev/null | grep -c '^GPU ' || true)
 [[ "$gpu_count" -ne "$expected_gpus" ]] && fail gpu_count "expected ${expected_gpus} GPUs but found ${gpu_count}"
@@ -42,12 +121,11 @@ ib_active=0
 ib_bad_counters=0
 ib_bad_rate=0
 declare -A ib_counter_before=()
-for dev_path in /sys/class/infiniband/*; do
-  [[ -e "$dev_path" ]] || continue
-  dev=${dev_path##*/}
-  # Logical aggregate devices (for example mlx5_bond_0) are expected to report
-  # the bond's effective rate, not the 800 Gb/s physical-rail rate.  Validate
-  # their carrier separately below and keep the physical-rail gate to HCAs.
+for dev in "${rails[@]:-}"; do
+  [[ -n "$dev" ]] || continue
+  dev_path="$ibroot/$dev"
+  # Logical aggregate devices (for example mlx5_bond_0) report the bond's effective rate, not
+  # a rail rate; the bond's carrier is validated separately below.
   [[ "$dev" == *bond* ]] && continue
   [[ -r "$dev_path/ports/1/state" ]] || continue
   ib_total=$((ib_total + 1))
@@ -72,7 +150,7 @@ for dev_path in /sys/class/infiniband/*; do
   done
 done
 if [[ "$ib_total" -lt "$expected_ib_ports" ]]; then
-  fail ib_port_count "expected ${expected_ib_ports} IB ports but found ${ib_total}"
+  fail ib_port_count "expected ${expected_ib_ports} ${fab_link:-IB} compute rails but found ${ib_total}"
 fi
 
 if [[ -e /proc/net/bonding/mlx5_bond_0 ]]; then
@@ -91,7 +169,8 @@ elif [[ -r /sys/class/infiniband/mlx5_bond_0/ports/1/state ]]; then
   if ! grep -q 'ACTIVE' <<< "$bond_state" || ! grep -Eq 'LINK_UP|LinkUp' <<< "$bond_physical"; then
     fail bond_state "mlx5_bond_0 RDMA aggregate is not ACTIVE/LinkUp (${bond_state}; ${bond_physical})"
   fi
-else
+elif [[ "$fab_link" != roce ]]; then
+  # A RoCE site's aggregate (if any) is not part of the compute plane; only IB nodes are expected to have it.
   warn bond_state "mlx5_bond_0 is absent"
 fi
 
@@ -159,11 +238,10 @@ fi
 # reboots.  Only a counter that increases during this audit is a current failure.
 # Sampling after the forced data-path probe also catches a link that flaps under
 # traffic rather than while idle.
-for dev_path in /sys/class/infiniband/*; do
-  [[ -e "$dev_path" ]] || continue
-  dev=${dev_path##*/}
+for dev in "${rails[@]:-}"; do
+  [[ -n "$dev" ]] || continue
   [[ "$dev" == *bond* ]] && continue
-  counters="$dev_path/ports/1/counters"
+  counters="$ibroot/$dev/ports/1/counters"
   for counter in link_downed symbol_error port_rcv_errors port_xmit_discards; do
     before=${ib_counter_before["${dev}:${counter}"]:-0}
     after=$(cat "$counters/$counter" 2>/dev/null || printf 0)
@@ -183,19 +261,24 @@ codes_joined=$(IFS=,; printf '%s' "${codes[*]}")
 reasons_joined=$(IFS='; '; printf '%s' "${reasons[*]}")
 warnings_joined=$(IFS='; '; printf '%s' "${warnings[*]}")
 
-python3 - "$status" "$codes_joined" "$reasons_joined" "$warnings_joined" "$gpu_count" "$active_nvlinks" "$ib_total" "$ib_active" "$ib_bad_counters" "$ib_bad_rate" "$data_path" "$data_path_rc" <<'PY'
+rails_joined=$(IFS=,; printf '%s' "${rails[*]:-}")
+python3 - "$status" "$codes_joined" "$reasons_joined" "$warnings_joined" "$gpu_count" "$active_nvlinks" "$ib_total" "$ib_active" "$ib_bad_counters" "$ib_bad_rate" "$data_path" "$data_path_rc" "${fab_link:-unknown}" "$rails_joined" "$expected_ib_rate" <<'PY'
 import json, socket, sys
 (status, codes, reasons, warnings, gpu_count, nvlinks, ib_total, ib_active,
- bad_counters, bad_rate, data_path, data_path_rc) = sys.argv[1:]
+ bad_counters, bad_rate, data_path, data_path_rc, fabric, rails, expected_rate) = sys.argv[1:]
 payload = {
     "schema": 1,
     "kind": "network",
     "node": socket.gethostname().split(".")[0],
     "status": status,
     "codes": [x for x in codes.split(",") if x],
-    "reason": reasons,
-    "warnings": [x for x in warnings.split("; ") if x],
+    # Bounded so the record stays one intact stdout line however many rails fail.
+    "reason": reasons[:700],
+    "warnings": [x for x in warnings.split("; ") if x][:5],
     "metrics": {
+        "fabric": fabric,
+        "rails": [x for x in rails.split(",") if x],
+        "expected_rail_rate_gbps": int(expected_rate or 0),
         "gpu_count": int(gpu_count or 0),
         "active_nvlinks": int(nvlinks or 0),
         "ib_ports": int(ib_total or 0),
