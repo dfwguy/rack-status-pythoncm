@@ -1234,7 +1234,7 @@ def api_services_restart_async():
 
 
 @bp.route("/api/node-reboot-async", methods=["POST"])
-@action("rack.node:reboot", variant="async")
+@action("rack.power:reboot", variant="async")
 def api_node_reboot_async():
     """POST JSON {\"specs\": [\"host\", …]} — reboot nodes from the node itself; poll
     GET /api/reset-job-status?job_id=…

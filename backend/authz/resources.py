@@ -283,8 +283,6 @@ _RESOLVERS: dict[str, Extractor] = {
     "rack.gpu": _by("rack", "rack_id", "racks", "specs", "nodes", "node"),
     "rack.bmc": _by("rack", "rack_id", "racks", "specs", "nodes", "node"),
     "rack.services": _by("rack", "rack_id", "racks", "specs", "nodes", "node"),
-    # Node-side reboot (/api/node-reboot-async): named by hostname, like the other node actions.
-    "rack.node": _by("rack", "rack_id", "racks", "specs", "nodes", "node"),
     "rack.lock": _by("rack", "rack_id", "racks"),
     "fabric": _by("rack", "rack_id", "racks", "target", "specs", "nodes", "node"),
     "fabric.imex": _by("rack", "rack_id", "racks"),
@@ -403,7 +401,7 @@ _RESOLVERS: dict[str, Extractor] = {
 #: while fixing nothing — their handlers do not fold either, so gate and handler already agree.
 _FOLDED_TYPES = frozenset({
     # `_normalize_rack_id` -> `canonical_rack_id`, which lower-cases.
-    "rack", "rack.power", "rack.gpu", "rack.bmc", "rack.services", "rack.node", "rack.lock",
+    "rack", "rack.power", "rack.gpu", "rack.bmc", "rack.services", "rack.lock",
     "fabric", "fabric.imex", "fabric.nvswitch", "diag", "bringup", "node.issues",
     "validation",
     # `canonical_login` / `canonical_group_name`, which case-fold.

@@ -1244,7 +1244,7 @@
  {
   "endpoint": "rack_power.api_node_reboot_async",
   "method": "POST",
-  "action": "rack.node:reboot",
+  "action": "rack.power:reboot",
   "variant": "async"
  },
  {
