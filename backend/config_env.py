@@ -575,8 +575,18 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "key": "RACK_CLUSTERKIT_HCA_PROFILE",
         "label": "ClusterKit HCA preset profile",
         "description": (
-            "Preset rail table: mlx — gb300_mlx4 (default), b300_mlx8; roce — gb300_roce_spx_quad (default), "
+            "Rail table: mlx — gb300_mlx4 (default), b300_mlx8; roce — detect (default: the node's own compute "
+            "rails, kept to the cluster's fabric.compute_hca, each paired with its own GPU), gb300_roce_spx_quad, "
             "gb300_roce_spx_rail, b300_roce_dual_8. Must match RACK_CLUSTERKIT_LINK_TECH / NVIS_FABRIC_NETWORK family."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
+        "key": "RACK_CLUSTERKIT_TESTS",
+        "label": "ClusterKit test cases",
+        "description": (
+            "Space-separated ClusterKit test cases run on every rail (default: bw lat). For example "
+            "gpu_gpu_bw gpu_gpu_lat, with -G in RACK_CLUSTERKIT_EXTRA_OPTS, measures each rail from its own GPU."
         ),
     },
     {

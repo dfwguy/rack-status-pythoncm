@@ -1271,6 +1271,7 @@ def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[o
         "RACK_CLUSTERKIT_LINK_TECH",
         "RACK_CLUSTERKIT_HCA_PROFILE",
         "RACK_CLUSTERKIT_UCX_TLS",
+        "RACK_CLUSTERKIT_TESTS",
     ):
         v = (_eget(k) or "").strip()
         if v:

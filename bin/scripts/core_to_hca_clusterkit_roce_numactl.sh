@@ -39,6 +39,23 @@ fi
 
 export CUDA_VISIBLE_DEVICES="${GPU}"
 
+# Reach the other rack through the rail's routable GID, looked up on this node (the index differs
+# per node). UCX's automatic pick can be a link-local RoCE v2 GID, and then MPI's own address
+# exchange times out before ClusterKit measures anything. A caller-set UCX_IB_GID_INDEX wins.
+if [[ -z "${UCX_IB_GID_INDEX:-}" ]]; then
+  _ck_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fabric.inc.sh"
+  if [[ -f "${_ck_lib}" ]]; then
+    # shellcheck disable=SC1090
+    . "${_ck_lib}"
+    _ck_gid="$(nvis_fabric_routable_gid_index "${CLUSTERKIT_HCA%%+*}")"
+    if [[ -n "${_ck_gid}" ]]; then
+      export UCX_IB_GID_INDEX="${_ck_gid}"
+    else
+      echo "WARNING: no routable RoCE v2 GID on ${CLUSTERKIT_HCA%%+*}; leaving UCX to choose (cross-rack may time out)." >&2
+    fi
+  fi
+fi
+
 # Slurm / OMPI may restrict the job cpuset; absolute -C N can fail. Try absolute, then cpuset-relative (+N), then no bind.
 if command -v numactl >/dev/null 2>&1; then
   if numactl -C "${CORE}" -m "${NUMA}" -- /bin/true 2>/dev/null; then

@@ -20,9 +20,15 @@
 #              auto: mlx when /sys/class/infiniband/mlx5_*/device/local_cpulist is readable; else RoCE / Spectrum-X.
 #            RACK_CLUSTERKIT_HCA_PROFILE — preset rail/device table (default empty = built-in default per link family):
 #              mlx: gb300_mlx4 (4× mlx5_0..3), b300_mlx8 (8× mlx5_0,1,8..13).
-#              roce: gb300_roce_spx_quad (4 aggregated rails), gb300_roce_spx_rail (4 single-plane rails).
+#              roce: detect (default: this node's rails from lib/fabric.inc.sh, kept to the cluster's
+#                    fabric.compute_hca, each with its own GPU/core/NUMA -- see nvis_fabric_rail_map),
+#                    gb300_roce_spx_quad (4 aggregated rails), gb300_roce_spx_rail (4 single-plane rails).
 #            RACK_CLUSTERKIT_UCX_TLS — optional; RoCE branch defaults to rc,cuda (mlx keeps UCX_TLS=^dc unless set).
+#            RACK_CLUSTERKIT_TESTS — ClusterKit test cases, space-separated (default "bw lat"); e.g.
+#              "gpu_gpu_bw gpu_gpu_lat" with RACK_CLUSTERKIT_EXTRA_OPTS=-G measures each rail from its own GPU.
 #            RACK_CLUSTERKIT_EXTRA_OPTS, CUDA_MAJ / RACK_NVLOOM_CUDA_MAJOR.
+# A rail whose test fails is reported and the remaining rails still run; the job exits non-zero if any
+# failed. (One bad rail used to abort the job and leave the healthy ones unmeasured.)
 # Pairwise NIC tests require ≥2 distinct hosts in the Slurm allocation (same as validation/clusterkit/clusterkit.sh).
 
 #SBATCH --job-name=CLUSTERKIT-rack
@@ -135,8 +141,13 @@ if [[ "${#_CK_ROWS[@]}" -eq 0 ]]; then
   exit 1
 fi
 
-echo "### ClusterKit rack=${_rack} link_tech=${LINK_TECH} profile=${RACK_CLUSTERKIT_HCA_PROFILE:-<default>} mapper=${CORE_TO_HCA} cwd=${PWD}"
+echo "### ClusterKit rack=${_rack} link_tech=${LINK_TECH} profile=${CK_HCA_PROFILE_USED:-${RACK_CLUSTERKIT_HCA_PROFILE:-<default>}} mapper=${CORE_TO_HCA} cwd=${PWD}"
+printf '### HCA row: %s\n' "${_CK_ROWS[@]}"
 echo "### HPCX_DIR=${HPCX_DIR}"
+
+_ck_exe_opt=""
+for _t in ${RACK_CLUSTERKIT_TESTS:-bw lat}; do _ck_exe_opt+="-d ${_t} "; done
+_ck_failed=()
 
 for idx in "${!_CK_ROWS[@]}"; do
   row="${_CK_ROWS[$idx]}"
@@ -164,7 +175,7 @@ for idx in "${!_CK_ROWS[@]}"; do
   # Optional: export RACK_CLUSTERKIT_EXTRA_OPTS="--foo ..." (space-separated clusterkit.sh flags).
   # shellcheck disable=SC2086
   "${CK_SH}" --mpi_opt "${mpi_opt}" -r "${HPCX_DIR}" -f "${HOSTFILE}" --mapper "${CORE_TO_HCA}" \
-    --exe_opt "-d bw -d lat" --unidirectional ${RACK_CLUSTERKIT_EXTRA_OPTS-}
+    --exe_opt "${_ck_exe_opt% }" --unidirectional ${RACK_CLUSTERKIT_EXTRA_OPTS-}
   rc=$?
   set +x
   if [[ "${rc}" -ne 0 ]]; then
@@ -173,8 +184,12 @@ for idx in "${!_CK_ROWS[@]}"; do
     else
       echo "ERROR: clusterkit.sh failed for HCA index ${idx} (${device}), exit ${rc}" >&2
     fi
-    exit "${rc}"
+    _ck_failed+=("${HCA_TAG}")
   fi
 done
 
+if [[ "${#_ck_failed[@]}" -gt 0 ]]; then
+  echo "FAILED: clusterkit could not test ${_ck_failed[*]} on ${SLURM_JOB_NODELIST:-?} (data for the rest under ${PWD})" >&2
+  exit 1
+fi
 echo "OK: clusterkit finished on ${SLURM_JOB_NODELIST:-?} (data under ${PWD})"

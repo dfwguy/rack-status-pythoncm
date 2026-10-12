@@ -321,6 +321,200 @@ _nvis_fabric_gpu_count() {
   printf '4'
 }
 
+# --- routable GID of one rail -------------------------------------------------
+# The GID index a RoCE rail must use to reach another rack: RoCE v2, routable (not zero, not
+# fe80::), of the cluster's address family (NVIS_FABRIC_ADDR_FAMILY, else IPv6 before IPv4-mapped).
+# UCX's automatic choice takes a link-local RoCE v2 GID on NscaleTX-NC (indexes 1 and 3 there are
+# fe80::, the routable one is 5), so every ClusterKit run timed out in MPI's address exchange. The
+# index differs per node (3 on some NC nodes, 5 on most), so it is looked up on the node that uses it.
+nvis_fabric_routable_gid_index() {  # $1 = RDMA device -> index on stdout, nothing when none
+  local port="${NVIS_FABRIC_SYSFS:-/sys/class/infiniband}/$1/ports/1"
+  local fam want v4="" v6="" g t i
+  fam="$(printf '%s' "${NVIS_FABRIC_ADDR_FAMILY:-}" | tr '[:upper:]' '[:lower:]')"
+  shopt -s nullglob
+  for g in "$port"/gids/*; do
+    i="${g##*/}"
+    t="$(cat "$port/gid_attrs/types/$i" 2>/dev/null)"
+    [[ "$t" == "RoCE v2" ]] || continue
+    g="$(tr -d '\n' < "$g" 2>/dev/null)"
+    case "$g" in
+      ""|0000:0000:0000:0000:0000:0000:0000:0000|fe80:*) continue ;;
+      0000:0000:0000:0000:0000:ffff:*) [[ -n "$v4" ]] || v4="$i" ;;
+      *) [[ -n "$v6" ]] || v6="$i" ;;
+    esac
+  done
+  shopt -u nullglob
+  case "$fam" in
+    ipv4|inet|af_inet) want="$v4" ;;
+    ipv6|inet6|af_inet6) want="$v6" ;;
+    *) want="${v6:-$v4}" ;;
+  esac
+  [[ -n "$want" ]] && printf '%s\n' "$want"
+  return 0
+}
+
+# --- rail -> GPU pairing ------------------------------------------------------
+# Which GPU sits behind each compute rail, for tools that drive one rail with one GPU (ClusterKit,
+# perftest). On GB300 Spectrum-X a rail reaches full rate only from its own GPU, through the NIC's
+# Data Direct DMA function (Mellanox, PCI class 0x0801) that lives in that GPU's PCI domain; from
+# any other GPU the traffic crosses Grace's PCIe link and tops out near 460 Gb/s of 800. Nothing
+# names the pairing: nvidia-smi topo reports SYS for every NIC/GPU pair, and the Mellanox functions
+# carry no PCIe serial. What does tie them is the VPD read-only keyword V3, a per-chip id the rail's
+# PF and its Data Direct function share (probed on NscaleTX-NC: r1=GPU1, r2=GPU0, r3=GPU3, r4=GPU2,
+# the pairing perftest measured). VPD is root-only, so it is read directly when readable and with
+# passwordless sudo otherwise (NVIS_FABRIC_VPD_SUDO=0 forbids that). Where neither works the GPUs on
+# the rail's NUMA node are dealt out in order -- a guess, said so on stderr, and wrong on NC.
+# NVIS_FABRIC_RAIL_GPUS ("roce_vf_r1:1,roce_vf_r2:0,...") states the pairing outright.
+# Test seam: NVIS_FABRIC_PCIFS (default /sys/bus/pci/devices).
+
+# PCI functions of one vendor whose class starts with $2, one BDF per line in bus order.
+_nvis_fabric_pci_funcs() {  # $1 = vendor (0x10de), $2 = class prefix (0x0302)
+  local pcifs="${NVIS_FABRIC_PCIFS:-/sys/bus/pci/devices}" f
+  shopt -s nullglob
+  for f in "$pcifs"/*; do
+    [[ "$(cat "$f/vendor" 2>/dev/null)" == "$1" ]] || continue
+    [[ "$(cat "$f/class" 2>/dev/null)" == "$2"* ]] || continue
+    printf '%s\n' "${f##*/}"
+  done | sort
+  shopt -u nullglob
+}
+
+# The VPD V3 chip id of one PCI function, empty when the VPD cannot be read or has none.
+_nvis_fabric_chip_id() {  # $1 = BDF
+  local vpd="${NVIS_FABRIC_PCIFS:-/sys/bus/pci/devices}/$1/vpd"
+  [[ -e "$vpd" ]] || return 0
+  {
+    if [[ -r "$vpd" ]]; then
+      cat "$vpd" 2>/dev/null
+    elif [[ "${NVIS_FABRIC_VPD_SUDO:-1}" == 1 ]]; then
+      sudo -n cat "$vpd" 2>/dev/null
+    fi
+  } | python3 -c '
+import sys
+b = sys.stdin.buffer.read()
+i = 0
+while i < len(b):
+    t = b[i]
+    if t == 0x78:  # end tag
+        break
+    if t & 0x80:  # large resource: tag, len lo, len hi, data
+        n = b[i + 1] | (b[i + 2] << 8)
+        data = b[i + 3:i + 3 + n]
+        if t == 0x90:  # VPD-R: keyword(2) len(1) value
+            j = 0
+            while j + 3 <= len(data):
+                kw, ln = data[j:j + 2], data[j + 2]
+                if kw == b"V3":
+                    print(data[j + 3:j + 3 + ln].decode("ascii", "replace").strip("\x00 "))
+                    sys.exit(0)
+                j += 3 + ln
+        i += 3 + n
+    else:  # small resource
+        i += 1 + (t & 7)
+' 2>/dev/null
+}
+
+# CPU list ("0-3,8-11") expanded one per line.
+_nvis_fabric_cpus() {
+  local part
+  for part in ${1//,/ }; do
+    if [[ "$part" == *-* ]]; then seq "${part%-*}" "${part#*-}"; else printf '%s\n' "$part"; fi
+  done
+}
+
+# Keep the rails an NCCL_IB_HCA value names (the cluster's fabric.compute_hca): "=" exact names,
+# "^" excludes, otherwise name prefixes; ":port" suffixes ignored. Empty spec keeps every rail.
+_nvis_fabric_rails_matching() {  # $1 = spec, $2.. = rails
+  local spec="$1"; shift
+  [[ -n "$spec" ]] || { printf '%s\n' "$@"; return; }
+  local mode=prefix
+  case "$spec" in =*) mode=exact; spec="${spec#=}" ;; ^*) mode=exclude; spec="${spec#^}" ;; esac
+  local rail p hit
+  for rail in "$@"; do
+    hit=0
+    for p in ${spec//,/ }; do
+      p="${p%%:*}"
+      if [[ "$mode" == exact ]]; then [[ "$rail" == "$p" ]] && hit=1
+      else [[ "$rail" == "$p"* ]] && hit=1
+      fi
+    done
+    if [[ "$mode" == exclude ]]; then (( hit )) || printf '%s\n' "$rail"
+    else (( hit )) && printf '%s\n' "$rail"
+    fi
+  done
+}
+
+# One line per rail: "<rail> <gpu_index> <numa> <core> <how>" where how = stated | vpd | numa-guess.
+# gpu_index is the CUDA index under CUDA_DEVICE_ORDER=PCI_BUS_ID (GPUs in PCI bus order). core is a
+# distinct CPU local to the rail (the (k+1)-th of its local_cpulist for the k-th rail on that NUMA
+# node, so CPU 0 is never used). Rails default to this node's scan, filtered by NVIS_FABRIC_HCA.
+nvis_fabric_rail_map() {
+  local ibroot="${NVIS_FABRIC_SYSFS:-/sys/class/infiniband}"
+  local pcifs="${NVIS_FABRIC_PCIFS:-/sys/bus/pci/devices}"
+  local -a rails=("$@")
+  if [[ "${#rails[@]}" -eq 0 ]]; then
+    local NVIS_FAB_IB_HCA=""
+    eval "$(nvis_fabric_scan 2>/dev/null | grep '^NVIS_FAB_IB_HCA=')"
+    [[ -n "$NVIS_FAB_IB_HCA" ]] || return 1
+    mapfile -t rails < <(_nvis_fabric_rails_matching "${NVIS_FABRIC_HCA:-}" ${NVIS_FAB_IB_HCA//,/ })
+    [[ "${#rails[@]}" -gt 0 ]] || return 1
+  fi
+
+  local -a gpus dds
+  mapfile -t gpus < <(_nvis_fabric_pci_funcs 0x10de 0x0302)
+  [[ "${#gpus[@]}" -gt 0 ]] || mapfile -t gpus < <(_nvis_fabric_pci_funcs 0x10de 0x0300)
+  mapfile -t dds < <(_nvis_fabric_pci_funcs 0x15b3 0x0801)
+  local -A dd_chip=() used=() per_numa=()
+  local dd g
+  for dd in "${dds[@]}"; do dd_chip["$dd"]="$(_nvis_fabric_chip_id "$dd")"; done
+
+  local rail dev pf numa cpulist chip gpu how i k core
+  for rail in "${rails[@]}"; do
+    dev="$(readlink -f "$ibroot/$rail/device" 2>/dev/null)"
+    pf="$dev"
+    [[ -e "$dev/physfn" ]] && pf="$(readlink -f "$dev/physfn")"
+    numa="$(cat "$dev/numa_node" 2>/dev/null)"; [[ "$numa" =~ ^[0-9]+$ ]] || numa=0
+    cpulist="$(cat "$dev/local_cpulist" 2>/dev/null)"
+    gpu=""; how=""
+
+    local stated="${NVIS_FABRIC_RAIL_GPUS:-}" pair
+    for pair in ${stated//,/ }; do
+      [[ "${pair%%:*}" == "$rail" ]] && { gpu="${pair##*:}"; how=stated; }
+    done
+
+    if [[ -z "$gpu" ]]; then
+      chip="$(_nvis_fabric_chip_id "${pf##*/}")"
+      if [[ -n "$chip" ]]; then
+        for dd in "${dds[@]}"; do
+          [[ "${dd_chip[$dd]}" == "$chip" ]] || continue
+          for i in "${!gpus[@]}"; do
+            g="${gpus[$i]}"
+            [[ "${g%%:*}" == "${dd%%:*}" ]] && { gpu="$i"; how=vpd; break; }
+          done
+          [[ -n "$gpu" ]] && break
+        done
+      fi
+    fi
+
+    if [[ -z "$gpu" ]]; then
+      for i in "${!gpus[@]}"; do
+        [[ -n "${used[$i]:-}" ]] && continue
+        [[ "$(cat "$pcifs/${gpus[$i]}/numa_node" 2>/dev/null)" == "$numa" ]] || continue
+        gpu="$i"; how="numa-guess"; break
+      done
+      echo "nvis_fabric: WARNING: no Data Direct pairing found for ${rail} (VPD unreadable?);" \
+           "guessing GPU ${gpu:-none} by NUMA; set NVIS_FABRIC_RAIL_GPUS to state it" >&2
+    fi
+    [[ -n "$gpu" ]] && used["$gpu"]=1
+
+    k="${per_numa[$numa]:-0}"
+    per_numa["$numa"]=$((k + 1))
+    core="$(_nvis_fabric_cpus "${cpulist:-0}" | sed -n "$((k + 2))p")"
+    [[ -n "$core" ]] || core="$(_nvis_fabric_cpus "${cpulist:-0}" | head -1)"
+    printf '%s %s %s %s %s\n' "$rail" "${gpu:--}" "$numa" "${core:-0}" "${how:-none}"
+  done
+}
+
 # --- export NCCL / UCX / OMPI env from a scan (respects existing overrides) --
 # $1..: optional pre-captured NVIS_FAB_* eval lines; if empty, scans locally.
 # The compute-plane half of apply, shared with nvis_fabric_export_compute. Reads NVIS_FAB_* from a
