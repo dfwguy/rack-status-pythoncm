@@ -52,7 +52,7 @@ const { catalogGeometry } = vi.hoisted(() => ({
   catalogGeometry: {
     current: { activeCluster: null, activePlatform: null } as {
       activeCluster: { geometry: { trays_per_rack: number } } | null;
-      activePlatform: { geometry: { trays_per_rack: number } } | null;
+      activePlatform: { geometry: { trays_per_rack?: number; gpus_per_node?: number } } | null;
     },
   },
 }));
@@ -324,5 +324,44 @@ describe("NodesView", () => {
     // Switch to the Hardware tab.
     fireEvent.click(screen.getByRole("tab", { name: "Hardware" }));
     expect(screen.getByTestId("hardware-tab")).toBeInTheDocument();
+  });
+
+  describe("GPU count against the platform design", () => {
+    function withGpus(expected: number | null) {
+      catalogGeometry.current = {
+        activeCluster: null,
+        activePlatform: expected === null ? null : { geometry: { gpus_per_node: expected } },
+      };
+    }
+    const nodesWith = (counts: Array<number | undefined>) =>
+      counts.map((gpu_count, i) => ({ ...node(`gpu-${i}`), gpu_count }));
+
+    it("shows reported/expected, green when they match and red when they differ", () => {
+      withGpus(4);
+      renderNodes({ ...status([]), nodes: nodesWith([4, 3]) });
+      const table = screen.getByRole("table", { name: "Compute nodes" });
+      const ok = within(table).getByText("4/4");
+      const bad = within(table).getByText("3/4");
+      expect(ok).toHaveClass("nv-tag--color-green");
+      expect(bad).toHaveClass("nv-tag--color-red");
+      expect(ok).toHaveAttribute("aria-label", expect.stringContaining("platform design is 4"));
+      expect(bad).toHaveAttribute("aria-label", expect.stringContaining("3 GPUs reported"));
+    });
+
+    it("greys a node whose scheduler reported no GPU count instead of calling it a mismatch", () => {
+      withGpus(4);
+      renderNodes({ ...status([]), nodes: nodesWith([undefined]) });
+      const tag = within(screen.getByRole("table", { name: "Compute nodes" })).getByText("—/4");
+      expect(tag).toHaveAttribute("aria-label", expect.stringContaining("No GPU count reported"));
+      expect(tag).toHaveClass("nv-tag--color-gray");
+    });
+
+    it("falls back to the plain number when there is no platform to compare with", () => {
+      withGpus(null);
+      renderNodes({ ...status([]), nodes: nodesWith([8]) });
+      const table = screen.getByRole("table", { name: "Compute nodes" });
+      expect(within(table).getByText("8")).toBeInTheDocument();
+      expect(within(table).queryByText("8/0")).not.toBeInTheDocument();
+    });
   });
 });

@@ -74,6 +74,35 @@ interface NodesViewProps {
   logDir?: string;
 }
 
+/**
+ * GPUs a node reports against the count its platform is designed for, drawn as a status tag:
+ * green when they match, red when they differ, gray when the scheduler reported none. With no
+ * platform to compare against it falls back to the plain number.
+ */
+function GpuCell({ count, expected, type }: { count?: number; expected: number; type?: string }) {
+  if (expected <= 0) {
+    return (
+      <Text
+        kind="body/regular/sm"
+        style={{ color: count ? undefined : "var(--text-color-secondary)" }}
+        title={type || undefined}
+      >
+        {count ?? "—"}
+      </Text>
+    );
+  }
+  const known = typeof count === "number";
+  const tone = !known ? "gray" : count === expected ? "green" : "red";
+  const detail = known
+    ? `${count} GPU${count === 1 ? "" : "s"} reported by the scheduler; the platform design is ${expected}${type ? ` (${type})` : ""}`
+    : `No GPU count reported by the scheduler; the platform design is ${expected}`;
+  return (
+    <Tag color={tone} kind="solid" readOnly density="compact" title={detail} aria-label={detail}>
+      {known ? count : "—"}/{expected}
+    </Tag>
+  );
+}
+
 const STATUS_TONE: Record<NodeInfo["status"], "green" | "red" | "yellow" | "gray"> = {
   up: "green",
   down: "red",
@@ -132,6 +161,9 @@ export function NodesView({ data, logDir }: NodesViewProps) {
     activeCluster?.geometry?.trays_per_rack ||
     activePlatform?.geometry?.trays_per_rack ||
     FALLBACK_TRAYS_PER_RACK;
+
+  // What one node of this cluster's platform is designed to hold; 0 = no platform to compare with.
+  const expectedGpus = activePlatform?.geometry?.gpus_per_node || 0;
 
   const naming = data?.naming;
   const physicalRf0 = useMemo(() => data?.physical_rf0 ?? {}, [data]);
@@ -358,13 +390,7 @@ export function NodesView({ data, logDir }: NodesViewProps) {
                     </Text>
                   </TableCell>
                   <TableCell>
-                    <Text
-                      kind="body/regular/sm"
-                      style={{ color: n.gpu_count ? undefined : "var(--text-color-secondary)" }}
-                      title={n.gpu_type || undefined}
-                    >
-                      {n.gpu_count ?? "—"}
-                    </Text>
+                    <GpuCell count={n.gpu_count} expected={expectedGpus} type={n.gpu_type} />
                   </TableCell>
                   <TableCell>
                     <Tag color={STATUS_TONE[n.status]} kind="solid" readOnly density="compact">
