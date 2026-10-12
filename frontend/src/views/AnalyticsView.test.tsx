@@ -221,3 +221,65 @@ describe("AnalyticsView single-rack collective switch", () => {
     expect(screen.getByText("No all_gather series data.")).toBeInTheDocument();
   });
 });
+
+describe("AnalyticsView single-rack table sorting", () => {
+  const dev = (rack: string, value: number, pct: number) => ({
+    metric: "all_reduce_gbps", rack, log_file: `${rack}.txt`, value_gbps: value, fleet_median_gbps: 1, pct_vs_median: pct,
+  });
+  const nemo = (rack: string, tflops: number | null, pct: number | null) => ({
+    rack, log_file: `${rack}-nemo.txt`, median_step_time: 4.1, tflops_per_gpu: tflops,
+    step_time_cv_pct: 1, pct_vs_mean_tflops: pct, pct_vs_mean_step_time: 0,
+  });
+  const singleRack = {
+    nccl_collectives: [],
+    nccl_collectives_deviation_pct: [dev("U10", 905, -0.5), dev("U2", 950, 4.4), dev("U9", 870, -4.3)],
+    nccl_ar_series: { sizes_bytes: [], median_bus_bw_gbps: [], per_rack: [] },
+    nemotron: [nemo("Q1", 1990, 0.3), nemo("Q2", null, null), nemo("Q10", 1900, -4.2)],
+  };
+  /** The rack column of a table, top to bottom. */
+  const racksIn = (table: HTMLElement) =>
+    within(table).getAllByRole("row").slice(1).map((row) => within(row).getAllByRole("cell")[0].textContent);
+  const tables = async () => {
+    await screen.findByText("U10.txt");
+    const [deviation, nemotron] = screen.getAllByRole("table").filter((t) => within(t).queryByText(/Log/));
+    return { deviation, nemotron };
+  };
+  // Racks are the 2nd deviation column; the nemotron table's first column is the rack.
+  const devRacks = (t: HTMLElement) =>
+    within(t).getAllByRole("row").slice(1).map((row) => within(row).getAllByRole("cell")[1].textContent);
+
+  it("sorts the NCCL rows by value, reverses, then restores the server's order", async () => {
+    respondWith({ nccl_series_by_log: [], nemotron_scaling: [] }, singleRack);
+    renderAnalytics();
+    const { deviation } = await tables();
+    expect(devRacks(deviation)).toEqual(["U10", "U2", "U9"]);
+    const header = within(deviation).getByRole("button", { name: "Value (GB/s)" });
+    fireEvent.click(header);
+    expect(devRacks(deviation)).toEqual(["U9", "U10", "U2"]);
+    fireEvent.click(header);
+    expect(devRacks(deviation)).toEqual(["U2", "U10", "U9"]);
+    fireEvent.click(header);
+    expect(devRacks(deviation)).toEqual(["U10", "U2", "U9"]);
+  });
+
+  it("orders racks naturally and signed percentages numerically", async () => {
+    respondWith({ nccl_series_by_log: [], nemotron_scaling: [] }, singleRack);
+    renderAnalytics();
+    const { deviation } = await tables();
+    fireEvent.click(within(deviation).getByRole("button", { name: "Rack" }));
+    expect(devRacks(deviation)).toEqual(["U2", "U9", "U10"]);
+    fireEvent.click(within(deviation).getByRole("button", { name: "% vs median" }));
+    expect(devRacks(deviation)).toEqual(["U9", "U10", "U2"]);
+  });
+
+  it("sorts the Nemotron table with a missing value last in both directions", async () => {
+    respondWith({ nccl_series_by_log: [], nemotron_scaling: [] }, singleRack);
+    renderAnalytics();
+    const { nemotron } = await tables();
+    const header = within(nemotron).getByRole("button", { name: "TFLOPs/GPU" });
+    fireEvent.click(header);
+    expect(racksIn(nemotron)).toEqual(["Q10", "Q1", "Q2"]);
+    fireEvent.click(header);
+    expect(racksIn(nemotron)).toEqual(["Q1", "Q10", "Q2"]);
+  });
+});

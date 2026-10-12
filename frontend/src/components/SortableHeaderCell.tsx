@@ -28,16 +28,18 @@ interface SortableHeaderCellProps {
   /** Named in the tooltip; defaults to the label when it is a plain string. */
   title?: string;
   align?: "left" | "right" | "center";
+  /** "accent" is the Scheduler tables' green header; "plain" keeps the surrounding table's look. */
+  variant?: "accent" | "plain";
 }
 
-export function SortableHeaderCell({ label, col, sortCol, sortDir, onToggle, title, align }: SortableHeaderCellProps) {
+export function SortableHeaderCell({ label, col, sortCol, sortDir, onToggle, title, align, variant = "accent" }: SortableHeaderCellProps) {
   const active = sortCol === col;
   const name = title ?? (typeof label === "string" ? label : "this column");
   return (
     <TableCell
       align={align}
       sortDirection={active ? sortDir : false}
-      sx={{ fontWeight: 700, bgcolor: "action.hover", color: NVIDIA_GREEN, whiteSpace: "nowrap" }}
+      sx={variant === "accent" ? { fontWeight: 700, bgcolor: "action.hover", color: NVIDIA_GREEN, whiteSpace: "nowrap" } : { whiteSpace: "nowrap" }}
     >
       <TableSortLabel
         active={active}

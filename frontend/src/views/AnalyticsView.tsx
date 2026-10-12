@@ -46,7 +46,8 @@ import { parseNodesFromRack } from "../lib/parseNodesFromRack";
 import { NOT_IN_INVENTORY_GROUP, UNPLACED_GROUP, fleetNodesFromInventory } from "../lib/rackNodesFromInventory";
 import { getBringupFleet } from "../services/bringupService";
 import { useActiveCluster } from "../context/ActiveClusterContext";
-import { usePagedRows } from "../hooks/usePagedRows";
+import { useSortedPagedRows } from "../hooks/useSortedPagedRows";
+import { SortableHeaderCell } from "../components/SortableHeaderCell";
 import { TablePager } from "../components/TablePager";
 import type { BringupFleet } from "../types/bringup";
 import type { RackRow, RackStatusResponse } from "../types/api";
@@ -83,6 +84,29 @@ const COLLECTIVE_OPTIONS: { value: `${CollectiveKey}_gbps`; children: string }[]
   { value: "all_gather_gbps", children: "all_gather_gbps" },
   { value: "alltoall_gbps", children: "alltoall_gbps" },
 ];
+
+type DeviationRow = NonNullable<AnalyticsPayload["single_rack"]>["nccl_collectives_deviation_pct"][number];
+type SingleRackNemotronRow = NonNullable<AnalyticsPayload["single_rack"]>["nemotron"][number];
+
+/** Raw text of a column, for the shared sort (numbers and rack ids order naturally, blanks last). */
+const text = (v: string | number | null | undefined) => (v == null ? "" : String(v));
+const DEVIATION_COLUMNS: [string, "right" | undefined][] = [
+  ["Metric", undefined], ["Rack", undefined], ["Log", undefined],
+  ["Value (GB/s)", "right"], ["Fleet median", "right"], ["% vs median", "right"],
+];
+function deviationCell(r: DeviationRow, col: number): string {
+  return text([r.metric, r.rack, r.log_file, r.value_gbps, r.fleet_median_gbps, r.pct_vs_median][col]);
+}
+const NEMOTRON_COLUMNS: [string, "right" | undefined][] = [
+  ["Rack", undefined], ["Log", undefined], ["Median step (s)", "right"], ["TFLOPs/GPU", "right"],
+  ["Step CV%", "right"], ["% vs mean TFLOPs", "right"], ["% vs mean step", "right"],
+];
+function nemotronCell(r: SingleRackNemotronRow, col: number): string {
+  return text([
+    r.rack, r.log_file, r.median_step_time, r.tflops_per_gpu, r.step_time_cv_pct,
+    r.pct_vs_mean_tflops, r.pct_vs_mean_step_time,
+  ][col]);
+}
 
 type AnalyticsPayload = {
   ok: boolean;
@@ -458,11 +482,11 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
     () => (sr?.nccl_collectives_deviation_pct ?? EMPTY_ROWS).filter((r) => r.metric === collective),
     [sr, collective],
   );
-  const ncclDeviationPage = usePagedRows(deviationRows);
+  const ncclDeviationPage = useSortedPagedRows(deviationRows, deviationCell);
   // An older server sends only the all_reduce block; any other collective then has no series.
   const seriesBlock: BusBwSeriesBlock | undefined =
     sr?.nccl_series_by_collective?.[collectiveKey] ?? (collectiveKey === "all_reduce" ? sr?.nccl_ar_series : undefined);
-  const nemotronPage = usePagedRows(sr?.nemotron ?? EMPTY_ROWS);
+  const nemotronPage = useSortedPagedRows(sr?.nemotron ?? EMPTY_ROWS, nemotronCell);
 
   const ncclLineData = useMemo(() => {
     if (!seriesBlock?.sizes_bytes?.length) return null;
@@ -852,12 +876,18 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell>Metric</TableCell>
-                  <TableCell>Rack</TableCell>
-                  <TableCell>Log</TableCell>
-                  <TableCell align="right">Value (GB/s)</TableCell>
-                  <TableCell align="right">Fleet median</TableCell>
-                  <TableCell align="right">% vs median</TableCell>
+                  {DEVIATION_COLUMNS.map(([label, align], col) => (
+                    <SortableHeaderCell
+                      key={label}
+                      label={label}
+                      col={col}
+                      align={align}
+                      variant="plain"
+                      sortCol={ncclDeviationPage.sortCol}
+                      sortDir={ncclDeviationPage.sortDir}
+                      onToggle={ncclDeviationPage.toggleSort}
+                    />
+                  ))}
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -913,13 +943,18 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell>Rack</TableCell>
-                  <TableCell>Log</TableCell>
-                  <TableCell align="right">Median step (s)</TableCell>
-                  <TableCell align="right">TFLOPs/GPU</TableCell>
-                  <TableCell align="right">Step CV%</TableCell>
-                  <TableCell align="right">% vs mean TFLOPs</TableCell>
-                  <TableCell align="right">% vs mean step</TableCell>
+                  {NEMOTRON_COLUMNS.map(([label, align], col) => (
+                    <SortableHeaderCell
+                      key={label}
+                      label={label}
+                      col={col}
+                      align={align}
+                      variant="plain"
+                      sortCol={nemotronPage.sortCol}
+                      sortDir={nemotronPage.sortDir}
+                      onToggle={nemotronPage.toggleSort}
+                    />
+                  ))}
                 </TableRow>
               </TableHead>
               <TableBody>
