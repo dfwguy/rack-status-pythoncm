@@ -30,3 +30,27 @@ case "${CUDA_MAJ:-}" in
     return 1 2>/dev/null || exit 1
     ;;
 esac
+
+# The directory holding the CUDA runtime (libcudart.so.<CUDA_MAJ>) that tools built against this CUDA
+# major load at run time -- ClusterKit dlopens it for its GPU tests and, without it, skips them while
+# reporting success. NVIS_CUDA_LIB (a site override) wins; otherwise the workspace's toolkit for this
+# major, then any workspace toolkit, then the system ones -- the first that actually has the library.
+# Prints nothing when none does.
+nvis_cuda_runtime_libdir() {
+  local maj="${CUDA_MAJ:-}" d
+  if [[ -n "${NVIS_CUDA_LIB:-}" ]]; then printf '%s\n' "${NVIS_CUDA_LIB}"; return 0; fi
+  shopt -s nullglob
+  for d in "${WORKSPACE_DIR:-/nonexistent}/cuda${maj}"/targets/*/lib "${WORKSPACE_DIR:-/nonexistent}"/cuda*/targets/*/lib \
+           /usr/local/cuda-"${maj}"*/targets/*/lib /usr/local/cuda/targets/*/lib; do
+    if [[ -n "$maj" ]]; then
+      compgen -G "$d/libcudart.so.${maj}" >/dev/null || continue
+    else
+      compgen -G "$d/libcudart.so*" >/dev/null || continue
+    fi
+    shopt -u nullglob
+    printf '%s\n' "$d"
+    return 0
+  done
+  shopt -u nullglob
+  return 0
+}

@@ -260,3 +260,84 @@ class TestTheClusterKitTestList:
 
     def test_a_stated_list_becomes_one_flag_per_test(self):
         assert self._exe_opt("gpu_gpu_bw gpu_gpu_lat") == "-d gpu_gpu_bw -d gpu_gpu_lat"
+
+
+class TestClusterKitGpuMode:
+    """GPU-Direct mode: the CUDA runtime on the path, memory-only binding, and no silent skips.
+
+    ClusterKit dlopens libcudart for its GPU tests and, when it cannot, skips them and still exits 0.
+    On GB300 it also ran no GPU tests when pinned to a CPU of the second socket. Both looked like a
+    successful run with no results, which is what the launcher now refuses.
+    """
+
+    def _libdir(self, tmp_path, **env) -> str:
+        r = subprocess.run(
+            ["bash", "-c", f"CUDA_MAJ=13; . {SCRIPTS / 'workspace-cuda-major-common.sh'}; nvis_cuda_runtime_libdir"],
+            env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "WORKSPACE_DIR": str(tmp_path), **env},
+            capture_output=True, text=True, timeout=30, check=False)
+        assert r.returncode == 0, r.stderr
+        return r.stdout.strip()
+
+    def _cuda(self, root: Path, name: str, lib: str) -> Path:
+        d = root / name / "targets" / "sbsa-linux" / "lib"
+        d.mkdir(parents=True)
+        (d / lib).write_text("")
+        return d
+
+    def test_the_workspace_runtime_for_this_major_is_found(self, tmp_path):
+        self._cuda(tmp_path, "cuda", "libcudart.so.12")
+        want = self._cuda(tmp_path, "cuda13", "libcudart.so.13")
+        assert self._libdir(tmp_path) == str(want)
+
+    def test_a_toolkit_of_another_major_is_not_taken(self, tmp_path):
+        self._cuda(tmp_path, "cuda12", "libcudart.so.12")
+        assert self._libdir(tmp_path) == "" or "12" not in self._libdir(tmp_path)
+
+    def test_a_site_override_wins(self, tmp_path):
+        self._cuda(tmp_path, "cuda13", "libcudart.so.13")
+        assert self._libdir(tmp_path, NVIS_CUDA_LIB="/opt/site/cuda/lib") == "/opt/site/cuda/lib"
+
+    def _mapper(self, tmp_path, gpu_tests: str) -> str:
+        stub = tmp_path / "bin"
+        stub.mkdir()
+        (stub / "numactl").write_text('#!/bin/bash\nif [[ "$*" == *"/bin/true"* ]]; then exit 0; fi\necho "numactl $*"\n')
+        (stub / "numactl").chmod(0o755)
+        env = {
+            "PATH": f"{stub}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "CLUSTERKIT_HCA": "roce_vf_r3", "CORE": "73", "NUMA": "1", "GPU": "3",
+            "UCX_IB_GID_INDEX": "5", "CK_GPU_TESTS": gpu_tests,
+        }
+        r = subprocess.run(["bash", str(SCRIPTS / "core_to_hca_clusterkit_roce_numactl.sh"), "clusterkit"],
+                           env=env, capture_output=True, text=True, timeout=30, check=False)
+        return r.stdout.strip()
+
+    def test_gpu_tests_bind_memory_but_do_not_pin_the_cpu(self, tmp_path):
+        assert self._mapper(tmp_path, "1") == "numactl -m 1 -- clusterkit"
+
+    def test_host_tests_keep_the_core_pin(self, tmp_path):
+        assert self._mapper(tmp_path, "0") == "numactl -C 73 -m 1 -- clusterkit"
+
+    def _gpu_flag(self, tests: str | None, extra: str | None = None) -> str:
+        sbatch = (SCRIPTS / "clusterkit.sbatch").read_text()
+        start = sbatch.index('_ck_exe_opt=""')
+        snippet = sbatch[start:sbatch.index("_ck_failed=()", start)]
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+        if tests is not None:
+            env["RACK_CLUSTERKIT_TESTS"] = tests
+        if extra is not None:
+            env["RACK_CLUSTERKIT_EXTRA_OPTS"] = extra
+        r = subprocess.run(["bash", "-c", snippet + 'printf "%s" "$CK_GPU_TESTS"'],
+                           env=env, capture_output=True, text=True, timeout=30, check=False)
+        return r.stdout
+
+    @pytest.mark.parametrize(
+        ("tests", "extra", "flag"),
+        [(None, None, "0"), ("bw lat", None, "0"), ("gpu_gpu_bw gpu_gpu_lat", "-G", "1"), (None, "-g -G", "1")],
+    )
+    def test_gpu_mode_follows_the_requested_tests(self, tests, extra, flag):
+        assert self._gpu_flag(tests, extra) == flag
+
+    def test_a_gpu_run_without_gpu_results_fails_the_rail(self):
+        sbatch = (SCRIPTS / "clusterkit.sbatch").read_text()
+        assert 'compgen -G "${CK_OUTPUT_SUBDIR}/GPU_*.json"' in sbatch
+        assert "-x CK_GPU_TESTS" in sbatch

@@ -56,6 +56,17 @@ if [[ -z "${UCX_IB_GID_INDEX:-}" ]]; then
   fi
 fi
 
+# GPU tests: bind memory to the rail's NUMA node but do not pin the CPU. On GB300 (NscaleTX-NC,
+# 2026-10-12) a CUDA process pinned to any CPU of the second socket -- one core or the rail's whole
+# local_cpulist -- ran no GPU tests at all (ClusterKit skipped them and still exited 0), while
+# memory-only binding measured ~700 Gb/s from either socket. Host-memory tests keep the core pin.
+if [[ "${CK_GPU_TESTS:-0}" == 1 ]] && command -v numactl >/dev/null 2>&1; then
+  if numactl -m "${NUMA}" -- /bin/true 2>/dev/null; then
+    exec numactl -m "${NUMA}" -- "$@"
+  fi
+  exec "$@"
+fi
+
 # Slurm / OMPI may restrict the job cpuset; absolute -C N can fail. Try absolute, then cpuset-relative (+N), then no bind.
 if command -v numactl >/dev/null 2>&1; then
   if numactl -C "${CORE}" -m "${NUMA}" -- /bin/true 2>/dev/null; then

@@ -84,6 +84,17 @@ fi
 
 CK_DIR="${HPCX_DIR}/clusterkit"
 CK_SH="${CK_DIR}/bin/clusterkit.sh"
+
+# ClusterKit dlopens the CUDA runtime for its GPU tests (gpu_gpu_bw, ...). hpcx_load does not put it on
+# LD_LIBRARY_PATH, and without it ClusterKit prints "skip GPU tests" yet exits 0 with no GPU results.
+# mpirun forwards LD_LIBRARY_PATH (-x) to the remote ranks, so setting it here reaches every node.
+_ck_cudart="$(nvis_cuda_runtime_libdir)"
+if [[ -n "${_ck_cudart}" ]]; then
+  export LD_LIBRARY_PATH="${_ck_cudart}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+  echo "### CUDA runtime: ${_ck_cudart}"
+else
+  echo "WARNING: no libcudart.so.${CUDA_MAJ} under ${WORKSPACE_DIR:-?}/cuda* or /usr/local/cuda*; ClusterKit GPU tests will be skipped (set NVIS_CUDA_LIB)." >&2
+fi
 if [[ ! -f "${CK_SH}" ]]; then
   echo "ERROR: missing ${CK_SH}" >&2
   exit 1
@@ -147,6 +158,13 @@ echo "### HPCX_DIR=${HPCX_DIR}"
 
 _ck_exe_opt=""
 for _t in ${RACK_CLUSTERKIT_TESTS:-bw lat}; do _ck_exe_opt+="-d ${_t} "; done
+# GPU tests (gpu_* cases, or clusterkit.sh -g) change how the RoCE mapper binds (see it) and what a run
+# must produce: ClusterKit skips GPU tests it cannot run yet exits 0, so a rail without GPU results fails.
+CK_GPU_TESTS=0
+if [[ " ${RACK_CLUSTERKIT_TESTS:-} " == *" gpu"* || " ${RACK_CLUSTERKIT_EXTRA_OPTS:-} " == *" -g "* ]]; then
+  CK_GPU_TESTS=1
+fi
+export CK_GPU_TESTS
 _ck_failed=()
 
 for idx in "${!_CK_ROWS[@]}"; do
@@ -162,7 +180,7 @@ for idx in "${!_CK_ROWS[@]}"; do
     export CK_OUTPUT_SUBDIR="${PWD}/${DATE}_${SLURM_JOB_ID}_${HCA_TAG}"
     # Match validation/clusterkit/clusterkit.sh: Slurm / Open MPI default binding can pin ranks to a
     # single CPU so numactl -C <core> fails ("cpu argument N is out of range"). Clear binding for mapper.
-    mpi_opt="-x CK_OUTPUT_SUBDIR -x CLUSTERKIT_HCA -x CORE -x NUMA -x GPU -x SLURM_CPU_BIND=none --bind-to none"
+    mpi_opt="-x CK_OUTPUT_SUBDIR -x CLUSTERKIT_HCA -x CORE -x NUMA -x GPU -x CK_GPU_TESTS -x SLURM_CPU_BIND=none --bind-to none"
   else
     device="${row}"
     export HCA_TAG="${device}"
@@ -178,6 +196,10 @@ for idx in "${!_CK_ROWS[@]}"; do
     --exe_opt "${_ck_exe_opt% }" --unidirectional ${RACK_CLUSTERKIT_EXTRA_OPTS-}
   rc=$?
   set +x
+  if [[ "${rc}" -eq 0 && "${CK_GPU_TESTS}" == 1 ]] && ! compgen -G "${CK_OUTPUT_SUBDIR}/GPU_*.json" >/dev/null; then
+    echo "ERROR: ClusterKit reported success for ${HCA_TAG} but wrote no GPU results (it skips GPU tests it cannot run)." >&2
+    rc=1
+  fi
   if [[ "${rc}" -ne 0 ]]; then
     if [[ "${LINK_TECH}" == "roce" ]]; then
       echo "ERROR: clusterkit.sh failed for HCA row ${idx} (${CLUSTERKIT_HCA}), exit ${rc}" >&2
