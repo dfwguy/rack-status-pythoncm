@@ -141,6 +141,18 @@ describe("compute fabric", () => {
   /** The saved project payload from the last saveProject call. */
   const savedProject = () => vi.mocked(catalogService.saveProject).mock.calls.at(-1)?.[0] as Project;
 
+  it("names the container's NCCL net plugin for the cluster and saves it", async () => {
+    await openNewCluster();
+    fireEvent.change(screen.getByPlaceholderText("e.g. Pod A"), { target: { value: "NC" } });
+    fireEvent.change(
+      screen.getByPlaceholderText("NCCL default (e.g. /opt/hpcx/nccl_spectrum-x_plugin/lib/libnccl-net-spcx.so)"),
+      { target: { value: "/opt/hpcx/nccl_spectrum-x_plugin/lib/libnccl-net-spcx.so" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
+    expect(savedProject().clusters[0].fabric?.net_plugin).toBe("/opt/hpcx/nccl_spectrum-x_plugin/lib/libnccl-net-spcx.so");
+  });
+
   it("states the fabric overrides on a new cluster and saves them", async () => {
     await openNewCluster();
     fireEvent.change(screen.getByPlaceholderText("e.g. Pod A"), { target: { value: "NC" } });
@@ -148,7 +160,7 @@ describe("compute fabric", () => {
     fireEvent.change(screen.getByPlaceholderText("Detect (e.g. roce_vf_r)"), { target: { value: "roce_vf_r" } });
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
-    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "", addr_family: "ipv6", compute_hca: "roce_vf_r", rail_rate_gbps: 0 });
+    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "", addr_family: "ipv6", compute_hca: "roce_vf_r", rail_rate_gbps: 0 , net_plugin: "" });
   });
 
   it("states the rail rate and saves it as a number", async () => {
@@ -158,7 +170,7 @@ describe("compute fabric", () => {
     fireEvent.change(screen.getByPlaceholderText("0 = derive (e.g. 200)"), { target: { value: "200" } });
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
-    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "roce", addr_family: "", compute_hca: "", rail_rate_gbps: 200 });
+    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "roce", addr_family: "", compute_hca: "", rail_rate_gbps: 200 , net_plugin: "" });
   });
 
   it("states the cluster's fabric network and saves it", async () => {
@@ -167,7 +179,7 @@ describe("compute fabric", () => {
     choose(/Fabric network/i, /^RoCE$/);
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
-    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "roce", addr_family: "", compute_hca: "", rail_rate_gbps: 0 });
+    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "roce", addr_family: "", compute_hca: "", rail_rate_gbps: 0 , net_plugin: "" });
   });
 
   it("saves a new cluster with node commands as before: through the head node, without sudo", async () => {
@@ -225,7 +237,7 @@ describe("compute fabric", () => {
     expect((screen.getByPlaceholderText("Detect (e.g. roce_vf_r)") as HTMLInputElement).value).toBe("");
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
-    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "", addr_family: "", compute_hca: "", rail_rate_gbps: 0 });
+    expect(savedProject().clusters[0].fabric).toEqual({ scaleout: "", addr_family: "", compute_hca: "", rail_rate_gbps: 0 , net_plugin: "" });
   });
 });
 

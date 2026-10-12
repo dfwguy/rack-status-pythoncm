@@ -206,6 +206,9 @@ export interface ClusterFabric {
   /** The line rate every compute rail should train at, in Gb/s (NC's RoCE VFs are 200). 0 = not
    * stated: the platform's rate applies only where the cluster runs the platform's own protocol. */
   rail_rate_gbps: number;
+  /** NCCL net plugin a containerized job's ranks load: a path INSIDE the image (NC: HPC-X's
+   * Spectrum-X plugin), or "none" for NCCL's built-in transport; "" leaves NCCL's own choice. */
+  net_plugin?: string;
 }
 
 /** The span a launch runs over, which picks one of a cluster's NCCL environment lists. */

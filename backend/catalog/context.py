@@ -251,6 +251,7 @@ def high_overlay(
     _put(out, "NVIS_FABRIC_NETWORK", models.FABRIC_NETWORK_ENV.get(fab.scaleout, ""))
     _put(out, "NVIS_FABRIC_ADDR_FAMILY", fab.addr_family)
     _put(out, "NVIS_FABRIC_HCA", fab.compute_hca)
+    _put(out, "NVIS_FABRIC_NET_PLUGIN", fab.net_plugin)
     # The rate the cluster states for its own rails; beats the platform's (low overlay), which
     # fabric_defaults() only projects where the cluster runs the platform's protocol.
     if fab.rail_rate_gbps > 0:

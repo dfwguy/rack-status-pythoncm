@@ -148,17 +148,26 @@ def nccl_env_scope(rack_count: int, node_count: int) -> str:
 
 
 def nccl_env_scope_for_target(target: str) -> str:
-    """``nccl_env_scope`` for a single-rack launch target (a hostlist, or a rack template).
+    """``nccl_env_scope`` for a launch target (a hostlist, or a rack template).
 
-    A target that does not expand to plain hostnames is a template the site resolves later, which
-    is always a whole rack.
+    The racks are the ones the hosts are placed in, not the one the launch names: a Stage-1 launch
+    against rack U22 with sixteen hosts from U22 and sixteen from U23 crosses the scale-out fabric,
+    and took the single-rack list until this counted (Nscale NC Slurm 189003, 2026-10-12). Hosts
+    the inventory has not placed count as one rack, as before. A target that does not expand to
+    plain hostnames is a template the site resolves later, which is always a whole rack.
     """
     from universal_parser import expand_nodelist
 
     hosts = [h for h in expand_nodelist((target or "").strip()) if h]
     if not hosts or any("[" in h or not is_valid_node_hostname(h) for h in hosts):
         return "rack"
-    return nccl_env_scope(1, len(hosts))
+    try:
+        import native_status
+
+        placed = native_status.placed_racks_of(hosts) or {}
+    except Exception:  # noqa: BLE001 - placement is a refinement; unplaced keeps the old answer
+        placed = {}
+    return nccl_env_scope(max(1, len(set(placed.values()))), len(hosts))
 
 
 def validation_target_for_rack(rack: str, override: str | None) -> str:

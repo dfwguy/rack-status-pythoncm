@@ -49,6 +49,7 @@ class TestTheRecord:
         c = _cluster(scaleout=" RoCE ", addr_family="IPv6", compute_hca=" roce_vf_r ")
         assert c.to_dict()["fabric"] == {
             "scaleout": "roce", "addr_family": "ipv6", "compute_hca": "roce_vf_r", "rail_rate_gbps": 0,
+            "net_plugin": "",
         }
 
     @pytest.mark.parametrize(

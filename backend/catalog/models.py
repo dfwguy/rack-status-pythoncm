@@ -918,6 +918,11 @@ CLUSTER_FABRIC_MAX_RAIL_RATE_GBPS = 3200  # a generous ceiling: catches 200000, 
 _NCCL_IB_HCA_RE = re.compile(r"^[\^=]?[A-Za-z0-9_.-]+(:[0-9]+)?(,[A-Za-z0-9_.-]+(:[0-9]+)?)*$")
 
 
+#: ``fabric.net_plugin``: ``none``, or an absolute path to a shared object (letters, digits and
+#: ``._/+-`` only -- it ends up in a job's ``--export`` list, where a comma or a space would split it).
+_NCCL_NET_PLUGIN_RE = re.compile(r"^(none|/[A-Za-z0-9._/+-]+\.so(\.[0-9]+)*)$")
+
+
 @dataclass
 class ClusterFabric:
     """How this deployment's compute fabric differs from what its platform implies.
@@ -942,6 +947,12 @@ class ClusterFabric:
     #: or 800 for IB). 0 = not stated: the platform's rate applies only where this cluster runs the
     #: platform's own fabric protocol, else nothing is expected (see ``context.fabric_defaults``).
     rail_rate_gbps: int = 0
+    #: The NCCL net plugin a containerized job's ranks load, as a path INSIDE the image (Nscale NC:
+    #: HPC-X's Spectrum-X plugin, /opt/hpcx/nccl_spectrum-x_plugin/lib/libnccl-net-spcx.so), or
+    #: ``none`` for NCCL's built-in IB/RoCE transport; blank leaves NCCL's own choice. A host path
+    #: does not exist in the container ("NET/Plugin: Could not find", NeMo job 188619). Projected as
+    #: ``NVIS_FABRIC_NET_PLUGIN``, read by ``lib/fabric.inc.sh nvis_fabric_container_env``.
+    net_plugin: str = ""
 
     @classmethod
     def from_dict(cls, d: Any) -> ClusterFabric:
@@ -951,10 +962,16 @@ class ClusterFabric:
             addr_family=_as_str(d.get("addr_family")).strip().lower(),
             compute_hca=_as_str(d.get("compute_hca")).strip(),
             rail_rate_gbps=_as_int(d.get("rail_rate_gbps"), 0),
+            net_plugin=_as_str(d.get("net_plugin")).strip(),
         )
 
     def validate(self) -> list[str]:
         problems: list[str] = []
+        if self.net_plugin and not _NCCL_NET_PLUGIN_RE.match(self.net_plugin):
+            problems.append(
+                "fabric.net_plugin must be blank, none, or an absolute path to a .so inside the image "
+                f"(got {self.net_plugin!r})"
+            )
         if self.scaleout not in CLUSTER_FABRIC_SCALEOUT:
             problems.append(f"fabric.scaleout must be one of ib, roce or blank (got {self.scaleout!r})")
         if self.addr_family not in CLUSTER_FABRIC_ADDR_FAMILIES:

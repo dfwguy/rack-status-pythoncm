@@ -58,12 +58,15 @@
 #   nvis_fabric_ns_ifname       — print the routable bootstrap netdev (bond0 if present, else routable)
 #   nvis_fabric_export_from_node <node> [ssh]  — scan a remote node + export (head/submit-time use)
 #   nvis_fabric_report          — human-readable classification (+ expected-vs-actual if NVIS_FABRIC_EXPECT_*)
+#   nvis_fabric_container_env   — what a pyxis/enroot container needs on this fabric (RDMA devices,
+#                                 the cluster's NCCL net plugin); lists the keys in NVIS_FABRIC_CONTAINER_EXPORTS
 #
 # Env inputs (the cluster's fabric record projects the first three -- catalog.models.ClusterFabric):
 #   NVIS_FABRIC_NETWORK      IB | RoCE | auto   the cluster's fabric protocol (default auto); the
 #                            deprecated NVIS_RDMA_LINK_TECH is read only when this is unset
 #   NVIS_FABRIC_HCA          NCCL_IB_HCA value naming the compute plane, e.g. roce_vf_r (default: detect)
 #   NVIS_FABRIC_ADDR_FAMILY  ipv4 | ipv6        (default: detect from the compute GIDs)
+#   NVIS_FABRIC_NET_PLUGIN   NCCL net plugin path inside the job's container, or none (default: NCCL's choice)
 #   GPUS_PER_NODE            gpu count for the gate (default: nvidia-smi -L count, else 4)
 #   NVIS_FABRIC_NS_IFNAME    bootstrap/NS netdev override (default: bond0 if up, else first up eth)
 #   NVIS_FABRIC_EXPECT_RAILS / NVIS_FABRIC_EXPECT_RATE  optional expected profile (validation)
@@ -667,6 +670,48 @@ nvis_fabric_xrack_nvls() {
   else
     printf 1
   fi
+}
+
+# What a pyxis/enroot container needs to reach the compute fabric, for launchers whose ranks run in
+# a container (the LLMB / Comms-Perf-Suite NCCL sweep). Reads NVIS_FAB_LINK from a scan eval'd into
+# the caller (nvis_fabric_export*), else the cluster's declared protocol (nvis_fabric_network).
+#
+#   IB or RoCE   MELLANOX_VISIBLE_DEVICES=all. The node's enroot hook 99-mellanox.sh exposes the
+#                RDMA devices only when it is set; without it the container has none, NCCL reports
+#                "NET/IB : Using [RO]" (no device) and quietly runs on NET/Socket over the bootstrap
+#                netdev -- a 32-node U22+U23 sweep on Nscale NC (Slurm 189003, 2026-10-12) peaked at
+#                7 GB/s. Every other container launcher here sets it; this path never did, and a
+#                single-rack run never noticed because its traffic stays on NVLink.
+#   any fabric   NCCL_NET_PLUGIN=<NVIS_FABRIC_NET_PLUGIN> when the cluster names one (its
+#                fabric.net_plugin): a path INSIDE the image, e.g. the Spectrum-X plugin HPC-X ships
+#                at /opt/hpcx/nccl_spectrum-x_plugin/lib/libnccl-net-spcx.so. A host path does not
+#                exist in the container ("NET/Plugin: Could not find", NeMo job 188619). Blank leaves
+#                NCCL's own choice; "none" asks for no external plugin (built-in IB/RoCE transport).
+#
+# A value the caller already set wins. Exports NVIS_FABRIC_CONTAINER_EXPORTS, the keys set here, for
+# the launcher to force into the job's --export.
+nvis_fabric_container_env() {
+  local link="${NVIS_FAB_LINK:-}"
+  if [[ -z "${link}" ]]; then
+    case "$(nvis_fabric_network | tr '[:upper:]' '[:lower:]')" in
+      ib|infiniband|mlx) link=ib ;;
+      roce|spectrumx|spx) link=roce ;;
+    esac
+  fi
+  NVIS_FABRIC_CONTAINER_EXPORTS=""
+  if [[ "${link}" == "ib" || "${link}" == "roce" ]]; then
+    export MELLANOX_VISIBLE_DEVICES="${MELLANOX_VISIBLE_DEVICES:-all}"
+    NVIS_FABRIC_CONTAINER_EXPORTS="MELLANOX_VISIBLE_DEVICES"
+  fi
+  if [[ -n "${NVIS_FABRIC_NET_PLUGIN:-}" ]]; then
+    export NCCL_NET_PLUGIN="${NCCL_NET_PLUGIN:-${NVIS_FABRIC_NET_PLUGIN}}"
+    NVIS_FABRIC_CONTAINER_EXPORTS="${NVIS_FABRIC_CONTAINER_EXPORTS:+${NVIS_FABRIC_CONTAINER_EXPORTS} }NCCL_NET_PLUGIN"
+  fi
+  export NVIS_FABRIC_CONTAINER_EXPORTS
+  echo "nvis_fabric: container wiring link=${link:-unknown}" \
+       "MELLANOX_VISIBLE_DEVICES=${MELLANOX_VISIBLE_DEVICES:-<unset: no RDMA devices in the container>}" \
+       "NCCL_NET_PLUGIN=${NCCL_NET_PLUGIN:-<NCCL default>}" >&2
+  return 0
 }
 
 nvis_fabric_export_pinned() {

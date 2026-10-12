@@ -52,7 +52,7 @@ const SetupWizard = lazy(() =>
 
 /** All blank: the on-node fabric scan decides. Also the fallback for a cluster stored before the field existed. */
 function emptyFabric(): ClusterFabric {
-  return { scaleout: "", addr_family: "", compute_hca: "", rail_rate_gbps: 0 };
+  return { scaleout: "", addr_family: "", compute_hca: "", rail_rate_gbps: 0, net_plugin: "" };
 }
 
 /** No variables at any span: every launch runs with the scripts' own defaults. */
@@ -728,6 +728,17 @@ export function ProjectsView() {
                 value={(clusterDraft?.cluster.fabric?.rail_rate_gbps ?? 0).toString()}
                 onValueChange={(v) => setFabric({ rail_rate_gbps: intOr(v, 0) })}
                 placeholder="0 = derive (e.g. 200)"
+              />
+            </FormField>
+            <FormField
+              name="cl-fab-plugin"
+              slotLabel="Container NCCL net plugin"
+              slotHelp="Path inside the job's container image, or none for NCCL's built-in IB/RoCE transport. Blank leaves NCCL's own choice. A host path does not exist in the container."
+            >
+              <TextInput
+                value={clusterDraft?.cluster.fabric?.net_plugin || ""}
+                onValueChange={(v) => setFabric({ net_plugin: v })}
+                placeholder="NCCL default (e.g. /opt/hpcx/nccl_spectrum-x_plugin/lib/libnccl-net-spcx.so)"
               />
             </FormField>
           </Box>

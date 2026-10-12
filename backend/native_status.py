@@ -2995,6 +2995,32 @@ def placed_rack_members(rack: str) -> list[str] | None:
     return None
 
 
+def placed_racks_of(hosts: list[str]) -> dict[str, str] | None:
+    """The rack the dashboard's node inventory placed each of *hosts* in: ``host -> rack``.
+
+    The reverse of :func:`placed_rack_members`, scoped the same way. A host the inventory did not
+    place is left out. ``None`` when no inventory has been built for this cluster yet.
+    """
+    wanted = {h.casefold(): h for h in hosts if h}
+    cluster = json.loads(native_state_key(Path("/")))[:-1]
+    with _states_lock:
+        states = list(_states.items())
+    for key, st in states:
+        try:
+            if json.loads(key)[:-1] != cluster:
+                continue
+        except (TypeError, ValueError):
+            continue
+        nodes = st.node_inventory_snapshot().get("nodes")
+        if isinstance(nodes, list):
+            return {
+                wanted[str(n["id"]).casefold()]: str(n["rack"])
+                for n in nodes
+                if str(n.get("id") or "").casefold() in wanted and str(n.get("rack") or "")
+            }
+    return None
+
+
 def build_multirack_status(
     log_dir: Path,
     probe_fn: Callable[[Path], dict[str, object] | None],
