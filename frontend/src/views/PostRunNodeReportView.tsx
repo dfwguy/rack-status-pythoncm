@@ -26,7 +26,7 @@ import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import TextField from "@mui/material/TextField";
-import { Banner, Button, Card, Flex, Tag, Text } from "@nvidia/foundations-react-core";
+import { Banner, Button, Card, Checkbox as KuiCheckbox, Flex, Tag, Text } from "@nvidia/foundations-react-core";
 import {
   Activity,
   Flag,
@@ -113,6 +113,18 @@ function AuditCell({ audit, onOutput }: { audit: PostRunAuditStatus | null; onOu
   );
 }
 
+const SHOW_UNPLACED_KEY = "nvis.postrun.showUnplaced";
+/** Tiles drawn per step in the unplaced pool; a few thousand buttons at once make the page crawl. */
+const UNPLACED_PAGE = 120;
+
+function loadShowUnplaced(): boolean {
+  try {
+    return localStorage.getItem(SHOW_UNPLACED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export function PostRunNodeReportView() {
   const { confirm, confirmDialog } = useConfirm();
   const [data, setData] = useState<PostRunNodeReportResponse | null>(null);
@@ -120,6 +132,11 @@ export function PostRunNodeReportView() {
   const [error, setError] = useState("");
   const [section, setSection] = useState<Section>("history");
   const [rack, setRack] = useState("all");
+  // Unplaced nodes (in the scheduler, but with no rack in the cluster manager) can be thousands on a
+  // fleet that is still being racked, and they drown the real racks. Hidden unless asked for, and
+  // remembered like the other view choices.
+  const [showUnplaced, setShowUnplaced] = useState<boolean>(loadShowUnplaced);
+  const [unplacedLimit, setUnplacedLimit] = useState(UNPLACED_PAGE);
   const [search, setSearch] = useState("");
   const [selectedSnapshot, setSelected] = useState<PostRunNode | null>(null);
   const [category, setCategory] = useState("validation");
@@ -186,7 +203,23 @@ export function PostRunNodeReportView() {
     };
   }, [activeAudit, load]);
 
-  const groups = useMemo(() => data?.racks || [], [data]);
+  const unplacedCount = useMemo(
+    () => (data?.racks || []).filter((g) => g.kind === "unplaced").reduce((n, g) => n + g.nodes.length, 0),
+    [data],
+  );
+  const groups = useMemo(
+    () => (data?.racks || []).filter((g) => showUnplaced || g.kind !== "unplaced"),
+    [data, showUnplaced],
+  );
+  const changeShowUnplaced = (on: boolean) => {
+    setShowUnplaced(on);
+    if (!on && rack === "unplaced") setRack("all");
+    try {
+      localStorage.setItem(SHOW_UNPLACED_KEY, on ? "1" : "0");
+    } catch {
+      /* ignore persistence errors */
+    }
+  };
   // A pool has one card and no racks to choose between, so the picker would offer nothing.
   const showRackFilter = groups.length > 1 || groups.some((g) => g.kind === "rack");
   const selected = useMemo(() => {
@@ -195,14 +228,14 @@ export function PostRunNodeReportView() {
   }, [data, selectedSnapshot]);
   const filteredRacks = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return (data?.racks || [])
+    return groups
       .filter((row) => rack === "all" || row.rack === rack)
       .map((row) => ({
         ...row,
         nodes: row.nodes.filter((node) => !needle || node.node.toLowerCase().includes(needle)),
       }))
       .filter((row) => row.nodes.length > 0);
-  }, [data, rack, search]);
+  }, [groups, rack, search]);
   // The floor can be thousands of racks; page the groups so the history view is one screen,
   // not an endless scroll. 10 per page by default (the pager still offers larger sizes).
   const pagedRacks = usePagedRows(filteredRacks, 10);
@@ -333,6 +366,13 @@ export function PostRunNodeReportView() {
             <MenuItem value="all">All racks</MenuItem>
             {groups.map((g) => <MenuItem key={g.rack} value={g.rack}>{g.label || g.rack}</MenuItem>)}
           </TextField>}
+          {unplacedCount > 0 && (
+            <KuiCheckbox
+              checked={showUnplaced}
+              onCheckedChange={(v) => changeShowUnplaced(v === true)}
+              slotLabel={<Text kind="body/regular/sm">Show unplaced nodes ({unplacedCount.toLocaleString()})</Text>}
+            />
+          )}
           <TextField
             size="small"
             label="Find node"
@@ -362,12 +402,13 @@ export function PostRunNodeReportView() {
                 ) : null}
                 {rackRow.kind === "unplaced" ? (
                   <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
-                    The cluster's rack mapping did not place these nodes.
+                    These nodes are in the scheduler but the cluster's rack mapping did not place them, so they
+                    are listed as a pool.
                   </Text>
                 ) : null}
               </Flex>
               <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(145px, 1fr))", gap: 1 }}>
-                {rackRow.nodes.map((node) => (
+                {(rackRow.kind === "unplaced" ? rackRow.nodes.slice(0, unplacedLimit) : rackRow.nodes).map((node) => (
                   <Box
                     key={node.node}
                     component="button"
@@ -400,6 +441,17 @@ export function PostRunNodeReportView() {
                   </Box>
                 ))}
               </Box>
+              {rackRow.kind === "unplaced" && rackRow.nodes.length > unplacedLimit ? (
+                <Flex align="center" gap="2" style={{ marginTop: 12 }}>
+                  <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                    Showing {unplacedLimit.toLocaleString()} of {rackRow.nodes.length.toLocaleString()}.
+                  </Text>
+                  <Button kind="secondary" size="small" onClick={() => setUnplacedLimit((n) => n + UNPLACED_PAGE)}>
+                    Show {Math.min(UNPLACED_PAGE, rackRow.nodes.length - unplacedLimit).toLocaleString()} more
+                  </Button>
+                  <Button kind="tertiary" size="small" onClick={() => setUnplacedLimit(rackRow.nodes.length)}>Show all</Button>
+                </Flex>
+              ) : null}
             </Paper>
           ))}
           <TablePager {...pagedRacks} noun="racks" />
