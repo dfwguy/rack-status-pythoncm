@@ -74,6 +74,58 @@ interface NodesViewProps {
   logDir?: string;
 }
 
+type NodeSortKey = "node" | "rack" | "row" | "gpus" | "status";
+
+/** Problems first when ascending: a down node is what an operator scanning the list is looking for. */
+const STATUS_RANK: Record<NodeInfo["status"], number> = { down: 0, inst: 1, unknown: 2, up: 3 };
+
+const natural = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
+
+/**
+ * Order two nodes by a column. A missing value (unassigned rack, no row, no GPU count) sorts last
+ * in either direction, so reversing the column never floods the top with blanks, and the node name
+ * breaks every tie so the order is stable between polls.
+ */
+function compareNodes(a: NodeTableRow, b: NodeTableRow, key: NodeSortKey, asc: boolean): number {
+  const dir = asc ? 1 : -1;
+  const byName = natural(a.id, b.id);
+  const ordered = (cmp: number) => (cmp !== 0 ? cmp * dir : byName);
+  const withBlanksLast = (blankA: boolean, blankB: boolean, cmp: () => number) => {
+    if (blankA !== blankB) return blankA ? 1 : -1;
+    return blankA ? byName : ordered(cmp());
+  };
+  switch (key) {
+    case "rack":
+      return withBlanksLast(a.rack === null, b.rack === null, () => natural(a.rack ?? "", b.rack ?? ""));
+    case "row":
+      return withBlanksLast(!a.row, !b.row, () => natural(a.row, b.row));
+    case "gpus":
+      return withBlanksLast(a.gpu_count === undefined, b.gpu_count === undefined, () => (a.gpu_count ?? 0) - (b.gpu_count ?? 0));
+    case "status":
+      return ordered(STATUS_RANK[a.status] - STATUS_RANK[b.status]);
+    default:
+      return ordered(byName);
+  }
+}
+
+function SortHeader({
+  label, sortKey, sort, onSort,
+}: {
+  label: string;
+  sortKey: NodeSortKey;
+  sort: { key: NodeSortKey; asc: boolean };
+  onSort: (key: NodeSortKey) => void;
+}) {
+  const active = sort.key === sortKey;
+  return (
+    <TableCell sortDirection={active ? (sort.asc ? "asc" : "desc") : false}>
+      <TableSortLabel active={active} direction={active && !sort.asc ? "desc" : "asc"} onClick={() => onSort(sortKey)}>
+        {label}
+      </TableSortLabel>
+    </TableCell>
+  );
+}
+
 /**
  * GPUs a node reports against the count its platform is designed for, drawn as a status tag:
  * green when they match, red when they differ, gray when the scheduler reported none. With no
@@ -149,7 +201,7 @@ export function NodesView({ data, logDir }: NodesViewProps) {
   const [nameQuery, setNameQuery] = useState(linkedNode);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
-  const [sortAsc, setSortAsc] = useState(true);
+  const [sort, setSort] = useState<{ key: NodeSortKey; asc: boolean }>({ key: "node", asc: true });
   const [selectedId, setSelectedId] = useState<string | null>(linkedNode || null);
   const [tabIndex, setTabIndex] = useState(0);
   const [parserOpen, setParserOpen] = useState(false);
@@ -222,12 +274,15 @@ export function NodesView({ data, logDir }: NodesViewProps) {
       if (q && !n.id.toLowerCase().includes(q)) return false;
       return true;
     });
-    out.sort((a, b) => {
-      const cmp = a.id.localeCompare(b.id, undefined, { numeric: true });
-      return sortAsc ? cmp : -cmp;
-    });
+    out.sort((a, b) => compareNodes(a, b, sort.key, sort.asc));
     return out;
-  }, [allNodes, nameQuery, rowFilters, rackFilters, sortAsc]);
+  }, [allNodes, nameQuery, rowFilters, rackFilters, sort]);
+
+  /** A new column starts ascending; clicking the active one reverses it. Back to page one either way. */
+  const sortBy = useCallback((key: NodeSortKey) => {
+    setSort((cur) => ({ key, asc: cur.key === key ? !cur.asc : true }));
+    setPage(0);
+  }, []);
 
   /**
    * Clamp the page during render rather than in an effect: a live status poll
@@ -342,15 +397,11 @@ export function NodesView({ data, logDir }: NodesViewProps) {
         <Table size="small" aria-label="Compute nodes">
           <TableHead>
             <TableRow>
-              <TableCell>
-                <TableSortLabel active direction={sortAsc ? "asc" : "desc"} onClick={() => setSortAsc((v) => !v)}>
-                  Node
-                </TableSortLabel>
-              </TableCell>
-              <TableCell>Rack</TableCell>
-              <TableCell>Row</TableCell>
-              <TableCell>GPUs</TableCell>
-              <TableCell>Status</TableCell>
+              <SortHeader label="Node" sortKey="node" sort={sort} onSort={sortBy} />
+              <SortHeader label="Rack" sortKey="rack" sort={sort} onSort={sortBy} />
+              <SortHeader label="Row" sortKey="row" sort={sort} onSort={sortBy} />
+              <SortHeader label="GPUs" sortKey="gpus" sort={sort} onSort={sortBy} />
+              <SortHeader label="Status" sortKey="status" sort={sort} onSort={sortBy} />
               <TableCell>BMC / RedFish</TableCell>
               <TableCell align="right">Terminal</TableCell>
             </TableRow>

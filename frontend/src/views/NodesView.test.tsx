@@ -364,4 +364,76 @@ describe("NodesView", () => {
       expect(within(table).queryByText("8/0")).not.toBeInTheDocument();
     });
   });
+
+  describe("column sorting", () => {
+    // Node ids chosen so name order differs from every other column's order.
+    const fleet = (): NodeInventoryEntry[] => [
+      { ...node("n-a", "rack-10"), status: "up", gpu_count: 4 },
+      { ...node("n-b", "rack-2"), status: "down", gpu_count: 3 },
+      { ...node("n-c"), status: "inst" },
+      { ...node("n-d", "rack-2"), status: "unknown", gpu_count: 4 },
+    ];
+    const hierarchy = {
+      levels: ["row", "rack"],
+      sections: [{
+        key: "", label: "", rows: [
+          { key: "row-b", label: "B", racks: [{ rack: "rack-10", label: "10" }] },
+          { key: "row-a", label: "A", racks: [{ rack: "rack-2", label: "2" }] },
+        ],
+      }],
+      unmatched: [],
+    };
+    const view = () => renderNodes({ ...status(["rack-2", "rack-10"]), nodes: fleet(), hierarchy });
+    /** Node ids in the order the table shows them. */
+    const order = () =>
+      within(screen.getByRole("table", { name: "Compute nodes" }))
+        .getAllByText(/^n-[a-d]$/).map((el) => el.textContent);
+    const header = (name: string) => screen.getByRole("button", { name: new RegExp(`^${name}$`) });
+
+    it("starts sorted by node name, and a second click reverses it", () => {
+      view();
+      expect(order()).toEqual(["n-a", "n-b", "n-c", "n-d"]);
+      fireEvent.click(header("Node"));
+      expect(order()).toEqual(["n-d", "n-c", "n-b", "n-a"]);
+    });
+
+    it("sorts by rack naturally, with unassigned last in both directions", () => {
+      view();
+      fireEvent.click(header("Rack"));
+      expect(order()).toEqual(["n-b", "n-d", "n-a", "n-c"]);
+      fireEvent.click(header("Rack"));
+      expect(order()).toEqual(["n-a", "n-b", "n-d", "n-c"]);
+    });
+
+    it("sorts by datacenter row, blank rows last", () => {
+      view();
+      fireEvent.click(header("Row"));
+      expect(order()).toEqual(["n-b", "n-d", "n-a", "n-c"]);
+      fireEvent.click(header("Row"));
+      expect(order()).toEqual(["n-a", "n-b", "n-d", "n-c"]);
+    });
+
+    it("sorts by GPU count, nodes with no count last in both directions", () => {
+      view();
+      fireEvent.click(header("GPUs"));
+      expect(order()).toEqual(["n-b", "n-a", "n-d", "n-c"]);
+      fireEvent.click(header("GPUs"));
+      expect(order()).toEqual(["n-a", "n-d", "n-b", "n-c"]);
+    });
+
+    it("sorts by status with problems first, then reverses", () => {
+      view();
+      fireEvent.click(header("Status"));
+      expect(order()).toEqual(["n-b", "n-c", "n-d", "n-a"]);
+      fireEvent.click(header("Status"));
+      expect(order()).toEqual(["n-a", "n-d", "n-c", "n-b"]);
+    });
+
+    it("marks only the active column as sorted (aria-sort)", () => {
+      view();
+      fireEvent.click(header("GPUs"));
+      const cells = within(screen.getByRole("table", { name: "Compute nodes" })).getAllByRole("columnheader");
+      expect(cells.map((c) => c.getAttribute("aria-sort"))).toEqual([null, null, null, "ascending", null, null, null]);
+    });
+  });
 });
