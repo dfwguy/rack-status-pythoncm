@@ -693,7 +693,6 @@ def _post_run_inventory() -> list[dict]:
             reason = ""
         by_node[node.casefold()] = {
             "node": node,
-            "rack": post_run_report.rack_for_node(node),
             "state": state,
             "reason": reason,
         }
@@ -722,14 +721,39 @@ def _post_run_audits() -> list[dict]:
                     "kind": kind,
                     "workflow_id": str(run.get("workflow_id") or ""),
                     "run_state": str(run.get("state") or ""),
-                    "rack": rack or post_run_report.rack_for_node(
-                        str(node_result.get("node") or "")
-                    ),
+                    "rack": rack,
                     "run_id": str(run.get("run_id") or ""),
                     "started_at": str(run.get("started_at") or ""),
                     "updated_at": str(run.get("updated_at") or ""),
                 })
     return out
+
+
+def _post_run_placement() -> tuple[dict, str]:
+    """Where each node sits, from the snapshot the Racks page draws, plus why it is missing.
+
+    Never blocks and never raises: a report that cannot place nodes yet still renders them,
+    grouped as unplaced (or as the one pool card on a pool cluster, which needs no snapshot).
+    """
+    import native_status
+    from rack_status_engine import get_cluster_snapshot
+
+    from api.dashboard import _merge_scalable_units_into_status_payload
+
+    mode = native_status.rack_mapping_mode()
+    error = ""
+    payload: dict = {}
+    try:
+        payload = dict(get_cluster_snapshot(_default_log_dir(), wait=False).payload or {})
+        _merge_scalable_units_into_status_payload(payload)
+    except Exception as exc:  # noqa: BLE001 - placement is enrichment; the report must still render
+        error = f"{type(exc).__name__}: {exc}"[:200]
+        _logger.warning("post-run: node placement unavailable: %s", exc)
+    payload["rack_mapping_mode"] = mode
+    placement = post_run_report.placement_from_snapshot(payload)
+    if mode != "pool" and not placement["nodes"] and not error:
+        error = "Node placement is still loading; nodes are shown unplaced until the rack snapshot is ready."
+    return placement, error
 
 
 def _build_post_run_report(*, rack: str = "", node: str = "", force: bool = False) -> dict:
@@ -780,6 +804,7 @@ def _build_post_run_report(*, rack: str = "", node: str = "", force: bool = Fals
             healthcheck_error = f"{type(exc).__name__}: {exc}"[:200]
             _logger.warning("post-run: health-check evidence unavailable: %s", exc)
 
+        placement, placement_error = _post_run_placement()
         payload = post_run_report.build_report(
             events=[*post_run_report.load_events(), *healthcheck_events],
             inventory=inventory,
@@ -787,7 +812,9 @@ def _build_post_run_report(*, rack: str = "", node: str = "", force: bool = Fals
             audit_results=_post_run_audits(),
             rack=rack,
             node=node,
+            placement=placement,
         )
+        payload["placement_error"] = placement_error
         payload["refresh"] = {
             "activities": len(activities),
             "merge": merge,
@@ -798,7 +825,7 @@ def _build_post_run_report(*, rack: str = "", node: str = "", force: bool = Fals
             "healthcheck_error": healthcheck_error,
             "healthcheck_events": len(healthcheck_events),
         }
-        if not rack and not node:
+        if not rack and not node and not placement_error:
             _post_run_report_cache = (time.monotonic(), payload)
         return payload
 
@@ -853,7 +880,7 @@ def api_post_run_node_mark():
             "ok": False,
             "error": "reason is required (maximum 1000 characters)",
         }), 400
-    rack = post_run_report.rack_for_node(node)
+    rack = _post_run_placement()[0]["nodes"].get(node.casefold(), {}).get("rack", "")
     slurm_reason = ""
     drain_result = "local annotation only; scheduler state unchanged"
     drained = False

@@ -110,3 +110,122 @@ def test_merge_preserves_exact_participation_after_accounting_refresh(monkeypatc
     assert first["after"] == 1
     assert second["after"] == 1
     assert post_run_report.load_events()[0]["state"] == "FAILED"
+
+
+# --- grouping follows the cluster's mapping, not the hostname --------------------------------------
+
+NC_NODES = [f"sys1-gso1-p-phy-gpu{n}-su{su}" for su in (19, 20) for n in (1, 2, 3)]
+
+
+def _snapshot(mode, *, placed=None, units=None):
+    """The slice of a cluster snapshot payload the report reads."""
+    placed = placed or {}
+    return {
+        "rack_mapping_mode": mode,
+        "nodes": [
+            {"id": n, "rack": placed.get(n), "rack_unit": str(i + 11) if placed.get(n) else ""}
+            for i, n in enumerate(NC_NODES)
+        ],
+        "rows": [{"rack": r} for r in ("U20", "U21")],
+        "scalable_units": units or [],
+    }
+
+
+def _report(placement):
+    return post_run_report.build_report(
+        events=[],
+        inventory=[{"node": n, "state": "idle", "reason": ""} for n in NC_NODES],
+        findings=[],
+        audit_results=[],
+        placement=placement,
+    )
+
+
+def test_translate_groups_by_the_providers_rack_not_the_hostname_prefix():
+    # On Nscale NC the -suN suffix is the SU, so the old prefix rule grouped gpuN across SUs.
+    placed = {n: ("U20" if "su19" in n else "U21") for n in NC_NODES}
+    report = _report(post_run_report.placement_from_snapshot(_snapshot("translate", placed=placed)))
+    groups = {g["rack"]: [n["node"] for n in g["nodes"]] for g in report["racks"]}
+    assert set(groups) == {"U20", "U21"}
+    assert groups["U20"] == [n for n in NC_NODES if "su19" in n]
+    assert report["rack_mapping_mode"] == "translate"
+    assert all(g["kind"] == "rack" for g in report["racks"])
+
+
+def test_translate_groups_carry_their_scalable_unit_and_the_racks_page_order():
+    placed = {n: ("U20" if "su19" in n else "U21") for n in NC_NODES}
+    units = [{"id": "su19", "label": "SU19", "racks": ["U20"]}, {"id": "su20", "label": "SU20", "racks": ["U21"]}]
+    report = _report(post_run_report.placement_from_snapshot(_snapshot("translate", placed=placed, units=units)))
+    assert [g["rack"] for g in report["racks"]] == ["U20", "U21"]
+    assert report["racks"][0]["scalable_unit"] == {"id": "su19", "label": "SU19"}
+
+
+def test_pool_puts_every_node_in_one_pool_card_and_invents_no_rack():
+    report = _report(post_run_report.placement_from_snapshot(_snapshot("pool")))
+    assert len(report["racks"]) == 1
+    pool = report["racks"][0]
+    assert (pool["kind"], pool["label"]) == ("pool", "Node pool")
+    assert len(pool["nodes"]) == len(NC_NODES)
+    assert {n["rack"] for n in report["nodes"]} == {""}
+
+
+def test_a_pool_cluster_needs_no_snapshot_to_show_its_pool():
+    # No inventory yet (cold snapshot): the pool card is still right, because it asserts no placement.
+    report = _report(post_run_report.placement_from_snapshot({"rack_mapping_mode": "pool"}))
+    assert [g["kind"] for g in report["racks"]] == ["pool"]
+
+
+def test_a_node_the_mapping_could_not_place_is_unplaced_never_folded_into_a_rack():
+    placed = {NC_NODES[0]: "U20"}
+    report = _report(post_run_report.placement_from_snapshot(_snapshot("translate", placed=placed)))
+    kinds = {g["rack"]: g["kind"] for g in report["racks"]}
+    assert kinds == {"U20": "rack", "unplaced": "unplaced"}
+    unplaced = next(g for g in report["racks"] if g["kind"] == "unplaced")
+    assert len(unplaced["nodes"]) == len(NC_NODES) - 1
+
+
+def test_without_a_snapshot_a_non_pool_cluster_shows_everything_unplaced():
+    report = _report(post_run_report.placement_from_snapshot(None))
+    assert [g["kind"] for g in report["racks"]] == ["unplaced"]
+
+
+def test_a_rack_stored_on_an_old_event_does_not_override_the_current_mapping():
+    # History written when racks were hostname-derived carries a stale rack; placement wins.
+    node = NC_NODES[0]
+    event = {"node": node, "rack": "sys1-gso1-p-phy-gpu1", "job_id": "1", "activity_id": "a",
+             "started_at": "2026-10-01T00:00:00Z", "attributed_failure": False}
+    report = post_run_report.build_report(
+        events=[event],
+        inventory=[{"node": node, "state": "idle", "reason": ""}],
+        findings=[], audit_results=[],
+        placement=post_run_report.placement_from_snapshot(_snapshot("translate", placed={node: "U20"})),
+    )
+    assert report["nodes"][0]["rack"] == "U20"
+
+
+def test_the_rack_filter_applies_to_the_mapped_rack_and_the_pool():
+    placed = {n: ("U20" if "su19" in n else "U21") for n in NC_NODES}
+    placement = post_run_report.placement_from_snapshot(_snapshot("translate", placed=placed))
+    filtered = post_run_report.build_report(
+        events=[], inventory=[{"node": n, "state": "idle", "reason": ""} for n in NC_NODES],
+        findings=[], audit_results=[], rack="U21", placement=placement,
+    )
+    assert {n["rack"] for n in filtered["nodes"]} == {"U21"}
+    pool = post_run_report.build_report(
+        events=[], inventory=[{"node": n, "state": "idle", "reason": ""} for n in NC_NODES],
+        findings=[], audit_results=[], rack="pool",
+        placement=post_run_report.placement_from_snapshot(_snapshot("pool")),
+    )
+    assert len(pool["nodes"]) == len(NC_NODES)
+
+
+def test_nodes_inside_a_group_sort_naturally_not_lexically():
+    nodes = [f"sys1-gso1-p-phy-gpu{n}-su19" for n in (10, 9, 100, 1)]
+    placement = post_run_report.placement_from_snapshot(
+        {"rack_mapping_mode": "translate", "nodes": [{"id": n, "rack": "U20"} for n in nodes], "rows": [{"rack": "U20"}]}
+    )
+    report = post_run_report.build_report(
+        events=[], inventory=[{"node": n, "state": "idle", "reason": ""} for n in nodes],
+        findings=[], audit_results=[], placement=placement,
+    )
+    assert [n["node"] for n in report["racks"][0]["nodes"]] == [f"sys1-gso1-p-phy-gpu{n}-su19" for n in (1, 9, 10, 100)]

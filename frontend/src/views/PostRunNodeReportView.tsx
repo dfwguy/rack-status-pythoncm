@@ -186,7 +186,9 @@ export function PostRunNodeReportView() {
     };
   }, [activeAudit, load]);
 
-  const racks = useMemo(() => (data?.racks || []).map((row) => row.rack), [data]);
+  const groups = useMemo(() => data?.racks || [], [data]);
+  // A pool has one card and no racks to choose between, so the picker would offer nothing.
+  const showRackFilter = groups.length > 1 || groups.some((g) => g.kind === "rack");
   const selected = useMemo(() => {
     if (!selectedSnapshot) return null;
     return data?.nodes.find((row) => row.node === selectedSnapshot.node) || selectedSnapshot;
@@ -294,6 +296,12 @@ export function PostRunNodeReportView() {
         </Banner>
       ) : null}
 
+      {data?.placement_error ? (
+        <Banner status="warning" kind="inline" style={{ marginBottom: 16 }}>
+          Rack placement is not available yet, so nodes may appear unplaced: {data.placement_error}
+        </Banner>
+      ) : null}
+
       <Box sx={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(150px, 1fr))", gap: 1.5, mb: 2 }}>
         {[
           ["Nodes", data?.summary.nodes ?? 0],
@@ -321,10 +329,10 @@ export function PostRunNodeReportView() {
             <Network size={15} /> Node network status report
           </Button>
           <Box sx={{ flex: 1 }} />
-          <TextField select size="small" label="Rack" value={rack} onChange={(event) => setRack(event.target.value)} sx={{ minWidth: 190 }}>
+          {showRackFilter && <TextField select size="small" label="Rack" value={rack} onChange={(event) => setRack(event.target.value)} sx={{ minWidth: 190 }}>
             <MenuItem value="all">All racks</MenuItem>
-            {racks.map((name) => <MenuItem key={name} value={name}>{name}</MenuItem>)}
-          </TextField>
+            {groups.map((g) => <MenuItem key={g.rack} value={g.rack}>{g.label || g.rack}</MenuItem>)}
+          </TextField>}
           <TextField
             size="small"
             label="Find node"
@@ -342,8 +350,21 @@ export function PostRunNodeReportView() {
           {pagedRacks.visible.map((rackRow) => (
             <Paper key={rackRow.rack} variant="outlined" sx={{ p: 2 }}>
               <Flex align="center" gap="2" style={{ marginBottom: 12 }}>
-                <Text kind="body/bold/md">{rackRow.rack}</Text>
+                <Text kind="body/bold/md">{rackRow.label || rackRow.rack}</Text>
+                {rackRow.scalable_unit ? (
+                  <Tag color="blue" kind="outline" readOnly density="compact">{rackRow.scalable_unit.label}</Tag>
+                ) : null}
                 <Tag color="gray" kind="outline" readOnly density="compact">{rackRow.nodes.length} nodes</Tag>
+                {rackRow.kind === "pool" ? (
+                  <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                    This cluster has no rack placement, so every node is in one pool.
+                  </Text>
+                ) : null}
+                {rackRow.kind === "unplaced" ? (
+                  <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                    The cluster's rack mapping did not place these nodes.
+                  </Text>
+                ) : null}
               </Flex>
               <Box sx={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(145px, 1fr))", gap: 1 }}>
                 {rackRow.nodes.map((node) => (
@@ -399,7 +420,7 @@ export function PostRunNodeReportView() {
               {sectionNodes.map((node) => (
                 <TableRow key={node.node} hover>
                   <TableCell sx={{ fontFamily: "monospace" }}>{node.node}</TableCell>
-                  <TableCell>{node.rack}</TableCell>
+                  <TableCell>{node.rack || "—"}</TableCell>
                   <TableCell>
                     <Tag color={stateColor(node.slurm_state)} kind="outline" readOnly density="compact">{node.slurm_state}</Tag>
                     {node.slurm_reason ? <Text kind="body/regular/sm" style={{ display: "block", marginTop: 4 }}>{node.slurm_reason}</Text> : null}

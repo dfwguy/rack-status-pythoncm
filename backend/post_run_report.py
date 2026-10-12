@@ -290,6 +290,101 @@ def events_from_accounting(
     return out
 
 
+POOL_GROUP = "pool"
+UNPLACED_GROUP = "unplaced"
+
+
+def _natural_node_key(name: str) -> list[tuple[int, int, str]]:
+    """gpu9 before gpu10: digit runs compare as numbers."""
+    return [(0, int(part), "") if part.isdigit() else (1, 0, part) for part in re.split(r"(\d+)", name.casefold()) if part]
+
+
+def placement_from_snapshot(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Where each node sits on the floor, read from the cluster snapshot the Racks page draws.
+
+    The post-run report used to name a node's rack by stripping the last ``-`` component of its
+    hostname. That is the ``direct`` mapping's rule and nobody else's: on a ``translate`` cluster
+    like Nscale NC (``sys1-gso1-p-phy-gpu100-su20``) it grouped the same node number across every
+    SU, and on a ``pool`` cluster it invented racks where none exist. The snapshot's ``nodes``
+    already carry the placement the cluster's mapping mode, naming templates and provider produced
+    (``native_status.build_node_inventory``), so the report reads that instead of re-deriving it.
+
+    Returns ``{"mode", "nodes": {host.casefold(): {"rack", "rack_unit", "tray"}}, "rack_order",
+    "su_by_rack": {rack: {"id", "label"}}}``. A snapshot without an inventory yields an empty
+    ``nodes`` map, which the caller reports as unplaced rather than guessing.
+    """
+    payload = payload if isinstance(payload, dict) else {}
+    mode = str(payload.get("rack_mapping_mode") or "direct")
+    nodes: dict[str, dict[str, Any]] = {}
+    inventory = payload.get("nodes")
+    for entry in inventory if isinstance(inventory, list) else []:
+        if not isinstance(entry, dict) or not entry.get("id"):
+            continue
+        nodes[str(entry["id"]).casefold()] = {
+            "rack": str(entry.get("rack") or ""),
+            "rack_unit": str(entry.get("rack_unit") or ""),
+            "tray": entry.get("tray") if isinstance(entry.get("tray"), int) else None,
+        }
+    rack_order = [
+        str(row.get("rack"))
+        for row in payload.get("rows") or []
+        if isinstance(row, dict) and row.get("rack")
+    ]
+    su_by_rack: dict[str, dict[str, str]] = {}
+    for unit in payload.get("scalable_units") or []:
+        if not isinstance(unit, dict):
+            continue
+        for rack in unit.get("racks") or []:
+            su_by_rack[str(rack)] = {
+                "id": str(unit.get("id") or ""),
+                "label": str(unit.get("label") or unit.get("id") or ""),
+            }
+    return {
+        "mode": mode if mode in {"direct", "translate", "pool"} else "direct",
+        "nodes": nodes,
+        "rack_order": rack_order,
+        "su_by_rack": su_by_rack,
+    }
+
+
+def group_nodes(
+    rows: list[dict[str, Any]], placement: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Group node rows the way the cluster's mapping mode places them.
+
+    * ``pool`` -- no placement exists, so every node goes in the one pool card (a rack here would
+      assert a physical fact the cluster does not have).
+    * ``direct`` / ``translate`` -- one group per rack, in the Racks page's order, tagged with its
+      Scalable Unit when the cluster models one; a node the mapping could not place is kept in an
+      "Unplaced" group, never folded into a neighbour.
+    """
+    mode = placement.get("mode") or "direct"
+    if mode == "pool":
+        if not rows:
+            return []
+        return [{
+            "rack": POOL_GROUP, "label": "Node pool", "kind": "pool",
+            "scalable_unit": None, "nodes": rows,
+        }]
+    by_rack: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_rack.setdefault(str(row.get("rack") or ""), []).append(row)
+    order = {rack: i for i, rack in enumerate(placement.get("rack_order") or [])}
+    su_by_rack = placement.get("su_by_rack") or {}
+    groups: list[dict[str, Any]] = []
+    for rack in sorted((r for r in by_rack if r), key=lambda r: (order.get(r, len(order)), r)):
+        groups.append({
+            "rack": rack, "label": rack, "kind": "rack",
+            "scalable_unit": su_by_rack.get(rack), "nodes": by_rack[rack],
+        })
+    if "" in by_rack:
+        groups.append({
+            "rack": UNPLACED_GROUP, "label": "Unplaced", "kind": "unplaced",
+            "scalable_unit": None, "nodes": by_rack[""],
+        })
+    return groups
+
+
 def build_report(
     *,
     events: list[dict[str, Any]],
@@ -298,17 +393,25 @@ def build_report(
     audit_results: list[dict[str, Any]],
     rack: str = "",
     node: str = "",
+    placement: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     rack_filter = rack.strip().casefold()
     node_filter = node.strip().casefold()
+    placement = placement or placement_from_snapshot(None)
+    placed = placement.get("nodes") or {}
+    pool = placement.get("mode") == "pool"
     by_node: dict[str, dict[str, Any]] = {}
 
-    def ensure(raw_node: str, raw_rack: str = "") -> dict[str, Any] | None:
+    def ensure(raw_node: str, _raw_rack: str = "") -> dict[str, Any] | None:
+        # The rack a stored event, finding or audit carries was derived from the hostname when it
+        # was written, so it is ignored: placement is the cluster's current mapping, and a node
+        # moved between racks must not keep its old group in the history.
         name = str(raw_node or "").strip()
         if not _NODE_RE.fullmatch(name):
             return None
-        rk = str(raw_rack or rack_for_node(name)).strip()
-        if rack_filter and rk.casefold() != rack_filter:
+        where = placed.get(name.casefold()) or {}
+        rk = "" if pool else str(where.get("rack") or "")
+        if rack_filter and rk.casefold() != rack_filter and not (pool and rack_filter == POOL_GROUP):
             return None
         if node_filter and name.casefold() != node_filter:
             return None
@@ -318,6 +421,8 @@ def build_report(
             {
                 "node": name,
                 "rack": rk,
+                "rack_unit": str(where.get("rack_unit") or ""),
+                "tray": where.get("tray"),
                 "slurm_state": "unknown",
                 "slurm_reason": "",
                 "runs": [],
@@ -444,11 +549,9 @@ def build_report(
         )
         rows.append(rec)
 
-    rows.sort(key=lambda row: (str(row.get("rack") or ""), str(row.get("node") or "")))
-    racks: dict[str, list[dict[str, Any]]] = {}
-    for row in rows:
-        racks.setdefault(str(row.get("rack") or "unknown"), []).append(row)
+    rows.sort(key=lambda row: (str(row.get("rack") or ""), _natural_node_key(str(row.get("node") or ""))))
     return {
+        "rack_mapping_mode": placement.get("mode") or "direct",
         "generated_at": _now_iso(),
         "history_path": str(HISTORY_FILE),
         "summary": {
@@ -458,6 +561,6 @@ def build_report(
             "flagged_nodes": sum(bool(row.get("flagged")) for row in rows),
             "drained_nodes": sum(str(row.get("slurm_state") or "").lower().startswith("drain") for row in rows),
         },
-        "racks": [{"rack": rk, "nodes": nodes} for rk, nodes in sorted(racks.items())],
+        "racks": group_nodes(rows, placement),
         "nodes": rows,
     }

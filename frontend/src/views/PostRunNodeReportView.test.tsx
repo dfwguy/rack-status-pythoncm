@@ -172,3 +172,59 @@ describe("PostRunNodeReportView deep-audit launch", () => {
     expect(await screen.findByText(/d01-32: PASS - healthy/)).toBeInTheDocument();
   });
 });
+
+
+describe("PostRunNodeReportView grouping follows the cluster's mapping", () => {
+  function nodeAt(name: string, rack: string): PostRunNode {
+    return { ...node(false), node: name, rack };
+  }
+
+  it("shows a translated cluster by its mapped racks and Scalable Units, not hostname prefixes", async () => {
+    const a = nodeAt("sys1-gso1-p-phy-gpu19-su19", "U20");
+    const b = nodeAt("sys1-gso1-p-phy-gpu19-su20", "U21");
+    service.fetchPostRunNodeReport.mockResolvedValue({
+      ...report(false),
+      rack_mapping_mode: "translate",
+      racks: [
+        { rack: "U20", label: "U20", kind: "rack", scalable_unit: { id: "su19", label: "SU19" }, nodes: [a] },
+        { rack: "U21", label: "U21", kind: "rack", scalable_unit: { id: "su20", label: "SU20" }, nodes: [b] },
+      ],
+      nodes: [a, b],
+    });
+    render(<PostRunNodeReportView />);
+    expect(await screen.findByText("U20")).toBeInTheDocument();
+    expect(screen.getByText("SU19")).toBeInTheDocument();
+    expect(screen.getByText("U21")).toBeInTheDocument();
+    expect(screen.queryByText("sys1-gso1-p-phy-gpu19")).not.toBeInTheDocument();
+  });
+
+  it("puts a pool cluster in one pool card and offers no rack picker", async () => {
+    const nodes = ["gpu1", "gpu2", "gpu3"].map((n) => nodeAt(`pool-${n}`, ""));
+    service.fetchPostRunNodeReport.mockResolvedValue({
+      ...report(false),
+      rack_mapping_mode: "pool",
+      racks: [{ rack: "pool", label: "Node pool", kind: "pool", scalable_unit: null, nodes }],
+      nodes,
+    });
+    render(<PostRunNodeReportView />);
+    expect(await screen.findByText("Node pool")).toBeInTheDocument();
+    expect(screen.getByText("3 nodes")).toBeInTheDocument();
+    expect(screen.getByText(/no rack placement/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Rack")).not.toBeInTheDocument();
+  });
+
+  it("says so when the mapping could not place a node, and when placement is still loading", async () => {
+    const n = nodeAt("orphan-1", "");
+    service.fetchPostRunNodeReport.mockResolvedValue({
+      ...report(false),
+      rack_mapping_mode: "translate",
+      placement_error: "Node placement is still loading",
+      racks: [{ rack: "unplaced", label: "Unplaced", kind: "unplaced", scalable_unit: null, nodes: [n] }],
+      nodes: [n],
+    });
+    render(<PostRunNodeReportView />);
+    expect(await screen.findByText("Unplaced")).toBeInTheDocument();
+    expect(screen.getByText(/did not place these nodes/i)).toBeInTheDocument();
+    expect(screen.getByText(/Rack placement is not available yet/i)).toBeInTheDocument();
+  });
+});

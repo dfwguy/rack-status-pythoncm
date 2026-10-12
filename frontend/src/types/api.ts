@@ -282,7 +282,11 @@ export interface PostRunAuditStatus extends DeepAuditNodeResult {
 
 export interface PostRunNode {
   node: string;
+  /** The node's rack as the cluster's mapping places it; "" for a pool cluster or an unplaced node. */
   rack: string;
+  /** Position in the rack as the cluster manager places it; absent when not placed. */
+  rack_unit?: string;
+  tray?: number | null;
   slurm_state: string;
   slurm_reason: string;
   participation_count: number;
@@ -299,6 +303,19 @@ export interface PostRunNode {
   network_status: PostRunAuditStatus | null;
 }
 
+/**
+ * One card of the post-run history. A rack on a `direct`/`translate` cluster, the single pool on a
+ * `pool` cluster (no placement exists), or the nodes the mapping could not place. Fields beyond
+ * `rack`/`nodes` are absent from a backend that predates placement-aware grouping.
+ */
+export interface PostRunGroup {
+  rack: string;
+  label?: string;
+  kind?: "rack" | "pool" | "unplaced";
+  scalable_unit?: { id: string; label: string } | null;
+  nodes: PostRunNode[];
+}
+
 export interface PostRunNodeReportResponse {
   ok: boolean;
   generated_at: string;
@@ -310,8 +327,11 @@ export interface PostRunNodeReportResponse {
     flagged_nodes: number;
     drained_nodes: number;
   };
-  racks: Array<{ rack: string; nodes: PostRunNode[] }>;
+  racks: PostRunGroup[];
   nodes: PostRunNode[];
+  rack_mapping_mode?: "direct" | "translate" | "pool";
+  /** Why nodes are shown unplaced (snapshot still loading or unavailable); "" when placement is known. */
+  placement_error?: string;
   refresh: {
     activities: number;
     merge: Record<string, unknown>;

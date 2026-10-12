@@ -107,7 +107,6 @@ def test_post_run_refresh_uses_configured_platform_slurm_commands(monkeypatch):
     assert accounting[0]["nodelist"] == "ink50-dh01-j21-11"
     assert inventory == [{
         "node": "ink50-dh01-j21-11",
-        "rack": "ink50-dh01-j21",
         "state": "idle",
         "reason": "",
     }]
