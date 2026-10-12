@@ -158,10 +158,19 @@ def _parser_json_from_scan(rec: dict, rack: str, job_id: str) -> dict:
             if i >= 11
         ],
     }
+    # A row means a NeMo run was seen. parser.sh emits an all-"---" Nemotron row for ANY file, so an
+    # NCCL log used to reach the scaling table as a "successful run with no metrics" -- 52 of them on
+    # Nscale NC, filed under Rack = 2/3/4. A NeMo log leaves a trace even when too short to average
+    # (samples, an iteration counter, a declared step target, a series); an NCCL log leaves none.
+    # Deliberately not the placeholder predicate: a finished NeMo run whose timings could not be
+    # averaged is exactly what the "no metrics" tag exists to report.
+    has_nemo_evidence = bool(
+        n.get("samples") or n.get("iteration") or n.get("declared_max_steps") or n.get("step_series")
+    )
     return {
         "export_version": 7,
         "nccl_peak_out_of_place_busbw_gbps": [nccl_row],
-        "nemotron_5h_56b_train_window": [nemo_row],
+        "nemotron_5h_56b_train_window": [nemo_row] if has_nemo_evidence else [],
         "mnubergemm_stress": [],
         "parser_flags": [],
         "from_logscan": True,
@@ -488,6 +497,54 @@ def _nemotron_scaling_append_entry(
     )
 
 
+_NCCL_SCALING_KEYS = (
+    "all_reduce_gbps", "all_gather_gbps", "alltoall_gbps", "reduce_scatter_gbps", "sendrecv_gbps",
+)
+
+
+def _nccl_scaling_append_entry(bucket: dict[int, list[dict[str, object]]], lp: Path, nc: dict) -> None:
+    """Append one NCCL log's collective peaks to the bucket for the node count it ran on.
+
+    Keyed by nodes, not by a rack count read out of the file name: that inference counts ids in the
+    name and filed a 6-node all-to-all under "2 racks" beside a 36-node pass, which is not a scale
+    anyone can read. The node count comes from the whole-file scan (SLURM_NNODES / NODELIST); 0 means
+    the log did not say.
+    """
+    entry: dict[str, object] = {"path": lp}
+    for key in _NCCL_SCALING_KEYS:
+        entry[key] = _parse_gbps_scalar(nc.get(key))
+    try:
+        nodes = _nemotron_run_hw_tokens_for_path(lp, 1.0).get("num_nodes")
+    except Exception:  # noqa: BLE001 - geometry is enrichment; the bandwidth is the point
+        nodes = None
+    entry["num_nodes"] = nodes
+    bucket.setdefault(int(nodes) if isinstance(nodes, int) and nodes > 0 else 0, []).append(entry)
+
+
+def _nccl_scaling_rows(bucket: dict[int, list[dict[str, object]]]) -> list[dict[str, object]]:
+    """One row per node count: the mean of each collective's peak bus bandwidth across its logs.
+
+    A log with no measured collective (a sweep that never concluded) is reported in
+    ``n_logs_no_metrics`` instead of being averaged in as zero or dropped without a trace.
+    """
+    rows: list[dict[str, object]] = []
+    for nodes in sorted(bucket, key=lambda n: (n == 0, n)):
+        ents = bucket[nodes]
+        measured = [e for e in ents if any(e.get(k) is not None for k in _NCCL_SCALING_KEYS)]
+        unmeasured = [e for e in ents if e not in measured]
+        row: dict[str, object] = {
+            "num_nodes": nodes or None,
+            "n_logs": len(measured),
+            "n_logs_no_metrics": len(unmeasured),
+            "logs_no_metrics": [Path(str(e["path"])).name for e in unmeasured],
+        }
+        for key in _NCCL_SCALING_KEYS:
+            vals = [float(e[key]) for e in measured if e.get(key) is not None]  # type: ignore[arg-type]
+            row[f"mean_{key}"] = round(statistics.mean(vals), 3) if vals else None
+        rows.append(row)
+    return rows
+
+
 def _demo_analytics_aggregate() -> dict[str, object]:
     return {
         "ok": True,
@@ -546,6 +603,14 @@ def _demo_analytics_aggregate() -> dict[str, object]:
                     "basename": "root-NEMO-2rack-demo.txt",
                     "series": [{"size_bytes": 1048576, "bus_bw_gbps": 88.0}, {"size_bytes": 16777216, "bus_bw_gbps": 170.0}],
                 }
+            ],
+            "nccl_scaling": [
+                {"num_nodes": 18, "n_logs": 12, "n_logs_no_metrics": 0, "logs_no_metrics": [],
+                 "mean_all_reduce_gbps": 690.0, "mean_all_gather_gbps": 520.0, "mean_alltoall_gbps": 140.0,
+                 "mean_reduce_scatter_gbps": 510.0, "mean_sendrecv_gbps": 180.0},
+                {"num_nodes": 36, "n_logs": 1, "n_logs_no_metrics": 0, "logs_no_metrics": [],
+                 "mean_all_reduce_gbps": 798.0, "mean_all_gather_gbps": None, "mean_alltoall_gbps": 135.0,
+                 "mean_reduce_scatter_gbps": None, "mean_sendrecv_gbps": None},
             ],
             "nemotron_scaling": [
                 {"n_racks": 1, "n_logs": 12, "mean_tflops_per_gpu": 390.0, "mean_step_s": 1.95},
@@ -978,6 +1043,7 @@ def _analytics_aggregate_compute(log_dir, rows_in, body, progress=None):
     # every gate, contribute its NCCL series to the chart, and then vanish from the tables with
     # no indication it had ever been considered.
     scaling_no_metrics: dict[int, list[str]] = {}
+    nccl_scaling_entries: dict[int, list[dict[str, object]]] = {}
 
     for rack in done_racks:
         cands = find_log_paths_for_rack(log_dir, rack)
@@ -1027,6 +1093,7 @@ def _analytics_aggregate_compute(log_dir, rows_in, body, progress=None):
                         "sendrecv_gbps": _parse_gbps_scalar(nc.get("sendrecv_gbps")),
                     }
                 )
+                _nccl_scaling_append_entry(nccl_scaling_entries, nccl_lp, nc)
 
         # --- Nemotron from the newest successful NEMO single-rack log -------------------
         if nemo_lp is not None:
@@ -1146,6 +1213,8 @@ def _analytics_aggregate_compute(log_dir, rows_in, body, progress=None):
                         ser_out.append({"size_bytes": float(sz), "bus_bw_gbps": bw})
         if ser_out:
             nccl_multirack.append({"label": label, "basename": lp.name, "series": ser_out})
+        if isinstance(nc, dict):
+            _nccl_scaling_append_entry(nccl_scaling_entries, lp, nc)
         nm = _pick_nemotron_row(parsed, "")
         if isinstance(nm, dict):
             n_r = _multirack_rack_count_from_basename(lp.name)
@@ -1231,6 +1300,7 @@ def _analytics_aggregate_compute(log_dir, rows_in, body, progress=None):
         "multirack": {
             "nccl_series_by_log": nccl_multirack,
             "nemotron_scaling": nemotron_scaling,
+            "nccl_scaling": _nccl_scaling_rows(nccl_scaling_entries),
             "nemotron_throughput_scaling": nemotron_throughput_scaling,
         },
     }

@@ -263,3 +263,106 @@ def test_missing_measurements_shape_as_dashes(analytics_module, tmp_path):
     nccl = shaped["nccl_peak_out_of_place_busbw_gbps"][0]
     assert nccl["all_reduce_gbps"] == "---"
     assert nccl["alltoall_gbps"] == "---"
+
+
+# --- NCCL logs are not NeMo runs, and NCCL scales get their own table --------------------------
+
+
+def _nccl_log(path: Path, alltoall: float = 134.75) -> Path:
+    hdr = (
+        "#       size         count      type   redop    root     time   algbw   busbw  #wrong"
+        "     time   algbw   busbw  #wrong"
+    )
+    row = (
+        f"   1073741824     268435456     float     sum      -1   100.00    0.00  {alltoall:.2f}"
+        f"       0   100.00    0.00  {alltoall:.2f}       0"
+    )
+    path.write_text(
+        "# Collective test starting: alltoall_perf_mpi\n"
+        f"{hdr}\n{row}\n"
+        "# Out of bounds values : 0 OK\n"
+        "# Avg bus bandwidth    : 134.75\n"
+        "# Collective test concluded: alltoall_perf_mpi\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_an_nccl_log_yields_no_nemotron_row_so_it_is_never_a_no_metrics_nemo_run(analytics_module, tmp_path):
+    """parser.sh emits a placeholder Nemotron row for any file. The batch shaping used to copy it, so
+    52 NCCL logs reached the Nemotron scaling table as "successful runs with no step timings"."""
+    rec = logscan.scan(str(_nccl_log(tmp_path / "nccl-mpi_a2a-30n-c256_181274.out")), inventory=False)
+    shaped = analytics_module._parser_json_from_scan(rec, "a2a-30n-c256", "181274")
+    assert shaped["nemotron_5h_56b_train_window"] == []
+    # The NCCL half is untouched.
+    assert shaped["nccl_peak_out_of_place_busbw_gbps"][0]["alltoall_gbps"] == "134.75"
+
+
+def test_a_nemo_log_too_short_to_average_still_gets_its_row_so_no_metrics_stays_honest(analytics_module, tmp_path):
+    """The real "no metrics" case: a NeMo run that logged steps but too few survived the warmup."""
+    p = tmp_path / "cmods-NEMO-1Rack-p05-r01-18N-4242.txt"
+    p.write_text(_steps(3), encoding="utf-8")
+    shaped = analytics_module._parser_json_from_scan(logscan.scan(str(p), inventory=False), "p05-r01", "4242")
+    rows = shaped["nemotron_5h_56b_train_window"]
+    assert len(rows) == 1
+    assert rows[0]["tflops_per_gpu"] is None and rows[0]["median_step_time"] is None
+
+
+def _nc(**peaks):
+    base = {k: "---" for k in (
+        "all_reduce_gbps", "all_gather_gbps", "alltoall_gbps", "reduce_scatter_gbps", "sendrecv_gbps",
+    )}
+    base.update({k: str(v) for k, v in peaks.items()})
+    return base
+
+
+def test_nccl_scaling_groups_by_node_count_not_by_a_rack_count_read_from_the_name(analytics_module, monkeypatch, tmp_path):
+    nodes = {"pass36.out": 36, "a2a30.out": 30, "ref6.out": 6, "ref6b.out": 6, "mystery.out": None}
+    monkeypatch.setattr(
+        analytics_module, "_nemotron_run_hw_tokens_for_path",
+        lambda lp, st: {"num_nodes": nodes[Path(str(lp)).name]},
+    )
+    bucket: dict = {}
+    add = lambda name, **peaks: analytics_module._nccl_scaling_append_entry(  # noqa: E731
+        bucket, tmp_path / name, _nc(**peaks)
+    )
+    add("pass36.out", all_reduce_gbps=798, alltoall_gbps=135)
+    add("a2a30.out", alltoall_gbps=134.75)
+    add("ref6.out", alltoall_gbps=100)
+    add("ref6b.out", alltoall_gbps=140)
+    add("mystery.out", all_reduce_gbps=50)
+    rows = analytics_module._nccl_scaling_rows(bucket)
+
+    assert [r["num_nodes"] for r in rows] == [6, 30, 36, None]  # unknown scale sorts last
+    by = {r["num_nodes"]: r for r in rows}
+    assert by[6]["n_logs"] == 2 and by[6]["mean_alltoall_gbps"] == 120.0
+    assert by[36]["mean_all_reduce_gbps"] == 798.0 and by[36]["mean_alltoall_gbps"] == 135.0
+    # A collective no log in the row measured is a dash, never a zero.
+    assert by[36]["mean_all_gather_gbps"] is None
+
+
+def test_an_nccl_log_with_no_measured_collective_is_counted_apart_not_averaged(analytics_module, monkeypatch, tmp_path):
+    monkeypatch.setattr(analytics_module, "_nemotron_run_hw_tokens_for_path", lambda lp, st: {"num_nodes": 36})
+    bucket: dict = {}
+    analytics_module._nccl_scaling_append_entry(bucket, tmp_path / "ok.out", _nc(all_reduce_gbps=800))
+    analytics_module._nccl_scaling_append_entry(bucket, tmp_path / "dead.out", _nc())
+    (row,) = analytics_module._nccl_scaling_rows(bucket)
+    assert row["n_logs"] == 1 and row["n_logs_no_metrics"] == 1
+    assert row["logs_no_metrics"] == ["dead.out"]
+    assert row["mean_all_reduce_gbps"] == 800.0  # not dragged toward zero by the dead log
+
+
+def test_geometry_failure_does_not_lose_the_bandwidth(analytics_module, monkeypatch, tmp_path):
+    def boom(lp, st):
+        raise OSError("log gone")
+
+    monkeypatch.setattr(analytics_module, "_nemotron_run_hw_tokens_for_path", boom)
+    bucket: dict = {}
+    analytics_module._nccl_scaling_append_entry(bucket, tmp_path / "x.out", _nc(all_reduce_gbps=700))
+    (row,) = analytics_module._nccl_scaling_rows(bucket)
+    assert row["num_nodes"] is None and row["mean_all_reduce_gbps"] == 700.0
+
+
+def test_the_demo_aggregate_carries_nccl_scaling(analytics_module):
+    demo = analytics_module._demo_analytics_aggregate()
+    assert {r["num_nodes"] for r in demo["multirack"]["nccl_scaling"]} == {18, 36}

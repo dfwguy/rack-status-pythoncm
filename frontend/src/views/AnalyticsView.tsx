@@ -106,6 +106,18 @@ type AnalyticsPayload = {
   };
   multirack?: {
     nccl_series_by_log: { label: string; basename: string; series: { size_bytes: number; bus_bw_gbps: number }[] }[];
+    /** NCCL peaks by the node count each run used (a fleet-scale view; absent from older servers). */
+    nccl_scaling?: {
+      num_nodes: number | null;
+      n_logs: number;
+      n_logs_no_metrics?: number;
+      logs_no_metrics?: string[];
+      mean_all_reduce_gbps: number | null;
+      mean_all_gather_gbps: number | null;
+      mean_alltoall_gbps: number | null;
+      mean_reduce_scatter_gbps: number | null;
+      mean_sendrecv_gbps: number | null;
+    }[];
     nemotron_scaling: {
       n_racks: number;
       n_logs: number;
@@ -938,6 +950,57 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
             )}
           </Paper>
 
+          <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 4, color: "var(--text-color-secondary)" }}>
+            NCCL — peak bus bandwidth by scale (GB/s). Runs are grouped by the node count they actually used, from the
+            log itself; racks are that count ÷ {traysPerRack} nodes per rack. Each value is the mean of the logs&apos;
+            per-collective peaks, and a dash means no log in the row measured that collective.
+          </Text>
+          <TableContainer component={Paper} variant="outlined" sx={{ mb: 2 }}>
+            <Table size="small" aria-label="NCCL scaling">
+              <TableHead>
+                <TableRow>
+                  <TableCell align="right">Nodes</TableCell>
+                  <TableCell align="right">≈ Racks</TableCell>
+                  <TableCell align="right"># logs</TableCell>
+                  <TableCell align="right">All-reduce</TableCell>
+                  <TableCell align="right">All-gather</TableCell>
+                  <TableCell align="right">All-to-all</TableCell>
+                  <TableCell align="right">Reduce-scatter</TableCell>
+                  <TableCell align="right">Send/recv</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {(mr.nccl_scaling ?? []).length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={8}>
+                      <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
+                        No NCCL scaling data yet.
+                      </Text>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  (mr.nccl_scaling ?? []).map((r) => (
+                    <TableRow key={r.num_nodes ?? "unknown"}>
+                      <TableCell align="right">{r.num_nodes ?? "unknown"}</TableCell>
+                      <TableCell align="right">
+                        {r.num_nodes ? Math.round((r.num_nodes / traysPerRack) * 10) / 10 : "—"}
+                      </TableCell>
+                      <LogCountCell nLogs={r.n_logs} nNoMetrics={r.n_logs_no_metrics} />
+                      <TableCell align="right">{metricOrDash(r.mean_all_reduce_gbps)}</TableCell>
+                      <TableCell align="right">{metricOrDash(r.mean_all_gather_gbps)}</TableCell>
+                      <TableCell align="right">{metricOrDash(r.mean_alltoall_gbps)}</TableCell>
+                      <TableCell align="right">{metricOrDash(r.mean_reduce_scatter_gbps)}</TableCell>
+                      <TableCell align="right">{metricOrDash(r.mean_sendrecv_gbps)}</TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+
+          <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 4, color: "var(--text-color-secondary)" }}>
+            Nemotron — step time and TFLOPs by rack count. Only NeMo training logs appear here; an NCCL log never does.
+          </Text>
           <Box sx={{ mb: 2 }}>
             <TableContainer component={Paper} variant="outlined">
               <Table size="small">
