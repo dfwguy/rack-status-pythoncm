@@ -391,3 +391,78 @@ def test_node_count_precedence_is_header_then_slurm_then_the_file_name(analytics
     assert analytics_module._nccl_log_node_count(tmp_path / "nccl-mpi_U22+U23_138496.out") is None
     monkeypatch.setattr(analytics_module, "_logscan_record", lambda lp: None)
     assert analytics_module._nccl_log_node_count(tmp_path / "nccl-mpi_a2a-6n-c256_1.out") == 6
+
+
+# --- per-collective single-rack series and GPUs on the scaling rows ----------------------------
+
+
+def test_the_scanner_reads_the_nccl_launchers_rank_count(tmp_path):
+    p = _nccl_log(tmp_path / "nccl-mpi_U22+U23_138496.out")
+    p.write_text("nccl_allreduce: nodes=36 np=144 gpus/node=4 sizes=8..16G rounds=1\n" + p.read_text(), encoding="utf-8")
+    geom = logscan.scan(str(p), inventory=False)["geometry"]
+    assert (geom["nccl_nodes"], geom["nccl_np"]) == ("36", "144")
+
+
+def test_gpu_count_comes_from_the_header_or_is_unknown(analytics_module, monkeypatch, tmp_path):
+    monkeypatch.setattr(analytics_module, "_logscan_record", lambda lp: {"geometry": {"nccl_np": "144"}})
+    assert analytics_module._nccl_log_gpu_count(tmp_path / "x.out") == 144
+    monkeypatch.setattr(analytics_module, "_logscan_record", lambda lp: {"geometry": {}})
+    assert analytics_module._nccl_log_gpu_count(tmp_path / "x.out") is None
+    monkeypatch.setattr(analytics_module, "_logscan_record", lambda lp: None)
+    assert analytics_module._nccl_log_gpu_count(tmp_path / "x.out") is None
+
+
+def test_a_scaling_row_reports_the_gpus_of_its_newest_log_that_states_them(analytics_module, monkeypatch, tmp_path):
+    gpus = {"old.out": 144, "new.out": None}
+    monkeypatch.setattr(analytics_module, "_nccl_log_node_count", lambda lp: 36)
+    monkeypatch.setattr(analytics_module, "_nccl_log_gpu_count", lambda lp: gpus[Path(str(lp)).name])
+    monkeypatch.setattr(analytics_module, "_log_mtime_or_zero", lambda lp: 2 if Path(str(lp)).name == "new.out" else 1)
+    bucket: dict = {}
+    for name in ("old.out", "new.out"):
+        analytics_module._nccl_scaling_append_entry(bucket, tmp_path / name, _nc(all_reduce_gbps=800))
+    (row,) = analytics_module._nccl_scaling_rows(bucket)
+    assert row["num_gpus"] == 144  # the newest log did not say, so the next newest that did
+
+
+def _pts(*bw):
+    return [{"size_bytes": 1 << (20 + i), "bus_bw_gbps": v} for i, v in enumerate(bw)]
+
+
+def test_collective_series_come_from_the_scan_row_when_it_carries_them(analytics_module, monkeypatch, tmp_path):
+    monkeypatch.setattr(analytics_module, "_logscan_record", lambda lp: pytest.fail("no second scan needed"))
+    nc = {"busbw_series_by_collective": {"all_reduce": _pts(10, 900), "alltoall": _pts(5, 690), "sendrecv": _pts(1)}}
+    out = analytics_module._collective_series_for_log(tmp_path / "x.out", nc)
+    assert set(out) == {"all_reduce", "alltoall"}  # only the switchable collectives, only when measured
+    assert out["alltoall"][-1]["bus_bw_gbps"] == 690
+
+
+def test_parser_rows_take_the_extra_collectives_from_the_scan_and_keep_all_reduce(analytics_module, monkeypatch, tmp_path):
+    """parser.sh reports only all_reduce; the whole-file scan has the rest."""
+    monkeypatch.setattr(
+        analytics_module, "_logscan_record",
+        lambda lp: {"nccl": {"series_by_collective": {"all_gather": _pts(8, 647)}}},
+    )
+    out = analytics_module._collective_series_for_log(tmp_path / "x.out", {"all_reduce_busbw_series": _pts(10, 909)})
+    assert out["all_gather"][-1]["bus_bw_gbps"] == 647
+    assert out["all_reduce"][-1]["bus_bw_gbps"] == 909  # never regresses when the scan lacks it
+
+
+def test_a_failed_scan_still_leaves_the_all_reduce_series(analytics_module, monkeypatch, tmp_path):
+    def boom(lp):
+        raise OSError("ssh dropped")
+
+    monkeypatch.setattr(analytics_module, "_logscan_record", boom)
+    out = analytics_module._collective_series_for_log(tmp_path / "x.out", {"all_reduce_busbw_series": _pts(10, 909)})
+    assert list(out) == ["all_reduce"]
+
+
+def test_the_series_block_is_median_plus_each_rack_off_it(analytics_module):
+    block = analytics_module._busbw_series_block(
+        {"U20": _pts(10, 900), "U21": _pts(10, 1000), "U22": _pts(10, 800)},
+        {"U20": "a.txt", "U21": "b.txt"},
+    )
+    assert block["sizes_bytes"] == [1 << 20, 1 << 21]
+    assert block["median_bus_bw_gbps"] == [10.0, 900.0]
+    by = {r["rack"]: r for r in block["per_rack"]}
+    assert by["U21"]["pct_vs_median"] == [0.0, 11.11]
+    assert by["U21"]["log_file"] == "b.txt" and by["U22"]["log_file"] == ""

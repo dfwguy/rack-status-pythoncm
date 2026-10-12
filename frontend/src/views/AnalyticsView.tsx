@@ -19,7 +19,7 @@ import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import CircularProgress from "@mui/material/CircularProgress";
-import { Text, Button, Banner, Tabs, Tag, ProgressBar } from "@nvidia/foundations-react-core";
+import { Text, Button, Banner, Tabs, Tag, ProgressBar, Select, FormField } from "@nvidia/foundations-react-core";
 import Slider from "@mui/material/Slider";
 import MuiTooltip from "@mui/material/Tooltip";
 import { alpha } from "@mui/material/styles";
@@ -70,6 +70,20 @@ ChartJS.register(
   Legend
 );
 
+type BusBwSeriesBlock = {
+  sizes_bytes: number[];
+  median_bus_bw_gbps: (number | null)[];
+  per_rack: { rack: string; log_file: string; bus_bw_gbps: (number | null)[]; pct_vs_median: (number | null)[] }[];
+};
+
+/** The single-rack collectives an operator can switch between; keyed as the server names them. */
+type CollectiveKey = "all_reduce" | "all_gather" | "alltoall";
+const COLLECTIVE_OPTIONS: { value: `${CollectiveKey}_gbps`; children: string }[] = [
+  { value: "all_reduce_gbps", children: "all_reduce_gbps" },
+  { value: "all_gather_gbps", children: "all_gather_gbps" },
+  { value: "alltoall_gbps", children: "alltoall_gbps" },
+];
+
 type AnalyticsPayload = {
   ok: boolean;
   error?: string;
@@ -89,11 +103,9 @@ type AnalyticsPayload = {
       fleet_median_gbps: number;
       pct_vs_median: number;
     }[];
-    nccl_ar_series: {
-      sizes_bytes: number[];
-      median_bus_bw_gbps: (number | null)[];
-      per_rack: { rack: string; log_file: string; bus_bw_gbps: (number | null)[]; pct_vs_median: (number | null)[] }[];
-    };
+    nccl_ar_series: BusBwSeriesBlock;
+    /** The same block per collective (all_reduce, all_gather, alltoall); absent from older servers. */
+    nccl_series_by_collective?: Partial<Record<CollectiveKey, BusBwSeriesBlock>>;
     nemotron: {
       rack: string;
       log_file: string;
@@ -109,6 +121,8 @@ type AnalyticsPayload = {
     /** NCCL peaks by the node count each run used (a fleet-scale view; absent from older servers). */
     nccl_scaling?: {
       num_nodes: number | null;
+      /** GPUs the newest log in the row used (its MPI rank count); null when no log says. */
+      num_gpus?: number | null;
       n_logs: number;
       n_logs_no_metrics?: number;
       logs_no_metrics?: string[];
@@ -147,6 +161,22 @@ type NemotronScalingRow = NonNullable<AnalyticsPayload["multirack"]>["nemotron_s
 
 /** A metric that could not be averaged reads as an em dash — never as a blank or a misleading 0. */
 const metricOrDash = (v: number | null | undefined) => (v == null ? "—" : v);
+
+/**
+ * GPUs a scale row used: the log's own rank count when it states one; otherwise nodes x the
+ * platform's GPUs per node, marked with "≈" and a tooltip so a design figure never reads as measured.
+ */
+function GpuCountCell({ measured, nodes, gpusPerNode }: { measured?: number | null; nodes: number | null; gpusPerNode: number }) {
+  if (measured) return <TableCell align="right">{measured}</TableCell>;
+  if (nodes && gpusPerNode > 0) {
+    return (
+      <TableCell align="right" title={`Not stated in the log: ${nodes} nodes x ${gpusPerNode} GPUs per node (platform design)`}>
+        ≈{nodes * gpusPerNode}
+      </TableCell>
+    );
+  }
+  return <TableCell align="right">—</TableCell>;
+}
 
 /** Log count that also reports successful runs which yielded no averageable metrics. */
 function LogCountCell({ nLogs, nNoMetrics }: { nLogs: number; nNoMetrics?: number }) {
@@ -251,6 +281,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
   const [reportError] = useState("");
   const traysPerRack =
     activeCluster?.geometry?.trays_per_rack || activePlatform?.geometry?.trays_per_rack || 18;
+  const gpusPerNode = activePlatform?.geometry?.gpus_per_node || 0;
 
   // The server's node inventory: real hostnames, placed in racks by the cluster's mapping mode and
   // naming templates, with live up/down and tray numbers. The browser does not re-derive nodes from
@@ -420,12 +451,22 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
   // Both single-rack tables carry one row per rack (NCCL: per rack PER collective), so on a
   // 112-rack floor they run to hundreds of rows. Paged rather than capped: every row is a real
   // measurement someone may need to look up, so hiding the tail behind a "top N" would lose data.
-  const ncclDeviationPage = usePagedRows(sr?.nccl_collectives_deviation_pct ?? EMPTY_ROWS);
+  // Which collective the single-rack table and chart show; all_reduce unless the operator switches.
+  const [collective, setCollective] = useState<`${CollectiveKey}_gbps`>("all_reduce_gbps");
+  const collectiveKey = collective.replace(/_gbps$/, "") as CollectiveKey;
+  const deviationRows = useMemo(
+    () => (sr?.nccl_collectives_deviation_pct ?? EMPTY_ROWS).filter((r) => r.metric === collective),
+    [sr, collective],
+  );
+  const ncclDeviationPage = usePagedRows(deviationRows);
+  // An older server sends only the all_reduce block; any other collective then has no series.
+  const seriesBlock: BusBwSeriesBlock | undefined =
+    sr?.nccl_series_by_collective?.[collectiveKey] ?? (collectiveKey === "all_reduce" ? sr?.nccl_ar_series : undefined);
   const nemotronPage = usePagedRows(sr?.nemotron ?? EMPTY_ROWS);
 
   const ncclLineData = useMemo(() => {
-    if (!sr?.nccl_ar_series?.sizes_bytes?.length) return null;
-    const { sizes_bytes, median_bus_bw_gbps, per_rack } = sr.nccl_ar_series;
+    if (!seriesBlock?.sizes_bytes?.length) return null;
+    const { sizes_bytes, median_bus_bw_gbps, per_rack } = seriesBlock;
     const datasets = [
       {
         label: "Fleet median bus BW",
@@ -453,7 +494,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
     return {
       datasets,
     };
-  }, [sr]);
+  }, [seriesBlock]);
 
   const nemotronBarTflopsData = useMemo(() => {
     if (!sr?.nemotron?.length) return null;
@@ -793,9 +834,20 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
             1 — Single rack
           </Text>
 
-          <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 4, color: "var(--text-color-secondary)" }}>
-            NCCL — peak collectives deviation vs fleet median (same log as newest 1Rack file per done rack)
-          </Text>
+          <Box sx={{ display: "flex", alignItems: "flex-end", gap: 2, mb: 1, flexWrap: "wrap" }}>
+            <Text kind="body/bold/sm" style={{ flex: 1, color: "var(--text-color-secondary)" }}>
+              NCCL — peak {collectiveKey} deviation vs fleet median (same log as newest 1Rack file per done rack)
+            </Text>
+            <Box sx={{ minWidth: 220 }}>
+              <FormField name="analytics-collective" slotLabel="Collective">
+                <Select
+                  items={COLLECTIVE_OPTIONS}
+                  value={collective}
+                  onValueChange={(v) => setCollective((v || "all_reduce_gbps") as `${CollectiveKey}_gbps`)}
+                />
+              </FormField>
+            </Box>
+          </Box>
           <TableContainer component={Paper} variant="outlined" sx={{ mb: 2 }}>
             <Table size="small">
               <TableHead>
@@ -831,11 +883,11 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
                   </TableRow>
                   );
                 })}
-                {!(sr.nccl_collectives_deviation_pct ?? []).length && (
+                {!deviationRows.length && (
                   <TableRow>
                     <TableCell colSpan={6}>
                       <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>
-                        No NCCL scalar rows (missing parser fields or no done racks with logs).
+                        No {collectiveKey} rows (no done rack's newest NCCL log measured it).
                       </Text>
                     </TableCell>
                   </TableRow>
@@ -846,11 +898,11 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
           <TablePager {...ncclDeviationPage} noun="rows" />
 
           <Text kind="body/bold/sm" style={{ display: "block", marginBottom: 4, color: "var(--text-color-secondary)" }}>
-            NCCL — all_reduce bus BW vs message size (fleet median + each rack)
+            NCCL — {collectiveKey} bus BW vs message size (fleet median + each rack)
           </Text>
           <Paper variant="outlined" sx={{ p: 2, mb: 2, height: 380 }}>
             {ncclLineData ? <Line data={ncclLineData} options={chartOptionsLogX} /> : (
-              <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>No all_reduce series data.</Text>
+              <Text kind="body/regular/md" style={{ color: "var(--text-color-secondary)" }}>No {collectiveKey} series data.</Text>
             )}
           </Paper>
 
@@ -960,6 +1012,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
               <TableHead>
                 <TableRow>
                   <TableCell align="right">Nodes</TableCell>
+                  <TableCell align="right">GPUs</TableCell>
                   <TableCell align="right">≈ Racks</TableCell>
                   <TableCell align="right"># logs</TableCell>
                   <TableCell align="right">All-reduce</TableCell>
@@ -972,7 +1025,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
               <TableBody>
                 {(mr.nccl_scaling ?? []).length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8}>
+                    <TableCell colSpan={9}>
                       <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)" }}>
                         No NCCL scaling data yet.
                       </Text>
@@ -982,6 +1035,7 @@ export function AnalyticsView({ logDir, rows, status }: AnalyticsViewProps) {
                   (mr.nccl_scaling ?? []).map((r) => (
                     <TableRow key={r.num_nodes ?? "unknown"}>
                       <TableCell align="right">{r.num_nodes ?? "unknown"}</TableCell>
+                      <GpuCountCell measured={r.num_gpus} nodes={r.num_nodes} gpusPerNode={gpusPerNode} />
                       <TableCell align="right">
                         {r.num_nodes ? Math.round((r.num_nodes / traysPerRack) * 10) / 10 : "—"}
                       </TableCell>

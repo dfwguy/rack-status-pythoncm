@@ -497,6 +497,92 @@ def _nemotron_scaling_append_entry(
     )
 
 
+#: The collectives the single-rack view can switch between, keyed as the scanner names them.
+_SINGLE_RACK_COLLECTIVES = ("all_reduce", "all_gather", "alltoall")
+
+
+def _clean_busbw_series(raw: object) -> list[dict[str, float]]:
+    """``[{size_bytes, bus_bw_gbps}]`` with unparseable or non-positive sizes dropped."""
+    out: list[dict[str, float]] = []
+    for p in raw if isinstance(raw, list) else []:
+        if not isinstance(p, dict):
+            continue
+        try:
+            sz = int(p.get("size_bytes") or 0)
+            bw = float(p.get("bus_bw_gbps") or 0)
+        except (TypeError, ValueError):
+            continue
+        if sz > 0 and bw >= 0:
+            out.append({"size_bytes": float(sz), "bus_bw_gbps": bw})
+    return out
+
+
+def _collective_series_for_log(lp: Path, nc: dict) -> dict[str, list[dict[str, float]]]:
+    """Bus bandwidth vs message size for each collective in one NCCL log.
+
+    parser.sh reports only the all_reduce series; the whole-file scan records every collective's.
+    The scan-shaped row carries them already; otherwise ask the scan for this log (cached per
+    path and mtime), and fall back to parser.sh's all_reduce series so that view never regresses.
+    """
+    by_coll = nc.get("busbw_series_by_collective")
+    if not isinstance(by_coll, dict) or not by_coll:
+        try:
+            rec = _logscan_record(lp) or {}
+        except Exception:  # noqa: BLE001 - the extra collectives are enrichment
+            rec = {}
+        by_coll = (rec.get("nccl") or {}).get("series_by_collective") or {}
+    out = {c: _clean_busbw_series(by_coll.get(c)) for c in _SINGLE_RACK_COLLECTIVES}
+    if not out["all_reduce"]:
+        out["all_reduce"] = _clean_busbw_series(nc.get("all_reduce_busbw_series"))
+    return {c: ser for c, ser in out.items() if ser}
+
+
+def _busbw_series_block(
+    series_by_rack: dict[str, list[dict[str, float]]], log_by_rack: dict[str, str]
+) -> dict[str, object]:
+    """Fleet median per message size plus each rack's series and its % off that median."""
+    size_to_vals: dict[int, list[float]] = {}
+    for ser in series_by_rack.values():
+        for p in ser:
+            size_to_vals.setdefault(int(p["size_bytes"]), []).append(float(p["bus_bw_gbps"]))
+    sizes_sorted = sorted(size_to_vals)
+    median_bw = {sz: statistics.median(v) for sz, v in size_to_vals.items() if v}
+    per_rack: list[dict[str, object]] = []
+    for rack in sorted(series_by_rack):
+        ser = series_by_rack[rack]
+        bws: list[float | None] = []
+        pcts: list[float | None] = []
+        for sz in sizes_sorted:
+            med = median_bw.get(sz)
+            v = next((float(p["bus_bw_gbps"]) for p in ser if int(p["size_bytes"]) == sz), None)
+            if v is None or med is None or med <= 0:
+                bws.append(None)
+                pcts.append(None)
+            else:
+                bws.append(round(v, 4))
+                pcts.append(round((v - med) / med * 100.0, 2))
+        per_rack.append({"rack": rack, "log_file": log_by_rack.get(rack, ""), "bus_bw_gbps": bws, "pct_vs_median": pcts})
+    return {
+        "sizes_bytes": sizes_sorted,
+        "median_bus_bw_gbps": [round(median_bw[s], 4) for s in sizes_sorted],
+        "per_rack": per_rack,
+    }
+
+
+def _nccl_log_gpu_count(lp: Path) -> int | None:
+    """GPUs an NCCL log's run used: the launcher header's MPI rank count (one rank per GPU).
+
+    ``None`` when the log does not say; the page then shows nodes x the platform's GPUs per node,
+    marked as the design figure rather than a measured one.
+    """
+    rec = _logscan_record(lp)
+    try:
+        n = int(((rec or {}).get("geometry") or {}).get("nccl_np") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return n if n > 0 else None
+
+
 _RE_NODES_IN_NAME = re.compile(r"(?<![A-Za-z0-9])(\d{1,4})[nN](?![A-Za-z0-9])")
 
 
@@ -542,6 +628,10 @@ def _nccl_scaling_append_entry(bucket: dict[int, list[dict[str, object]]], lp: P
     except Exception:  # noqa: BLE001 - geometry is enrichment; the bandwidth is the point
         nodes = None
     entry["num_nodes"] = nodes
+    try:
+        entry["num_gpus"] = _nccl_log_gpu_count(lp)
+    except Exception:  # noqa: BLE001 - geometry is enrichment
+        entry["num_gpus"] = None
     bucket.setdefault(int(nodes) if isinstance(nodes, int) and nodes > 0 else 0, []).append(entry)
 
 
@@ -561,6 +651,15 @@ def _nccl_scaling_rows(bucket: dict[int, list[dict[str, object]]]) -> list[dict[
             "n_logs": len(measured),
             "n_logs_no_metrics": len(unmeasured),
             "logs_no_metrics": [Path(str(e["path"])).name for e in unmeasured],
+            # From the newest measured log that states it; None when no log in the row does.
+            "num_gpus": next(
+                (
+                    e["num_gpus"]
+                    for e in sorted(measured, key=lambda e: _log_mtime_or_zero(e["path"]), reverse=True)  # type: ignore[arg-type]
+                    if e.get("num_gpus")
+                ),
+                None,
+            ),
         }
         for key in _NCCL_SCALING_KEYS:
             vals = [float(e[key]) for e in measured if e.get(key) is not None]  # type: ignore[arg-type]
@@ -629,10 +728,10 @@ def _demo_analytics_aggregate() -> dict[str, object]:
                 }
             ],
             "nccl_scaling": [
-                {"num_nodes": 18, "n_logs": 12, "n_logs_no_metrics": 0, "logs_no_metrics": [],
+                {"num_nodes": 18, "num_gpus": 72, "n_logs": 12, "n_logs_no_metrics": 0, "logs_no_metrics": [],
                  "mean_all_reduce_gbps": 690.0, "mean_all_gather_gbps": 520.0, "mean_alltoall_gbps": 140.0,
                  "mean_reduce_scatter_gbps": 510.0, "mean_sendrecv_gbps": 180.0},
-                {"num_nodes": 36, "n_logs": 1, "n_logs_no_metrics": 0, "logs_no_metrics": [],
+                {"num_nodes": 36, "num_gpus": 144, "n_logs": 1, "n_logs_no_metrics": 0, "logs_no_metrics": [],
                  "mean_all_reduce_gbps": 798.0, "mean_all_gather_gbps": None, "mean_alltoall_gbps": 135.0,
                  "mean_reduce_scatter_gbps": None, "mean_sendrecv_gbps": None},
             ],
@@ -1059,6 +1158,7 @@ def _analytics_aggregate_compute(log_dir, rows_in, body, progress=None):
     _analytics_scan_ctx.batch = _logscan_batch(prescan_paths, on_progress=progress) if prescan_paths else {}
 
     series_by_rack: dict[str, list[dict[str, float]]] = {}
+    coll_series_by_rack: dict[str, dict[str, list[dict[str, float]]]] = {c: {} for c in _SINGLE_RACK_COLLECTIVES}
     scalar_rows: list[dict[str, object]] = []
     nemotron_rows: list[dict[str, object]] = []
     scaling_entries: dict[int, list[dict[str, object]]] = {}
@@ -1105,6 +1205,8 @@ def _analytics_aggregate_compute(log_dir, rows_in, body, progress=None):
                             ar_series.append({"size_bytes": float(sz), "bus_bw_gbps": bw})
                 if ar_series:
                     series_by_rack[rack] = ar_series
+                for coll, ser in _collective_series_for_log(nccl_lp, nc).items():
+                    coll_series_by_rack[coll][rack] = ser
                 scalar_rows.append(
                     {
                         "rack": rack,
@@ -1143,30 +1245,8 @@ def _analytics_aggregate_compute(log_dir, rows_in, body, progress=None):
                 else:
                     scaling_no_metrics.setdefault(1, []).append(lf)
 
-    size_to_vals: dict[int, list[float]] = {}
-    for ser in series_by_rack.values():
-        for p in ser:
-            sz = int(p["size_bytes"])
-            size_to_vals.setdefault(sz, []).append(float(p["bus_bw_gbps"]))
-    sizes_sorted = sorted(size_to_vals.keys())
-    median_bw = {sz: statistics.median(size_to_vals[sz]) for sz in sizes_sorted if size_to_vals[sz]}
-
-    per_rack_series: list[dict[str, object]] = []
-    for rack in sorted(series_by_rack.keys()):
-        ser = series_by_rack[rack]
-        bws: list[float | None] = []
-        pcts: list[float | None] = []
-        for sz in sizes_sorted:
-            med = median_bw.get(sz)
-            v = next((float(p["bus_bw_gbps"]) for p in ser if int(p["size_bytes"]) == sz), None)
-            if v is None or med is None or med <= 0:
-                bws.append(None)
-                pcts.append(None)
-            else:
-                bws.append(round(v, 4))
-                pcts.append(round((v - med) / med * 100.0, 2))
-        lf = next((r["log_file"] for r in scalar_rows if r["rack"] == rack), "")
-        per_rack_series.append({"rack": rack, "log_file": lf, "bus_bw_gbps": bws, "pct_vs_median": pcts})
+    log_by_rack = {str(r["rack"]): str(r["log_file"]) for r in scalar_rows}
+    ar_block = _busbw_series_block(series_by_rack, log_by_rack)
 
     coll_dev: list[dict[str, object]] = []
     for metric, key in (
@@ -1319,10 +1399,12 @@ def _analytics_aggregate_compute(log_dir, rows_in, body, progress=None):
         "single_rack": {
             "nccl_collectives": scalar_rows,
             "nccl_collectives_deviation_pct": coll_dev,
-            "nccl_ar_series": {
-                "sizes_bytes": sizes_sorted,
-                "median_bus_bw_gbps": [round(median_bw[s], 4) for s in sizes_sorted],
-                "per_rack": per_rack_series,
+            "nccl_ar_series": ar_block,
+            # The same block for each collective, so the view can switch between them.
+            "nccl_series_by_collective": {
+                coll: _busbw_series_block(by_rack, log_by_rack)
+                for coll, by_rack in coll_series_by_rack.items()
+                if by_rack
             },
             "nemotron": nemotron_rows,
         },

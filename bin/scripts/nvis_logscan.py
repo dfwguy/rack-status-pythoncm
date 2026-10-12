@@ -62,7 +62,7 @@ import sys
 from collections.abc import Iterator
 from typing import Any
 
-SCAN_VERSION = 3  # 3: geometry gains nccl_nodes; 2: peaks count only completed, unfailed tests (see COMPLETION in nccl_parse.inc.sh)
+SCAN_VERSION = 4  # 4: geometry gains nccl_np; 3: geometry gains nccl_nodes; 2: peaks count only completed, unfailed tests (see COMPLETION in nccl_parse.inc.sh)
 
 # ---------------------------------------------------------------------------------------------
 # Output bounds. These cap what we KEEP, never what we read, so memory is O(1) in file size.
@@ -140,6 +140,8 @@ _G_NODELIST = re.compile(rb"NODELIST:\s*(\S+)")
 #: the run's declared scale and the only node count an MPI NCCL log carries (no SLURM_NNODES, no
 #: NODELIST), which is why the scaling table could not place those runs at all.
 _G_NCCL_NODES = re.compile(rb"nccl_allreduce:[^\n]*?\bnodes=(\d+)\b")
+#: The same header's MPI rank count; the launchers run one rank per GPU, so this is the GPUs used.
+_G_NCCL_NP = re.compile(rb"nccl_allreduce:[^\n]*?\bnp=(\d+)\b")
 _G_SEQ = re.compile(rb"(?:--seq[_-]?len(?:gth)?|seq_length)[= ]\s*(\d+)\b", re.IGNORECASE)
 
 #: Wall-clock window for the Grafana embed: the timestamp on any training-progress line. app.py
@@ -156,6 +158,7 @@ _GEOM = (
     ("nodelist", _G_NODELIST),
     ("seq_len", _G_SEQ),
     ("nccl_nodes", _G_NCCL_NODES),
+    ("nccl_np", _G_NCCL_NP),
 )
 
 _SLURM_FAIL = re.compile(rb"srun:.*error:.*Exited|error:.*SIGNAL")
