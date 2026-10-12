@@ -31,6 +31,18 @@ TERMINAL_STATES = {
     "NODE_FAIL", "OUT_OF_MEMORY", "BOOT_FAIL", "DEADLINE", "PREEMPTED",
 }
 
+# Normalized node states: what the workload manager says a node can do *now*, in words every
+# backend maps into, so a view never has to know whose vocabulary it is reading. Ordered from
+# "can take work" to "cannot say"; a view rolling several nodes up reads severity off this order.
+#   idle      free to take a job
+#   running   holding work (allocated, mixed, or finishing it)
+#   reserved  held for work that has not started (a planned or reserved node, maintenance)
+#   draining  running its last job before it is taken out
+#   drained   out of service by an operator or a health check, otherwise healthy
+#   down      the scheduler cannot use it (down, failed, invalid)
+#   unknown   no answer, or a state outside this list
+NODE_STATES = ("idle", "running", "reserved", "draining", "drained", "down", "unknown")
+
 
 @dataclass
 class JobSpec:

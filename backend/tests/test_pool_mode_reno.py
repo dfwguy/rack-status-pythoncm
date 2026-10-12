@@ -79,7 +79,7 @@ def test_reno_slurm_pool_payload(monkeypatch):
     # Every GPU node is ungrouped (rack None) and carries its 8-GPU shape, even the DOWN one.
     assert nodes["gpu-rno-248"] == {
         "id": "gpu-rno-248", "rack": None, "status": "up", "scheduler_state": "idle",
-        "ip": "", "gpu_count": 8, "gpu_type": "nvidia",
+        "scheduler_status": "idle", "ip": "", "gpu_count": 8, "gpu_type": "nvidia",
     }
     assert nodes["gpu-rno-254"]["status"] == "down"
     assert nodes["gpu-rno-254"]["gpu_count"] == 8

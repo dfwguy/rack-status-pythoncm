@@ -115,6 +115,8 @@ export function SingleRackView({ data, loading, error, onRetry, onRackSelect, on
               naming={data.naming}
               hierarchy={data.hierarchy}
               scalableUnits={data.scalable_units}
+              nodes={data.nodes}
+              nodeSources={data.node_sources}
               onRackSelect={onRackSelect}
             />
           ) : (

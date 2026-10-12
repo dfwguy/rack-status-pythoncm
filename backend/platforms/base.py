@@ -60,6 +60,10 @@ def _compute_node_records(
 class PlatformProvider(ABC):
     """Defines the command vocabulary that the rack-status app requires."""
 
+    #: Which cluster manager this is (``bcm``, ``maas``), as a view names the source of a node's
+    #: power/provisioning state. Mirrors ``schedulers.base.Scheduler.kind``.
+    kind = ""
+
     # -- Cluster manager (rack inventory / device status) -------------------
 
     def compute_node_inventory(self) -> list[dict[str, str | None]]:

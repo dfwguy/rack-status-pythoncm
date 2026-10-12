@@ -29,6 +29,7 @@ from platforms.base import PlatformProvider, _compute_node_records
 
 
 class MAASProvider(PlatformProvider):
+    kind = "maas"
 
     def _maas_cli(self) -> str:
         return (os.environ.get("RACK_MAAS_CLI") or "maas").strip() or "maas"

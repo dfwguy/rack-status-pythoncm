@@ -152,6 +152,10 @@ class TestProviderSlurmStates:
         assert [(n["id"], n["scheduler_state"], n["rack"]) for n in nodes] == [
             (U20[0], "idle", "U20"), (U20[1], "drain", "U20"),
         ]
+        # The floor view's scheduler mode reads the normalized word, and names Slurm as its source
+        # although the cluster's scheduler is recorded as pythoncm: Slurm is who answered.
+        assert [n["scheduler_status"] for n in nodes] == ["idle", "drained"]
+        assert st.node_inventory_snapshot()["node_sources"]["scheduler"] == "slurm"
 
     def test_a_cluster_without_slurm_backs_off_and_keeps_its_roster(self, monkeypatch):
         records = [{"id": U20[0], "rack": "U20", "ip": "", "scheduler_state": ""}]
@@ -168,3 +172,6 @@ class TestProviderSlurmStates:
         nodes = st.node_inventory_snapshot()["nodes"]
         assert [(n["id"], n["scheduler_state"]) for n in nodes] == [(U20[0], "")]
         assert st.node_inventory_snapshot()["node_inventory_error"] == ""
+        # Nobody answered for the scheduler: no scheduler view, rather than a floor of "unknown".
+        assert nodes[0]["scheduler_status"] == "unknown"
+        assert st.node_inventory_snapshot()["node_sources"]["scheduler"] == ""

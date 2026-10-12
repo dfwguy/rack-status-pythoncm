@@ -31,6 +31,7 @@ from native_status import (
     tally_stage,
     validation_status_hint,
 )
+from schedulers.slurm import slurm_node_status
 
 _DEMO_POD = 5
 _DEMO_RACK_COUNT = 18
@@ -45,9 +46,16 @@ def _seeded_rng(rack: str, epoch_bucket: int) -> random.Random:
     return random.Random(seed)
 
 
-def _generate_rows(now_ts: float) -> list[dict[str, str]]:
+def _generate_rows(now_ts: float) -> tuple[list[dict[str, str]], list[dict]]:
+    """Rack rows and the node inventory behind them, drawn from the same random choices.
+
+    The nodes agree with their row: a tray the row lists DN is down to the cluster manager and to
+    Slurm, and the up trays share out the row's Slurm states -- so the floor view's two status
+    views show the same rack two ways rather than two unrelated racks.
+    """
     bucket = int(now_ts) // 120
     rows: list[dict[str, str]] = []
+    nodes: list[dict] = []
 
     for r in range(1, _DEMO_RACK_COUNT + 1):
         rack_id = f"p{_DEMO_POD}-r{r:02d}"
@@ -77,6 +85,19 @@ def _generate_rows(now_ts: float) -> list[dict[str, str]]:
         ct_nums = list(range(1, _DEMO_CT_PER_RACK + 1))
         up_ct = sorted(rng.sample(ct_nums, k=rng.randint(4, _DEMO_CT_PER_RACK)))
         dn_ct = [c for c in ct_nums if c not in up_ct]
+
+        slurm_states = [st for part in sinfo_parts for st, n in [part.split("=")] for _ in range(int(n))]
+        slurm_states += ["idle"] * (len(up_ct) - len(slurm_states))
+        rng.shuffle(slurm_states)
+        for ct in ct_nums:
+            up = ct in up_ct
+            raw = slurm_states.pop() if up else "down"
+            nodes.append({
+                "id": f"{rack_id}-ct{ct:02d}", "rack": rack_id, "tray": ct,
+                "status": "up" if up else "down",
+                "scheduler_state": raw, "scheduler_status": slurm_node_status(raw),
+                "ip": f"10.0.{r}.{ct}",
+            })
 
         ct_parts: list[str] = []
         if dn_ct:
@@ -114,7 +135,7 @@ def _generate_rows(now_ts: float) -> list[dict[str, str]]:
             "nemo_hint": nemo_hint,
         })
 
-    return rows
+    return rows, nodes
 
 
 def _condense(nums: list[int]) -> str:
@@ -157,7 +178,7 @@ def _compute_summary(rows: list[dict[str, str]]) -> dict:
 def generate_demo_status(log_dir: Path, include_raw: bool = False) -> dict:
     """Return a complete /api/status-shaped payload with demo data."""
     now = time.time()
-    rows = _generate_rows(now)
+    rows, nodes = _generate_rows(now)
     summary = _compute_summary(rows)
 
     out: dict = {
@@ -170,6 +191,8 @@ def generate_demo_status(log_dir: Path, include_raw: bool = False) -> dict:
         "legend": "DEMO MODE — simulated rack data (no cluster connection)",
         "rows": rows,
         "summary": summary,
+        "nodes": nodes,
+        "node_sources": {"orchestrator": "bcm", "scheduler": "slurm"},
         "footnotes": ["[demo] Data is synthetic — set RACK_STATUS_DEMO=0 to disable"],
         "comments": {
             f"p{_DEMO_POD}-r{r:02d}": _demo_comment(r)

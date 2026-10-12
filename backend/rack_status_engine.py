@@ -413,9 +413,11 @@ def run_rack_status(log_dir: Path, include_raw: bool = False) -> dict:
             records = None
             if _eget("RACK_SCHEDULER", "slurm") == "slurm":
                 node_states = native_status.collect_sinfo_nodes()
+                out["node_sources"] = native_status.node_sources("slurm")
             else:
                 records = _get_platform().compute_node_inventory()
                 node_states = {record["id"]: record.get("scheduler_state", "") for record in records}
+                out["node_sources"] = native_status.node_sources("")
             out["nodes"] = native_status.build_node_inventory(
                 node_states, [row["rack"] for row in out["rows"]], records=records)
         except (OSError, RuntimeError, subprocess.SubprocessError) as exc:

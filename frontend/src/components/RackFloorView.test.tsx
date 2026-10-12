@@ -20,7 +20,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import { RackFloorView } from "./RackFloorView";
-import type { RackRow, StatusScalableUnit } from "../types/api";
+import type { NodeInventoryEntry, RackRow, StatusScalableUnit } from "../types/api";
 
 function rackRow(rack: string): RackRow {
   return { rack, nemo: "-", last_job: "-", sinfo: "idle=18", ct_down_unk: "-" };
@@ -108,5 +108,87 @@ describe("RackFloorView grouping", () => {
     first.unmount();
     render(<RackFloorView rows={ROWS} scalableUnits={UNITS} />);
     expect(screen.getByText("SU12")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The floor view's two status sources. BCM says whether the hardware is up; Slurm says whether it
+ * can take work. On Nscale NC most racks are up to one and drained to the other, so the view lets
+ * an operator flip between them over the same cells.
+ */
+describe("RackFloorView status source", () => {
+  beforeEach(() => localStorage.clear());
+
+  const RACK = "ink50-dh01-h18";
+  // Listed out of tray order on purpose: cells follow the tray, not the payload order.
+  const NODES: NodeInventoryEntry[] = [
+    { id: "gpu3", rack: RACK, tray: 3, ip: "", status: "up", scheduler_state: "drain", scheduler_status: "drained" },
+    { id: "gpu1", rack: RACK, tray: 1, ip: "", status: "up", scheduler_state: "alloc", scheduler_status: "running" },
+    { id: "gpu2", rack: RACK, tray: 2, ip: "", status: "inst", scheduler_state: "idle", scheduler_status: "idle" },
+    { id: "gpu4", rack: RACK, tray: 4, ip: "", status: "down", scheduler_state: "drain", scheduler_status: "drained" },
+  ];
+  const SOURCES = { orchestrator: "bcm", scheduler: "slurm" };
+  const cellStates = () =>
+    Array.from(document.querySelectorAll("[data-node-status]")).map((c) => c.getAttribute("data-node-status"));
+
+  it("offers no status choice without a scheduler answer", () => {
+    // An older server (no inventory) or a cluster no scheduler answered for: one view, no selector.
+    render(<RackFloorView rows={ROWS} />);
+    expect(screen.queryByRole("button", { name: /by scheduler/i })).toBeNull();
+    render(<RackFloorView rows={ROWS} nodes={NODES} nodeSources={{ orchestrator: "bcm", scheduler: "" }} />);
+    expect(screen.queryByRole("button", { name: /by scheduler/i })).toBeNull();
+  });
+
+  it("draws the orchestrator view by default, one cell per node in tray order", () => {
+    render(<RackFloorView rows={ROWS} nodes={NODES} nodeSources={SOURCES} />);
+    expect(screen.getByRole("button", { name: /by orchestrator/i })).toHaveAttribute("aria-pressed", "true");
+    expect(cellStates()).toEqual(["up", "inst", "up", "down"]);
+    // A node BCM is still installing has its own colour, and the legend says which.
+    expect(screen.getByText("Installing")).toBeInTheDocument();
+    expect(screen.getByTestId("floor-legend")).toHaveTextContent("BCM");
+  });
+
+  it("repaints the same cells with the scheduler's view", () => {
+    render(<RackFloorView rows={ROWS} nodes={NODES} nodeSources={SOURCES} />);
+    fireEvent.click(screen.getByRole("button", { name: /by scheduler/i }));
+    expect(cellStates()).toEqual(["running", "idle", "drained", "drained"]);
+    const legend = screen.getByTestId("floor-legend");
+    expect(legend).toHaveTextContent("Slurm");
+    for (const label of ["Idle", "Running", "Reserved", "Draining", "Drained", "Down", "Unknown"]) {
+      expect(legend).toHaveTextContent(label);
+    }
+    // The tile's count line asks the scheduler's question: how much of the rack can take work.
+    expect(screen.getByText("1/4 idle")).toBeInTheDocument();
+    // Racks the inventory does not cover keep their row counts rather than claiming "0 idle".
+    expect(screen.getAllByText(/\d+\/\d+ up/)).toHaveLength(ROWS.length - 1);
+  });
+
+  it("names the raw scheduler state on each cell", () => {
+    render(<RackFloorView rows={ROWS} nodes={NODES} nodeSources={SOURCES} />);
+    fireEvent.click(screen.getByRole("button", { name: /by scheduler/i }));
+    expect(screen.getByTitle("tray 3 gpu3: Drained (drain)")).toBeInTheDocument();
+  });
+
+  it("keeps the chosen view across a remount, but never one the cluster cannot show", () => {
+    const first = render(<RackFloorView rows={ROWS} nodes={NODES} nodeSources={SOURCES} />);
+    fireEvent.click(screen.getByRole("button", { name: /by scheduler/i }));
+    first.unmount();
+    const second = render(<RackFloorView rows={ROWS} nodes={NODES} nodeSources={SOURCES} />);
+    expect(screen.getByRole("button", { name: /by scheduler/i })).toHaveAttribute("aria-pressed", "true");
+    second.unmount();
+    // The remembered choice is "scheduler", but this cluster has none: draw the orchestrator view.
+    render(<RackFloorView rows={ROWS} nodes={NODES} nodeSources={{ orchestrator: "bcm", scheduler: "" }} />);
+    expect(cellStates()).toEqual(["up", "inst", "up", "down"]);
+  });
+
+  it("puts the status choice below the grouping choice when both exist", () => {
+    render(<RackFloorView rows={ROWS} scalableUnits={UNITS} nodes={NODES} nodeSources={SOURCES} />);
+    const grouping = screen.getByRole("group", { name: /group racks/i });
+    const status = screen.getByRole("group", { name: /node status source/i });
+    expect(grouping.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // And the two are independent: SU grouping keeps the scheduler view.
+    fireEvent.click(screen.getByRole("button", { name: /by scheduler/i }));
+    fireEvent.click(screen.getByRole("button", { name: /by su/i }));
+    expect(cellStates()).toEqual(["running", "idle", "drained", "drained"]);
   });
 });

@@ -53,6 +53,7 @@ from core import is_valid_node_hostname
 from json_db import atomic_write_json
 from naming import _full_rack_expected_nodes
 from platforms import get_platform as _get_platform
+from schedulers.slurm import slurm_node_status
 from universal_parser import expand_nodelist
 
 _logger = logging.getLogger(__name__)
@@ -1193,6 +1194,16 @@ def sample_node_gpu_shapes_via_smi(
     return out
 
 
+def node_sources(scheduler: str) -> dict[str, str]:
+    """Who answered for each half of a node record: ``status`` and ``scheduler_status``.
+
+    ``orchestrator`` is the cluster manager (``bcm``, ``maas``); ``scheduler`` the workload manager
+    the states were read from, or "" when none answered -- the floor view then has no scheduler view
+    to offer, rather than one painted entirely "unknown".
+    """
+    return {"orchestrator": str(getattr(_get_platform(), "kind", "") or ""), "scheduler": scheduler}
+
+
 def build_node_inventory(
     nodes: dict[str, str], racks: Iterable[str], ds_text: str = "",
     records: list[dict[str, Any]] | None = None,
@@ -1248,9 +1259,16 @@ def build_node_inventory(
         state = "down" if states & {"down", "fail", "inval", "unk", "unknown"} else "unknown"
         if states & {"idle", "alloc", "allocated", "mix", "mixed", "comp", "completing"} and state != "down":
             state = "up"
+        # Two views of one node, kept apart: ``status`` is the cluster manager's (powered, installing,
+        # unreachable), ``scheduler_status`` the workload manager's (idle, running, drained), in the
+        # normalized words of schedulers.base.NODE_STATES. A node can be up in one and out in the
+        # other -- NC's drained-but-powered fleet -- and the floor view shows either on request.
+        # The raw state is Slurm's wherever one is read today (a provider-inventoried cluster's
+        # states come from Slurm enrichment); another scheduler would map its own here.
         node_rec: dict[str, Any] = {
             "id": host, "rack": rack, "status": device_states.get(host.casefold(), state),
-            "scheduler_state": scheduler_state, "ip": detail.get("ip", ""),
+            "scheduler_state": scheduler_state, "scheduler_status": slurm_node_status(scheduler_state),
+            "ip": detail.get("ip", ""),
         }
         # Position in the rack, as the cluster manager places it (BCM "U20:11" -> "11"). Only for a
         # node that resolved to a rack, and never derived from the hostname: the SPA shows it as the
@@ -1899,6 +1917,7 @@ class NativeRackTableState:
         "log_thread",
         "node_inventory_error",
         "node_records",
+        "node_scheduler_source",
         "node_shapes",
         "node_shapes_refreshed_monotonic",
         "node_states",
@@ -1923,6 +1942,8 @@ class NativeRackTableState:
         self.ds_text = ""
         self.node_states: dict[str, str] | None = None
         self.node_records: list[dict[str, Any]] | None = None
+        # Which workload manager the node states were read from ("slurm"), or "" when none answered.
+        self.node_scheduler_source = ""
         # host -> {"gpu_count": int, "gpu_type"?: str}. Refreshed on a slow TTL (shape changes only
         # on hardware changes) so the nvidia-smi sample is not re-run every poll.
         self.node_shapes: dict[str, dict[str, Any]] = {}
@@ -1989,6 +2010,7 @@ class NativeRackTableState:
             slurm_shapes: dict[str, dict[str, Any]] = {}
             if scheduler == "slurm":
                 nodes, slurm_shapes = collect_sinfo_nodes_and_shapes()
+                source = "slurm"
             else:
                 records = _get_platform().compute_node_inventory()
                 slurm_states = self._provider_slurm_states()
@@ -1996,11 +2018,15 @@ class NativeRackTableState:
                     record["id"]: slurm_states.get(record["id"].casefold()) or record.get("scheduler_state", "")
                     for record in records
                 }
+                # The provider's own records carry no scheduler state today, so without Slurm's
+                # answer there is no scheduler view at all -- say so rather than name pythoncm.
+                source = "slurm" if slurm_states else ""
             c = sinfo_counts_for_nodes(nodes) if records is None else {}
             shapes = self._refresh_node_shapes(scheduler, records, nodes, slurm_shapes)
             with self.lock:
                 self.node_states = nodes
                 self.node_records = records
+                self.node_scheduler_source = source
                 self.node_shapes = shapes
                 self.node_inventory_error = ""
                 self.sinfo_counts = c
@@ -2094,6 +2120,7 @@ class NativeRackTableState:
                     self.node_states, self.racks, self.ds_text, self.node_records, self.node_shapes
                 ),
                 "node_inventory_error": self.node_inventory_error,
+                "node_sources": node_sources(self.node_scheduler_source),
                 "rack_mapping_mode": rack_mapping_mode(),
             }
 

@@ -17,6 +17,42 @@ from platforms import get_platform
 
 from schedulers.base import TERMINAL_STATES, JobHandle, JobResult, JobSpec, Scheduler
 
+# Slurm's node states, compact (``sinfo %t``) and long (``%T`` / ``scontrol``) spellings, onto the
+# normalized vocabulary in ``schedulers.base.NODE_STATES``. Anything absent (boot, cloud, the
+# power-save states, ``unk``, ``?``) says nothing about whether the node can work: ``unknown``.
+_SLURM_NODE_STATE = {
+    "idle": "idle",
+    "alloc": "running", "allocated": "running", "mix": "running", "mixed": "running",
+    "comp": "running", "completing": "running",
+    "plnd": "reserved", "planned": "reserved", "resv": "reserved", "reserved": "reserved",
+    "maint": "reserved", "maintenance": "reserved", "block": "reserved", "blocked": "reserved",
+    "drng": "draining", "draining": "draining",
+    "drain": "drained", "drained": "drained",
+    "down": "down", "fail": "down", "failg": "down", "failing": "down",
+    "inval": "down", "invalid": "down",
+}
+
+
+def slurm_node_status(raw: str | None) -> str:
+    """One of ``NODE_STATES`` for a Slurm node state such as ``drain``, ``mix-`` or ``IDLE+DRAIN``.
+
+    Suffix flags (``*`` not responding, ``~`` powered off, ...) are dropped: the view reads the
+    state, and a non-responding node is already ``down`` or ``unk`` in it. A combined state takes
+    its most telling part -- ``ALLOCATED+DRAIN`` is a node draining, not one running.
+    """
+    parts = {
+        _SLURM_NODE_STATE.get(p.strip().rstrip("*~$#:!%@^-"), "unknown")
+        for p in str(raw or "").lower().split("+") if p.strip()
+    }
+    if "down" in parts:
+        return "down"
+    if "draining" in parts or ("drained" in parts and "running" in parts):
+        return "draining"
+    for status in ("drained", "running", "reserved", "idle"):
+        if status in parts:
+            return status
+    return "unknown"
+
 
 class SlurmScheduler(Scheduler):
     kind = "slurm"

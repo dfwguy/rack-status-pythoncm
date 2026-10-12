@@ -90,7 +90,17 @@ deduplicated across partitions. Other schedulers use the cluster-manager provide
 structured compute-device query or MAAS's machines inventory. Management addresses are
 optional, so a missing RF0/BMC address does not remove a node.
 
-Each record has `id`, nullable `rack`, `status`, `scheduler_state`, and `ip`. A known rack
+Each record has `id`, nullable `rack`, `status`, `scheduler_state`, `scheduler_status`, and `ip`.
+`status` is the cluster manager's view of the node (`up`, `inst`, `down`, `unknown`).
+`scheduler_state` is the scheduler's raw state as it spells it (Slurm `drain`, `mix-`,
+`IDLE+DRAIN`). `scheduler_status` is the same state in a vocabulary shared by every scheduler:
+`idle`, `running`, `reserved`, `draining`, `drained`, `down`, `unknown` (`schedulers.base.NODE_STATES`,
+mapped from Slurm by `schedulers.slurm.slurm_node_status`). The snapshot's `node_sources` names who
+answered for each: `{"orchestrator": "bcm", "scheduler": "slurm"}`. `scheduler` is `""` when no
+scheduler answered. A provider-inventoried cluster such as Nscale NC, recorded with scheduler
+`pythoncm`, reports `slurm` here because its node states come from Slurm. The floor view's
+**By orchestrator** / **By scheduler** choice draws one or the other. It offers the scheduler
+view only when `scheduler` is set. A known rack
 placement or hostname association can attach a node to an existing rack; otherwise the Nodes
 view labels it **Unassigned**. The behavior is shared by RTX PRO 6000, B200, B300, and NVL
 platforms. Platform geometry never supplies synthetic nodes to this roster.

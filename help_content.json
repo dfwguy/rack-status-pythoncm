@@ -79,9 +79,19 @@
         "Clickable status summary tags (done/fail/ongoing/pending) that filter rows.",
         "Per-rack row menu: open detail, view parser charts, tail logs, run actions.",
         "Inline comment editing per rack.",
-        "Command activity indicator showing in-flight jobs per rack."
+        "Command activity indicator showing in-flight jobs per rack.",
+        "Floor view with one cell per node, coloured by the orchestrator (BCM: up, installing, down) or by the scheduler (Slurm: idle, running, reserved, draining, drained, down, unknown)."
       ],
       "howTo": [
+        {
+          "task": "See which nodes the scheduler can use",
+          "steps": [
+            "Open Compute > Racks and switch the layout to Floor.",
+            "Under By row / By SU, choose By scheduler.",
+            "Each cell is one node in tray order; hover a cell for its raw scheduler state, or a rack for both views' counts.",
+            "Choose By orchestrator to see the same nodes as the cluster manager does. The choice is remembered."
+          ]
+        },
         {
           "task": "Open a rack's detail view",
           "steps": [

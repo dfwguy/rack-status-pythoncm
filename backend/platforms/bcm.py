@@ -23,6 +23,7 @@ from platforms.base import PlatformProvider, _compute_node_records
 
 
 class BCMProvider(PlatformProvider):
+    kind = "bcm"
 
     # -- Cluster manager (cmsh) ---------------------------------------------
 

@@ -19,6 +19,7 @@ Backends: SlurmScheduler + LocalScheduler (implemented); run:AI / slinky / MaaS
 from __future__ import annotations
 
 from schedulers.base import (
+    NODE_STATES,
     TERMINAL_STATES,
     JobHandle,
     JobResult,
@@ -31,6 +32,7 @@ from schedulers.slurm import SlurmScheduler
 from schedulers.stubs import MaaSScheduler, RunAIScheduler, SlinkyScheduler
 
 __all__ = [
+    "NODE_STATES",
     "TERMINAL_STATES",
     "JobHandle",
     "JobResult",

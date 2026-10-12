@@ -394,13 +394,31 @@ export interface MultirackJobsResponse {
   error?: string;
 }
 
+/**
+ * What the workload manager says a node can do now, in words every scheduler maps into
+ * (``schedulers.base.NODE_STATES``). The server maps the raw state -- Slurm's ``drng``, ``mix-``,
+ * ``IDLE+DRAIN`` -- so no view has to know whose vocabulary it is reading.
+ */
+export type SchedulerNodeStatus =
+  | "idle"
+  | "running"
+  | "reserved"
+  | "draining"
+  | "drained"
+  | "down"
+  | "unknown";
+
 /** Discovered compute host; rack membership is optional inventory metadata. */
 export interface NodeInventoryEntry {
   id: string;
   rack: string | null;
+  /** The cluster manager's view (BCM ``ds``): powered and reachable, installing, or down. */
   status: "up" | "down" | "inst" | "unknown";
   ip: string;
+  /** The scheduler's raw state, as it spelled it (Slurm ``drain``, ``alloc``, ``mix-``). */
   scheduler_state?: string;
+  /** ``scheduler_state`` in the shared vocabulary. Absent on older servers. */
+  scheduler_status?: SchedulerNodeStatus;
   /** Position in the rack as the cluster manager places it (BCM ``U20:11`` -> ``"11"``). Present only
    * for a node that resolved to a rack and whose provider reports a unit; never derived from the
    * hostname. */
@@ -413,6 +431,11 @@ export interface NodeInventoryEntry {
   gpu_count?: number;
   /** GPU model label when known (e.g. "nvidia", "NVIDIA RTX 6000 Ada Generation"). */
   gpu_type?: string;
+}
+
+export interface NodeSources {
+  orchestrator: string;
+  scheduler: string;
 }
 
 export interface RackStatusResponse {
@@ -428,6 +451,12 @@ export interface RackStatusResponse {
   nodes?: NodeInventoryEntry[] | null;
   /** Discovery failure, including whether previously discovered nodes are being retained. */
   node_inventory_error?: string;
+  /**
+   * Who answered for each half of a node record: ``orchestrator`` for ``status`` (``bcm``, ``maas``),
+   * ``scheduler`` for ``scheduler_status`` (``slurm``; "" when no scheduler answered). Absent on
+   * older servers.
+   */
+  node_sources?: NodeSources;
   summary: RackSummary;
   footnotes: string[];
   comments: Record<string, string>;

@@ -59,8 +59,8 @@ def test_rackless_nodes_are_retained_without_invented_geometry(monkeypatch):
     payload = state.node_inventory_snapshot()
 
     assert payload["nodes"] == [
-        {"id": "GPU01", "rack": None, "status": "up", "scheduler_state": "idle", "ip": ""},
-        {"id": "GPU02", "rack": None, "status": "down", "scheduler_state": "down", "ip": ""},
+        {"id": "GPU01", "rack": None, "status": "up", "scheduler_state": "idle", "scheduler_status": "idle", "ip": ""},
+        {"id": "GPU02", "rack": None, "status": "down", "scheduler_state": "down", "scheduler_status": "down", "ip": ""},
     ]
     assert payload["node_inventory_error"] == ""
     assert state.sinfo_counts == {}
@@ -326,7 +326,10 @@ def test_worker_preserves_last_good_on_failure_then_clears_on_confirmed_empty(mo
     assert "exit 1" in failed["node_inventory_error"]
 
     state._worker_sinfo()
-    assert state.node_inventory_snapshot() == {"nodes": [], "node_inventory_error": "", "rack_mapping_mode": "direct"}
+    assert state.node_inventory_snapshot() == {
+        "nodes": [], "node_inventory_error": "", "rack_mapping_mode": "direct",
+        "node_sources": {"orchestrator": "", "scheduler": "slurm"},
+    }
     assert state.sinfo_counts == {}
 
 
@@ -392,12 +395,17 @@ def test_nonslurm_worker_uses_provider_inventory_and_keeps_unassigned_node_ip(mo
 
     assert state.node_inventory_snapshot() == {
         "nodes": [
-            {"id": "RTX6000-01", "rack": None, "ip": "10.0.0.1", "scheduler_state": "", "status": "up"},
-            {"id": "RTX6000-02", "rack": "p5-r01", "ip": "10.0.0.2", "scheduler_state": "", "status": "down", "tray": 1},
-            {"id": "RTX6000-03", "rack": None, "ip": "", "scheduler_state": "", "status": "unknown"},
+            {"id": "RTX6000-01", "rack": None, "ip": "10.0.0.1", "scheduler_state": "",
+             "scheduler_status": "unknown", "status": "up"},
+            {"id": "RTX6000-02", "rack": "p5-r01", "ip": "10.0.0.2", "scheduler_state": "",
+             "scheduler_status": "unknown", "status": "down", "tray": 1},
+            {"id": "RTX6000-03", "rack": None, "ip": "", "scheduler_state": "",
+             "scheduler_status": "unknown", "status": "unknown"},
         ],
         "node_inventory_error": "",
         "rack_mapping_mode": "direct",
+        # A provider that reports no scheduler state, and no Slurm to ask: no scheduler view.
+        "node_sources": {"orchestrator": "", "scheduler": ""},
     }
     provider.compute_node_inventory.assert_called_once_with()
     ns.host_exec.run_slurm_on_host.assert_not_called()
@@ -420,7 +428,10 @@ def test_provider_failure_distinguishes_unavailable_stale_and_confirmed_empty(mo
     assert state.node_inventory_snapshot()["nodes"] == last_good
     assert "last successful" in state.node_inventory_snapshot()["node_inventory_error"]
     state._worker_sinfo()
-    assert state.node_inventory_snapshot() == {"nodes": [], "node_inventory_error": "", "rack_mapping_mode": "direct"}
+    assert state.node_inventory_snapshot() == {
+        "nodes": [], "node_inventory_error": "", "rack_mapping_mode": "direct",
+        "node_sources": {"orchestrator": "", "scheduler": ""},
+    }
     ns.host_exec.run_slurm_on_host.assert_not_called()
 
 
