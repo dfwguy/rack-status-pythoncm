@@ -170,6 +170,43 @@ def nccl_env_scope_for_target(target: str) -> str:
     return nccl_env_scope(max(1, len(set(placed.values()))), len(hosts))
 
 
+def validation_target_for_racks(racks: list[str], override: str | None) -> str:
+    """The node target for a launch that spans *racks* (one rack: ``validation_target_for_rack``).
+
+    An explicit hostname selection keeps the hosts that belong to ANY of the racks the launch names.
+    Checking it against one rack -- the only rack a Stage-1 launch could name -- silently turned a
+    16+16 U22+U23 selection into a 16-node U22 run (Nscale NC, 2026-10-12): the hosts of the other
+    rack were dropped as foreign. They are foreign only to a rack the launch did not name, and every
+    named rack is authorized (the resolver reads ``rack`` and ``racks``). With no selection the
+    target is each rack in full. A ``<rack>-ct[...]`` template names one rack, so it is refused here.
+    """
+    racks = [r for r in dict.fromkeys(r.strip() for r in racks) if r]
+    if len(racks) <= 1:
+        return validation_target_for_rack(racks[0] if racks else "", override)
+    ov = (override or "").strip()
+    if not ov:
+        return ",".join(validation_target_for_rack(r, None) for r in racks)
+    if "[" in ov:
+        raise ValueError("a rack template targets one rack; select hostnames for a run across racks")
+    tokens = [t.strip() for t in ov.split(",") if t.strip()]
+    inventory_on = os.environ.get("RACK_TARGET_FROM_INVENTORY", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+    members: dict[str, str] = {}
+    if inventory_on:
+        for r in racks:
+            members.update({h.casefold(): h for h in _rack_node_hostnames_from_inventory(r)})
+    if not members:
+        bad = [t for t in tokens if not is_valid_node_hostname(t)]
+        if bad:
+            raise ValueError("invalid node hostname(s): " + ", ".join(repr(t) for t in bad[:5]))
+        return ",".join(dict.fromkeys(tokens))
+    chosen = [members[t.casefold()] for t in tokens if t.casefold() in members]
+    if not chosen:
+        raise ValueError(f"none of the selected hosts is in racks {', '.join(racks)}")
+    return ",".join(dict.fromkeys(chosen))
+
+
 def validation_target_for_rack(rack: str, override: str | None) -> str:
     """Build the node target for run_singlerack.sh / sysinfo / pdsh.
 

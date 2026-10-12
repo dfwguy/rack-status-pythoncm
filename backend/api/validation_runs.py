@@ -92,6 +92,7 @@ from node_targets import (
     nccl_env_scope,
     nccl_env_scope_for_target,
     validation_target_for_rack,
+    validation_target_for_racks,
 )
 from paths import (
     _clusterkit_script_path,
@@ -1065,12 +1066,23 @@ def _prepare_run_nccl_fullrack(body: dict) -> tuple[dict | None, tuple[object, i
     if tgt_ov is not None and not isinstance(tgt_ov, str):
         return None, (jsonify({"ok": False, "error": "target must be a string"}), 400)
     tgt_ov_s = tgt_ov.strip() if isinstance(tgt_ov, str) else ""
+    # Every rack the run spans: ``rack`` plus an optional ``racks`` list. A run across racks names
+    # all of them, so an explicit host selection is checked against each (and each is authorized).
+    racks_raw = body.get("racks")
+    if racks_raw is not None and (not isinstance(racks_raw, list) or not all(isinstance(r, str) for r in racks_raw)):
+        return None, (jsonify({"ok": False, "error": "racks must be an array of rack ids"}), 400)
+    try:
+        all_racks = list(dict.fromkeys([rk, *(_normalize_rack_id(r.strip()) for r in racks_raw or [] if r.strip())]))
+    except ValueError as e:
+        return None, (jsonify({"ok": False, "error": str(e)}), 400)
     # Resolve the node target. When the UI sends an explicit node selection we submit those
     # exact trays via ``--nodelist`` (so e.g. a rack minus a down/faulted node runs on 17);
-    # with no selection we pass the rack id and let run_nccl_mpi.sh resolve the full rack.
+    # with no selection we pass the rack id(s) and let the launcher resolve the full racks.
     try:
-        target = validation_target_for_rack(rack, tgt_ov_s or None)
-    except ValueError:
+        target = validation_target_for_racks(all_racks, tgt_ov_s or None)
+    except ValueError as e:
+        if len(all_racks) > 1:
+            return None, (jsonify({"ok": False, "error": str(e)}), 400)
         target = rk
     # Stage-1 runs through llmb-run (run_llmb_nccl.sh), not raw sbatch. Operator ask
     # 2026-07-28: "fix stage 1 NCCL to use llmb run - no more sbatch - only for MNUberGEMM
@@ -1098,8 +1110,8 @@ def _prepare_run_nccl_fullrack(body: dict) -> tuple[dict | None, tuple[object, i
             cmd += ["--nodelist", target]
             node_arg_display = " --nodelist " + shlex.quote(target)
         else:
-            cmd.append(rk)
-            node_arg_display = " " + shlex.quote(rk)
+            cmd += all_racks
+            node_arg_display = " " + " ".join(shlex.quote(r) for r in all_racks)
         display_cmd = "./" + script.name + (
             (" --reservation " + shlex.quote(reservation)) if reservation else ""
         ) + (" --dry-run" if body.get("dry_run") else "") + node_arg_display
@@ -1141,6 +1153,7 @@ def _prepare_run_nccl_fullrack(body: dict) -> tuple[dict | None, tuple[object, i
         {
             "log_dir": log_dir,
             "rk": rk,
+            "racks": all_racks,
             "target": target,
             "cmd": cmd,
             "display_cmd": display_cmd,
@@ -1864,14 +1877,15 @@ def api_run_nccl_fullrack_async():
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
     operator = _operator_from_request()
-    scope, scope_nodes = launch_scope_for_target(target)
+    racks = [str(r) for r in prep.get("racks") or [rk]]
+    scope, scope_nodes = ("multirack", []) if len(racks) > 1 else launch_scope_for_target(target)
     _record_validation_activity(
         "nccl-fullrack",
         stage="stage1",
         scope=scope,
         nodes=scope_nodes,
         rack=rk,
-        racks=[rk],
+        racks=racks,
         log_dir=str(log_dir),
         command_display=display_cmd,
         activity_id=job_id,
