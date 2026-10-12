@@ -67,7 +67,7 @@ function emptyFabric(): ClusterFabric {
 
 /** No tests chosen, no GPU-Direct: ClusterKit runs the launcher's defaults (bandwidth + latency). */
 function emptyClusterKit(): ClusterClusterKit {
-  return { tests: [], gpudirect: false };
+  return { tests: [], gpudirect: false, multirack_tests: [] };
 }
 
 /** No variables at any span: every launch runs with the scripts' own defaults. */
@@ -787,7 +787,8 @@ export function ProjectsView() {
           <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>ClusterKit</Text>
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginTop: -4 }}>
             Used whenever ClusterKit is launched on this cluster. No tests chosen = bandwidth and latency from host
-            memory. GPU-Direct makes the gpu_* tests run each rail from its own GPU.
+            memory. GPU-Direct makes the gpu_* tests run each rail from its own GPU. Multi-rack tests run when
+            ClusterKit is launched across racks, each rack a scope (none chosen = bisection_bw).
           </Text>
           <Box sx={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 2 }}>
             <FormField name="cl-ck-tests" slotLabel="Test cases" slotHelp="RACK_CLUSTERKIT_TESTS">
@@ -805,6 +806,16 @@ export function ProjectsView() {
                 slotLabel="GPU-Direct"
                 checked={Boolean(clusterDraft?.cluster.clusterkit?.gpudirect)}
                 onCheckedChange={(on: boolean) => setClusterKit({ gpudirect: on })}
+              />
+            </FormField>
+            <FormField name="cl-ck-mr-tests" slotLabel="Multi-rack test cases" slotHelp="RACK_CLUSTERKIT_MULTIRACK_TESTS">
+              <MultiSelectCombobox
+                items={vocab?.clusterkit_tests ?? []}
+                value={clusterDraft?.cluster.clusterkit?.multirack_tests ?? []}
+                onValueChange={(v) => setClusterKit({ multirack_tests: v })}
+                placeholder="Default (bisection_bw)"
+                aria-label="ClusterKit multi-rack test cases"
+                formatSummaryLabel={(n) => (clusterDraft?.cluster.clusterkit?.multirack_tests ?? []).slice(0, n).join(", ")}
               />
             </FormField>
           </Box>

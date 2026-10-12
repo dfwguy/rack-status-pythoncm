@@ -30,7 +30,7 @@ import { Card, Text, Tag, Button, Banner, Flex } from "@nvidia/foundations-react
 import { attachLaunchOptions, type LaunchOptions } from "../lib/rackCommandBodies";
 import { LaunchOptionsDialog } from "../components/rack/LaunchOptionsDialog";
 import { MultiSelectCombobox } from "../components/MultiSelectCombobox";
-import { Layers, LineChart, Gauge, Search } from "lucide-react";
+import { Layers, LineChart, Gauge, Network, Search } from "lucide-react";
 import Tooltip from "@mui/material/Tooltip";
 import { PageHeader } from "../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../components/layout/contentWidth";
@@ -133,11 +133,13 @@ function logBasenameForParser(logFile: string): string {
   return i >= 0 ? s.slice(i + 1) : s;
 }
 
-type MultirackLaunchKind = "nemo" | "llmb";
+type MultirackLaunchKind = "nemo" | "llmb" | "clusterkit";
 
 const LAUNCH_META: Record<MultirackLaunchKind, { label: string; asyncUrl: string }> = {
   nemo: { label: "Multirack NEMO validation", asyncUrl: "/api/run-nemo-xrack-async" },
   llmb: { label: "NCCL Microbenchmark (direct)", asyncUrl: "/api/run-llmb-nccl-async" },
+  // The single-rack ClusterKit endpoint; two or more racks make it compare rack against rack.
+  clusterkit: { label: "ClusterKit rack-to-rack", asyncUrl: "/api/run-clusterkit-async" },
 };
 
 const TERMINAL_PHASES = new Set(["done", "error", "timeout"]);
@@ -145,6 +147,7 @@ const TERMINAL_PHASES = new Set(["done", "error", "timeout"]);
 const LAUNCH_TITLE: Record<MultirackLaunchKind, string> = {
   nemo: "Launch Multirack NEMO Validation",
   llmb: "Launch NCCL Microbenchmark",
+  clusterkit: "Launch ClusterKit Rack-to-Rack",
 };
 
 const EMPTY_RACK_ROWS: RackRow[] = [];
@@ -475,7 +478,7 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
     try {
       const body: Record<string, unknown> = { racks, log_dir: logDir };
       if (kind === "llmb") body.dry_run = dryRun;
-      if (kind === "llmb" && campaign?.active && campaign.id) body.campaign = campaign.id;
+      if ((kind === "llmb" || kind === "clusterkit") && campaign?.active && campaign.id) body.campaign = campaign.id;
       attachLaunchOptions(body, opts);
       // prepare -> digest -> launch (REQ-6): a multirack launch that was reviewed against one
       // roster must not run against another.
@@ -734,6 +737,20 @@ export function MultirackView({ data, logDir }: MultirackViewProps) {
               >
                 <Layers size={16} style={{ marginRight: 6 }} />
                 {launchingKind === "nemo" ? "Launching…" : `${tool.name} (${selected.size})`}
+              </Button>
+            ))}
+            {multirackTools.filter((tool) => tool.id === "clusterkit-multirack").map((tool) => (
+              // No options dialog: ClusterKit takes its tests from the cluster record (Projects ->
+              // cluster -> ClusterKit), and the dialog's NCCL fields would do nothing here.
+              <Button
+                key={tool.id}
+                kind="secondary"
+                size="small"
+                onClick={() => void handleLaunch("clusterkit", {})}
+                disabled={noRacks || selected.size < 2 || launchingKind !== null}
+              >
+                <Network size={16} style={{ marginRight: 6 }} />
+                {launchingKind === "clusterkit" ? "Launching…" : `${tool.name} (${selected.size})`}
               </Button>
             ))}
             <Button

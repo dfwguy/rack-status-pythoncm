@@ -27,6 +27,9 @@
 #            RACK_CLUSTERKIT_TESTS — ClusterKit test cases, space-separated (default "bw lat"); e.g.
 #              "gpu_gpu_bw gpu_gpu_lat" with RACK_CLUSTERKIT_EXTRA_OPTS=-G measures each rail from its own GPU.
 #            RACK_CLUSTERKIT_GPUDIRECT=1 — the gpu_* tests use GPU-Direct (clusterkit.sh -G).
+#            RACK_CLUSTERKIT_SCOPES — "RACK:h1,h2;RACK:h3,h4" (set by a multi-rack launch). Each rack becomes
+#              a ClusterKit scope (-S scope file) and every rail runs RACK_CLUSTERKIT_MULTIRACK_TESTS
+#              (default "bisection_bw": rack-to-rack bandwidth) instead of the pairwise tests.
 #              Both are set per cluster in Projects -> cluster -> ClusterKit.
 #            RACK_CLUSTERKIT_EXTRA_OPTS, CUDA_MAJ / RACK_NVLOOM_CUDA_MAJOR.
 # A rail whose test fails is reported and the remaining rails still run; the job exits non-zero if any
@@ -159,11 +162,29 @@ printf '### HCA row: %s\n' "${_CK_ROWS[@]}"
 echo "### HPCX_DIR=${HPCX_DIR}"
 
 _ck_exe_opt=""
-for _t in ${RACK_CLUSTERKIT_TESTS:-bw lat}; do _ck_exe_opt+="-d ${_t} "; done
+_ck_tests="${RACK_CLUSTERKIT_TESTS:-bw lat}"
+if [[ -n "${RACK_CLUSTERKIT_SCOPES:-}" ]]; then
+  # Across racks: write ClusterKit's scope file (host,scope_name,scope_num), one scope per rack.
+  _ck_tests="${RACK_CLUSTERKIT_MULTIRACK_TESTS:-bisection_bw}"
+  _ck_scope_file="${PWD}/scopes_${SLURM_JOB_ID:-0}.csv"
+  : > "${_ck_scope_file}"
+  _ck_n=0
+  IFS=';' read -ra _ck_parts <<< "${RACK_CLUSTERKIT_SCOPES}"
+  for _ck_part in "${_ck_parts[@]}"; do
+    [[ -n "${_ck_part}" ]] || continue
+    _ck_n=$((_ck_n + 1))
+    IFS=',' read -ra _ck_hosts <<< "${_ck_part#*:}"
+    for _ck_h in "${_ck_hosts[@]}"; do
+      [[ -n "${_ck_h}" ]] && printf '%s,%s,%s\n' "${_ck_h}" "${_ck_part%%:*}" "${_ck_n}" >> "${_ck_scope_file}"
+    done
+  done
+  _ck_exe_opt+="-S ${_ck_scope_file} "
+fi
+for _t in ${_ck_tests}; do _ck_exe_opt+="-d ${_t} "; done
 # GPU tests (gpu_* cases, or clusterkit.sh -g) change how the RoCE mapper binds (see it) and what a run
 # must produce: ClusterKit skips GPU tests it cannot run yet exits 0, so a rail without GPU results fails.
 CK_GPU_TESTS=0
-if [[ " ${RACK_CLUSTERKIT_TESTS:-} " == *" gpu"* || " ${RACK_CLUSTERKIT_EXTRA_OPTS:-} " == *" -g "* ]]; then
+if [[ " ${_ck_tests} " == *" gpu"* || " ${RACK_CLUSTERKIT_EXTRA_OPTS:-} " == *" -g "* ]]; then
   CK_GPU_TESTS=1
 fi
 export CK_GPU_TESTS
@@ -204,6 +225,10 @@ for idx in "${!_CK_ROWS[@]}"; do
   set +x
   if [[ "${rc}" -eq 0 && "${CK_GPU_TESTS}" == 1 ]] && ! compgen -G "${CK_OUTPUT_SUBDIR}/GPU_*.json" >/dev/null; then
     echo "ERROR: ClusterKit reported success for ${HCA_TAG} but wrote no GPU results (it skips GPU tests it cannot run)." >&2
+    rc=1
+  fi
+  if [[ "${rc}" -eq 0 ]] && ! compgen -G "${CK_OUTPUT_SUBDIR}/*.json" >/dev/null; then
+    echo "ERROR: ClusterKit reported success for ${HCA_TAG} but wrote no results." >&2
     rc=1
   fi
   if [[ "${rc}" -ne 0 ]]; then

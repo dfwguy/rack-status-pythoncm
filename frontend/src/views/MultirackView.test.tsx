@@ -52,6 +52,7 @@ function compatibleTools() {
     "preset-exemplar-sysinfo": "DGXC system_info",
     "preset-nemo": "NeMo 26.04.01",
     "preset-mnubergemm": "MNUberGEMM 26.03-v1.17",
+    "clusterkit-multirack": "ClusterKit Rack-to-Rack",
   };
   return [
     { id: "nemo-xrack", surfaces: ["multirack"], launch: { kind: "async-job", preset_id: "" } },
@@ -61,6 +62,7 @@ function compatibleTools() {
     { id: "preset-exemplar-sysinfo", surfaces: ["multirack"], launch: { kind: "validation-preset", preset_id: "exemplar-system-info" } },
     { id: "preset-nemo", surfaces: ["multirack"], launch: { kind: "validation-preset", preset_id: "nemo-26.04.01" } },
     { id: "preset-mnubergemm", surfaces: ["multirack"], launch: { kind: "validation-preset", preset_id: "mnubergemm-26.03-v1.17" } },
+    { id: "clusterkit-multirack", surfaces: ["multirack"], launch: { kind: "async-job", preset_id: "" } },
   ].map((tool, order) => ({ ...tool, name: names[tool.id], order }));
 }
 
@@ -430,6 +432,40 @@ describe("MultirackView rack filters", () => {
       log_dir: "/logs",
       storage: "local",
       rsync_to_local: true,
+    });
+  });
+
+  it("launches ClusterKit rack-to-rack on the selected racks through prepare -> review", async () => {
+    vi.mocked(globalThis.fetch).mockImplementation((input) => {
+      const url = String(input);
+      const body = url === "/api/launch/prepare"
+        ? { ok: true, kind: "clusterkit", plan: {}, plan_hash: "reviewed-clusterkit-plan" }
+        : url === "/api/run-clusterkit-async"
+          ? { ok: true, job_id: "ck-1" }
+          : { ok: true, rows: [], jobs: [] };
+      return Promise.resolve(new Response(JSON.stringify(body), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      }));
+    });
+    renderView();
+    await waitFor(() => expect(screen.getByText("Select all eligible (4)")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select rack ink50-dh01-d01" }));
+    // One rack is not a rack-to-rack test.
+    expect(screen.getByRole("button", { name: "ClusterKit Rack-to-Rack (1)" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox", { name: "Select rack ink50-dh01-d02" }));
+    fireEvent.click(screen.getByRole("button", { name: "ClusterKit Rack-to-Rack (2)" }));
+
+    await waitFor(() => expect(
+      vi.mocked(globalThis.fetch).mock.calls.some(([url]) => String(url) === "/api/run-clusterkit-async"),
+    ).toBe(true));
+    const calls = vi.mocked(globalThis.fetch).mock.calls;
+    const prepare = calls.find(([url]) => String(url) === "/api/launch/prepare");
+    expect(JSON.parse(String(prepare?.[1]?.body))).toEqual({
+      kind: "clusterkit", racks: ["ink50-dh01-d01", "ink50-dh01-d02"], log_dir: "/logs",
+    });
+    const launch = calls.find(([url]) => String(url) === "/api/run-clusterkit-async");
+    expect(JSON.parse(String(launch?.[1]?.body))).toEqual({
+      racks: ["ink50-dh01-d01", "ink50-dh01-d02"], log_dir: "/logs", plan_hash: "reviewed-clusterkit-plan",
     });
   });
 

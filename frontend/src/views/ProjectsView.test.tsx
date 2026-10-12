@@ -325,7 +325,7 @@ describe("ClusterKit", () => {
     fireEvent.change(screen.getByPlaceholderText("e.g. Pod A"), { target: { value: "NC" } });
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
-    expect(savedProject().clusters[0].clusterkit).toEqual({ tests: [], gpudirect: false });
+    expect(savedProject().clusters[0].clusterkit).toEqual({ tests: [], gpudirect: false, multirack_tests: [] });
   });
 
   it("states the test cases and GPU-Direct for the cluster and saves them", async () => {
@@ -344,6 +344,8 @@ describe("ClusterKit", () => {
     fireEvent.click(screen.getByRole("switch", { name: "GPU tests" }));
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
-    expect(savedProject().clusters[0].clusterkit).toEqual({ tests: ["gpu_gpu_bw", "gpu_gpu_lat"], gpudirect: true });
+    expect(savedProject().clusters[0].clusterkit).toEqual({
+      tests: ["gpu_gpu_bw", "gpu_gpu_lat"], gpudirect: true, multirack_tests: [],
+    });
   });
 });

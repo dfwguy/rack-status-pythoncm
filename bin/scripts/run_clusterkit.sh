@@ -65,7 +65,9 @@ fi
 mkdir -p "${JOB_LOG_DIR}/clusterkit" || { echo "run_clusterkit: cannot create log directory: ${JOB_LOG_DIR}/clusterkit" >&2; exit 2; }
 cd "${JOB_LOG_DIR}" || exit 2
 
-mapfile -t _cancel_ids < <(squeue -h -o '%i %j' 2>/dev/null | awk '$2 ~ /^CLUSTERKIT/ {print $1}' || true)
+# Only this target's own stale job: a run for another rack (or across racks) is not ours to cancel.
+# (Matching every CLUSTERKIT* job made concurrent rack runs, and a multi-rack run, cancel each other.)
+mapfile -t _cancel_ids < <(squeue -h -o '%i %j' 2>/dev/null | awk -v n="CLUSTERKIT-${rack}" '$2 == n {print $1}' || true)
 if [[ ${#_cancel_ids[@]} -gt 0 ]]; then
   scancel "${_cancel_ids[@]}" 2>/dev/null || true
 fi

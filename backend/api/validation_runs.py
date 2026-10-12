@@ -1228,13 +1228,158 @@ def _prepare_run_nvloom_singlerack(body: dict) -> tuple[dict | None, tuple[objec
     )
 
 
+#: Settings and cluster values a ClusterKit job receives (cluster record > Settings > process env).
+_CLUSTERKIT_PASS_THROUGH = (
+    "NVIS_HPCX_ROOT",
+    "NVIS_CLUSTERKIT_HPCX_INIT",
+    "RACK_CLUSTERKIT_PARTITION",
+    "RACK_CLUSTERKIT_EXTRA_OPTS",
+    "NVIS_FABRIC_NETWORK",
+    "RACK_CLUSTERKIT_LINK_TECH",
+    "RACK_CLUSTERKIT_HCA_PROFILE",
+    "RACK_CLUSTERKIT_UCX_TLS",
+    "RACK_CLUSTERKIT_TESTS",
+    "RACK_CLUSTERKIT_GPUDIRECT",
+    "RACK_CLUSTERKIT_MULTIRACK_TESTS",
+)
+
+
+def _clusterkit_job_env(body: dict, label: str) -> tuple[dict[str, str] | None, tuple[object, int] | None]:
+    """The environment every ClusterKit job gets, single- or multi-rack. *label* names its logs."""
+    ws = _nvis_workspace_dir_effective()
+    if not ws:
+        return None, (jsonify({"ok": False, "error": _NO_WORKSPACE}), 400)
+    cuda_m = (_eget("RACK_CLUSTERKIT_CUDA_MAJOR") or _eget("RACK_NVLOOM_CUDA_MAJOR") or _eget("CUDA_MAJ") or "13").strip()
+    if cuda_m not in ("12", "13"):
+        cuda_m = "13"
+    env_updates: dict[str, str] = {
+        "WORKSPACE_DIR": ws,
+        "NVIS_WORKSPACE_DIR": ws,
+        "TOPDIR": ws,
+        "NVIS_BIN_SCRIPTS": script_tree.scripts_dir(),
+        "CUDA_MAJ": cuda_m,
+        "RACK_CLUSTERKIT_RACK": label,
+    }
+    pl = _clusterkit_product_line_for_job(body)
+    if pl:
+        env_updates["RACK_CLUSTER_PRODUCT_LINE"] = pl
+    for k in _CLUSTERKIT_PASS_THROUGH:
+        v = (_eget(k) or "").strip()
+        if v:
+            env_updates[k] = v
+    return env_updates, None
+
+
+def _clusterkit_rack_groups(
+    body: dict, rack_ids: list[str]
+) -> tuple[dict[str, list[str]], str, tuple[object, int] | None]:
+    """The hosts of each rack, kept apart -- ClusterKit's scope tests compare rack against rack.
+
+    An active exact-node campaign is authoritative (its eligible nodes, never a re-expanded rack),
+    exactly as for the multi-rack NCCL launch; otherwise each rack's placed members from the node
+    inventory, which needs no hostname convention. Returns (groups, campaign_id, error).
+    """
+    try:
+        campaign = _multirack_campaign_snapshot()
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+        return {}, "", (jsonify({"ok": False, "error": f"exact-node campaign unavailable: {exc}"}), 503)
+    campaign_id = str(campaign.get("id") or "")
+    requested = str(body.get("campaign") or "").strip()
+    if requested and requested != campaign_id:
+        return {}, "", (jsonify({"ok": False, "error": "stale or unknown exact-node campaign id"}), 409)
+    groups: dict[str, list[str]] = {}
+    if campaign.get("active"):
+        indexed = {str(row.get("rack") or ""): row for row in campaign.get("racks", []) if isinstance(row, dict)}
+        for rack in rack_ids:
+            row = indexed.get(rack)
+            if row is None:
+                return {}, "", (jsonify({"ok": False, "error": f"rack {rack} is outside exact-node campaign {campaign_id}"}), 409)
+            if not row.get("eligible"):
+                return {}, "", (jsonify({"ok": False, "error": f"rack {rack}: {row.get('reason') or 'not eligible'}"}), 409)
+            groups[rack] = [str(n) for n in row.get("nodes", []) if str(n).strip()]
+        return groups, campaign_id, None
+    for rack in rack_ids:
+        members = _rack_node_hostnames_from_inventory(rack)
+        if not members:
+            return {}, "", (jsonify({"ok": False, "error": f"no inventory nodes placed in rack {rack}"}), 409)
+        groups[rack] = list(members)
+    return groups, "", None
+
+
+def _prepare_run_clusterkit_multirack(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
+    """ClusterKit across racks: every rail tested rack against rack (bisection_bw by default).
+
+    The launcher gets one flat host list plus RACK_CLUSTERKIT_SCOPES ("RACK:h1,h2;RACK:h3,..."), from
+    which clusterkit.sbatch writes ClusterKit's scope file -- the per-rack grouping the other
+    multi-rack launchers flatten away and then fail to recover where hostnames carry no rack.
+    """
+    log_raw = body.get("log_dir")
+    try:
+        log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
+    except ValueError as e:
+        return None, (jsonify({"ok": False, "error": str(e)}), 400)
+    rack_ids: list[str] = []
+    for item in body.get("racks") or []:
+        try:
+            rk = _normalize_rack_id(str(item).strip())
+        except ValueError as e:
+            return None, (jsonify({"ok": False, "error": str(e)}), 400)
+        if rk not in rack_ids:
+            rack_ids.append(rk)
+    if len(rack_ids) < 2:
+        return None, (jsonify({"ok": False, "error": "a multi-rack ClusterKit run needs at least two racks"}), 400)
+    groups, campaign_id, err = _clusterkit_rack_groups(body, rack_ids)
+    if err is not None:
+        return None, err
+    for rack, hosts in groups.items():
+        if len(hosts) < 1:
+            return None, (jsonify({"ok": False, "error": f"rack {rack} has no node to test"}), 409)
+    script = _clusterkit_script_path()
+    if not _script_exists(script):
+        return None, (jsonify({"ok": False, "error": f"clusterkit script not found: {script}"}), 500)
+    nodes = [h for rack in rack_ids for h in groups[rack]]
+    target = ",".join(nodes)
+    label = "+".join(rack_ids)
+    env_updates, err = _clusterkit_job_env(body, label)
+    if err is not None:
+        return None, err
+    assert env_updates is not None
+    env_updates["RACK_CLUSTERKIT_SCOPES"] = ";".join(f"{rack}:{','.join(groups[rack])}" for rack in rack_ids)
+    cmd = ["bash", str(script), target]
+    display_cmd = "./" + script.name + " " + shlex.quote(target)
+    timeout = max(120, _job_env_int("RACK_CLUSTERKIT_TIMEOUT", 14400))
+    return (
+        {
+            "log_dir": log_dir,
+            "rk": label,
+            "racks": rack_ids,
+            "nodes": nodes,
+            "target": target,
+            "campaign": campaign_id,
+            "cmd": cmd,
+            "display_cmd": display_cmd,
+            "timeout": timeout,
+            "env_updates": env_updates,
+        },
+        None,
+    )
+
+
 def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[object, int] | None]:
-    """Shared parse for async ClusterKit singlerack Slurm job."""
+    """Shared parse for async ClusterKit: one rack, or -- with ``racks`` naming two or more -- across racks."""
     if os.environ.get("RACK_CLUSTERKIT_DISABLED", "").strip().lower() in ("1", "true", "yes"):
         return None, (
             jsonify({"ok": False, "error": "clusterkit disabled (RACK_CLUSTERKIT_DISABLED)"}),
             403,
         )
+    racks_raw = body.get("racks")
+    if racks_raw is not None:
+        if not isinstance(racks_raw, list):
+            return None, (jsonify({"ok": False, "error": "racks must be an array of rack ids"}), 400)
+        if len({str(r).strip() for r in racks_raw if str(r).strip()}) > 1:
+            return _prepare_run_clusterkit_multirack(body)
+        if racks_raw and not body.get("rack"):
+            body = {**body, "rack": str(racks_raw[0])}
     log_raw = body.get("log_dir")
     try:
         log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
@@ -1258,38 +1403,9 @@ def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[o
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
     timeout = max(120, _job_env_int("RACK_CLUSTERKIT_TIMEOUT", 14400))
-    ws = _nvis_workspace_dir_effective()
-    if not ws:
-        return None, (jsonify({"ok": False, "error": _NO_WORKSPACE}), 400)
-    cuda_m = (_eget("RACK_CLUSTERKIT_CUDA_MAJOR") or _eget("RACK_NVLOOM_CUDA_MAJOR") or _eget("CUDA_MAJ") or "13").strip()
-    if cuda_m not in ("12", "13"):
-        cuda_m = "13"
-    env_updates: dict[str, str] = {
-        "WORKSPACE_DIR": ws,
-        "NVIS_WORKSPACE_DIR": ws,
-        "TOPDIR": ws,
-        "NVIS_BIN_SCRIPTS": script_tree.scripts_dir(),
-        "CUDA_MAJ": cuda_m,
-        "RACK_CLUSTERKIT_RACK": rk,
-    }
-    pl = _clusterkit_product_line_for_job(body)
-    if pl:
-        env_updates["RACK_CLUSTER_PRODUCT_LINE"] = pl
-    for k in (
-        "NVIS_HPCX_ROOT",
-        "NVIS_CLUSTERKIT_HPCX_INIT",
-        "RACK_CLUSTERKIT_PARTITION",
-        "RACK_CLUSTERKIT_EXTRA_OPTS",
-        "NVIS_FABRIC_NETWORK",
-        "RACK_CLUSTERKIT_LINK_TECH",
-        "RACK_CLUSTERKIT_HCA_PROFILE",
-        "RACK_CLUSTERKIT_UCX_TLS",
-        "RACK_CLUSTERKIT_TESTS",
-        "RACK_CLUSTERKIT_GPUDIRECT",
-    ):
-        v = (_eget(k) or "").strip()
-        if v:
-            env_updates[k] = v
+    env_updates, err = _clusterkit_job_env(body, rk)
+    if err is not None:
+        return None, err
     return (
         {
             "log_dir": log_dir,
@@ -1998,7 +2114,7 @@ def api_run_nvloom_async():
 @bp.route("/api/run-clusterkit-async", methods=["POST"])
 @action("validation:run_clusterkit", variant="async")
 def api_run_clusterkit_async():
-    """Start ClusterKit singlerack Slurm driver; poll GET /api/run-clusterkit-status?job_id=…"""
+    """Start ClusterKit for one rack, or across ``racks``; poll GET /api/run-clusterkit-status?job_id=…"""
     body = request.get_json(silent=True) or {}
     prep, err = _prepared(_prepare_run_clusterkit_singlerack, body, kind="clusterkit")
     if err is not None:
@@ -2015,12 +2131,14 @@ def api_run_clusterkit_async():
     job_id = str(uuid.uuid4())
     created = datetime.now(timezone.utc).isoformat()
     operator = _operator_from_request()
+    racks = [str(r) for r in prep.get("racks") or [rk]]
+    multirack = len(racks) > 1
     _record_validation_activity(
         "clusterkit",
         stage="other",
-        scope="rack",
-        rack=rk,
-        racks=[rk],
+        scope="multirack" if multirack else "rack",
+        rack="" if multirack else rk,
+        racks=racks,
         log_dir=str(log_dir),
         command_display=display_cmd,
         activity_id=job_id,
@@ -2032,6 +2150,7 @@ def api_run_clusterkit_async():
             "kind": "clusterkit",
             "operator": operator,
             "rack": rk,
+            "racks": racks,
             "target": target,
             "log_dir": str(log_dir),
             "phase": "starting",

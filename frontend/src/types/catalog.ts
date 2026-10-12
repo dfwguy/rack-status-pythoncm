@@ -219,6 +219,8 @@ export interface ClusterFabric {
 export interface ClusterClusterKit {
   tests: string[];
   gpudirect: boolean;
+  /** Tests for a run across racks (each rack a ClusterKit scope); empty = bisection_bw. Optional on older records. */
+  multirack_tests?: string[];
 }
 
 /** The span a launch runs over, which picks one of a cluster's NCCL environment lists. */

@@ -608,6 +608,26 @@ SEED_TOOLS: list[dict[str, Any]] = [
         launch={"kind": "async-job", "endpoint": "/api/run-clusterkit-async"},
     ),
     _tool(
+        "clusterkit-multirack", "ClusterKit Rack-to-Rack", "performance", "run_clusterkit.sh",
+        "RACK_CLUSTERKIT_SCRIPT", ["multirack", "tools"], "async", "multirack",
+        description=(
+            "ClusterKit across racks: every compute rail measured rack against rack, each rack a scope "
+            "(bisection_bw by default)."
+        ),
+        ai_context=(
+            "Multi-rack form of the clusterkit tool, same script and endpoint: POST "
+            "/api/run-clusterkit-async with racks:[...] (two or more). Each rack's placed hosts become a "
+            "ClusterKit scope via RACK_CLUSTERKIT_SCOPES; the cluster's clusterkit.multirack_tests choose the "
+            "test cases. Measures scale-out bandwidth between racks under many concurrent flows, which "
+            "pairwise tests and single-rack NCCL cannot."
+        ),
+        subtitle="Rack-to-rack bandwidth per rail",
+        button_label="Run ClusterKit",
+        icon="Network",
+        order=85,
+        launch={"kind": "async-job", "endpoint": "/api/run-clusterkit-async"},
+    ),
+    _tool(
         "nvloom", "NVLoom Singlerack", "performance", "run_nvloom_singlerack.sh",
         "RACK_NVLOOM_SINGLERACK_SCRIPT", ["rackDetail.networking", "rackDetail.validation"], "async", "rack",
         capabilities=["nvlink"],

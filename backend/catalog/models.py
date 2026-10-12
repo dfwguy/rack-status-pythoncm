@@ -1030,6 +1030,9 @@ class ClusterClusterKit:
 
     tests: list[str] = field(default_factory=list)
     gpudirect: bool = False
+    #: Test cases for a run across racks, where ClusterKit compares rack against rack (each rack a
+    #: "scope"). Empty = the launcher's default, bisection_bw. Projected as RACK_CLUSTERKIT_MULTIRACK_TESTS.
+    multirack_tests: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: Any) -> ClusterClusterKit:
@@ -1037,14 +1040,17 @@ class ClusterClusterKit:
         return cls(
             tests=[t.strip() for t in _as_str_list(d.get("tests")) if t.strip()],
             gpudirect=_as_bool(d.get("gpudirect")),
+            multirack_tests=[t.strip() for t in _as_str_list(d.get("multirack_tests")) if t.strip()],
         )
 
     def validate(self) -> list[str]:
-        problems = [
-            f"clusterkit.tests: {t!r} is not a ClusterKit test case" for t in self.tests if t not in CLUSTERKIT_TESTS
-        ]
-        if len(set(self.tests)) != len(self.tests):
-            problems.append("clusterkit.tests lists a test case twice")
+        problems: list[str] = []
+        for name, tests in (("tests", self.tests), ("multirack_tests", self.multirack_tests)):
+            problems.extend(
+                f"clusterkit.{name}: {t!r} is not a ClusterKit test case" for t in tests if t not in CLUSTERKIT_TESTS
+            )
+            if len(set(tests)) != len(tests):
+                problems.append(f"clusterkit.{name} lists a test case twice")
         return problems
 
 

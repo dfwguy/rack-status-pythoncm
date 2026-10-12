@@ -260,6 +260,7 @@ def high_overlay(
     # through _eget, so the cluster's choice beats a global Settings value.
     _put(out, "RACK_CLUSTERKIT_TESTS", " ".join(cluster.clusterkit.tests))
     _put(out, "RACK_CLUSTERKIT_GPUDIRECT", "1" if cluster.clusterkit.gpudirect else "")
+    _put(out, "RACK_CLUSTERKIT_MULTIRACK_TESTS", " ".join(cluster.clusterkit.multirack_tests))
     _put(out, "RACK_CLUSTER_NAME", cluster.name)
     # The active ids, so `script_tree` can pick a project's own copy of a script without
     # importing the catalog. Every other per-cluster value already reaches its consumer this

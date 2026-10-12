@@ -591,6 +591,15 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     },
     {
         "section": "jobs_cluster",
+        "key": "RACK_CLUSTERKIT_MULTIRACK_TESTS",
+        "label": "ClusterKit multi-rack test cases",
+        "description": (
+            "Space-separated ClusterKit test cases for a run across racks, each rack a scope (default: bisection_bw). "
+            "Set per cluster in Projects -> cluster -> ClusterKit, which wins over this value."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
         "key": "RACK_CLUSTERKIT_TESTS",
         "label": "ClusterKit test cases",
         "description": (
