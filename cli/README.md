@@ -88,6 +88,7 @@ nvrs api POST /api/run-validation-async --body @params.json
 nvrs api POST /api/tools/download-containers-stream --field arch=x86_64 --stream
 
 nvrs -o json api GET /api/status | jq .       # machine-readable envelope for scripting
+nvrs api GET '/api/node-stages?wait=1' --timeout 300   # on-demand endpoints can outlast the 120 s default
 ```
 
 ## Typed verbs

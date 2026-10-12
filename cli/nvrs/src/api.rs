@@ -53,13 +53,38 @@ pub struct ApiArgs {
     /// Skip the best-effort check of the path/method against the cached API contract.
     #[arg(long)]
     pub no_validate: bool,
+
+    /// Give up on the whole request after this many seconds. Raise it for endpoints that compute on
+    /// demand: /api/node-stages?wait=1 runs the bring-up fleet status check when its cache has
+    /// expired, which takes over two minutes on a ~2,300-node cluster.
+    #[arg(long, value_name = "SECS", default_value_t = DEFAULT_TIMEOUT_SECS,
+          value_parser = clap::value_parser!(u64).range(1..))]
+    pub timeout: u64,
 }
+
+/// Request timeout for every call that does not ask for another (`nvrs api --timeout`).
+pub const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 /// Build a transport client for a resolved profile, with an optional bearer token.
 pub fn client_for(
     cfg: &Config,
     profile: &Profile,
     token: Option<String>,
+) -> Result<nvrs_client::Client> {
+    client_with_timeout(
+        cfg,
+        profile,
+        token,
+        Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+    )
+}
+
+/// [`client_for`] with an explicit request timeout.
+pub fn client_with_timeout(
+    cfg: &Config,
+    profile: &Profile,
+    token: Option<String>,
+    timeout: Duration,
 ) -> Result<nvrs_client::Client> {
     let base_url = url::Url::parse(&profile.base_url)
         .with_context(|| format!("profile base_url {:?} is not a valid URL", profile.base_url))?;
@@ -69,7 +94,7 @@ pub fn client_for(
         operator: profile.operator.clone(),
         client_id: cfg.client_id.clone(),
         bearer: token,
-        timeout: Duration::from_secs(120),
+        timeout,
         max_retries: 3,
     };
     Ok(nvrs_client::Client::new(client_cfg)?)
@@ -202,7 +227,8 @@ pub async fn run(
     } else {
         None
     };
-    let client = client_for(cfg, profile, token)?;
+    let timeout = Duration::from_secs(args.timeout);
+    let client = client_with_timeout(cfg, profile, token, timeout)?;
 
     if args.stream {
         let resp = match client
@@ -218,7 +244,7 @@ pub async fn run(
                     refresh.as_deref().unwrap(),
                 )
                 .await?;
-                client_for(cfg, profile, Some(new))?
+                client_with_timeout(cfg, profile, Some(new), timeout)?
                     .send_raw(method, &args.path, &query, body.as_ref())
                     .await?
             }
@@ -241,7 +267,7 @@ pub async fn run(
                 refresh.as_deref().unwrap(),
             )
             .await?;
-            client_for(cfg, profile, Some(new))?
+            client_with_timeout(cfg, profile, Some(new), timeout)?
                 .send_json(method, &args.path, &query, body.as_ref())
                 .await?
         }
@@ -370,6 +396,32 @@ async fn stream_to_stdout(mut resp: nvrs_client::Response) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Harness {
+        #[command(flatten)]
+        api: ApiArgs,
+    }
+
+    fn parse_api(extra: &[&str]) -> Result<ApiArgs, clap::Error> {
+        let mut argv = vec!["nvrs-api", "GET", "/api/node-stages"];
+        argv.extend_from_slice(extra);
+        Harness::try_parse_from(argv).map(|h| h.api)
+    }
+
+    #[test]
+    fn timeout_defaults_to_two_minutes_and_can_be_raised() {
+        assert_eq!(parse_api(&[]).unwrap().timeout, DEFAULT_TIMEOUT_SECS);
+        assert_eq!(DEFAULT_TIMEOUT_SECS, 120);
+        assert_eq!(parse_api(&["--timeout", "300"]).unwrap().timeout, 300);
+    }
+
+    #[test]
+    fn timeout_rejects_zero_and_garbage() {
+        assert!(parse_api(&["--timeout", "0"]).is_err());
+        assert!(parse_api(&["--timeout", "5m"]).is_err());
+    }
 
     #[test]
     fn method_parsing_is_case_insensitive() {
