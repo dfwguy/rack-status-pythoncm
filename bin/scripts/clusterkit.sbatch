@@ -26,6 +26,8 @@
 #            RACK_CLUSTERKIT_UCX_TLS — optional; RoCE branch defaults to rc,cuda (mlx keeps UCX_TLS=^dc unless set).
 #            RACK_CLUSTERKIT_TESTS — ClusterKit test cases, space-separated (default "bw lat"); e.g.
 #              "gpu_gpu_bw gpu_gpu_lat" with RACK_CLUSTERKIT_EXTRA_OPTS=-G measures each rail from its own GPU.
+#            RACK_CLUSTERKIT_GPUDIRECT=1 — the gpu_* tests use GPU-Direct (clusterkit.sh -G).
+#              Both are set per cluster in Projects -> cluster -> ClusterKit.
 #            RACK_CLUSTERKIT_EXTRA_OPTS, CUDA_MAJ / RACK_NVLOOM_CUDA_MAJOR.
 # A rail whose test fails is reported and the remaining rails still run; the job exits non-zero if any
 # failed. (One bad rail used to abort the job and leave the healthy ones unmeasured.)
@@ -165,6 +167,10 @@ if [[ " ${RACK_CLUSTERKIT_TESTS:-} " == *" gpu"* || " ${RACK_CLUSTERKIT_EXTRA_OP
   CK_GPU_TESTS=1
 fi
 export CK_GPU_TESTS
+_ck_gdr=""
+if [[ "${RACK_CLUSTERKIT_GPUDIRECT:-}" == 1 && " ${RACK_CLUSTERKIT_EXTRA_OPTS:-} " != *" -G "* ]]; then
+  _ck_gdr="-G"
+fi
 _ck_failed=()
 
 for idx in "${!_CK_ROWS[@]}"; do
@@ -193,7 +199,7 @@ for idx in "${!_CK_ROWS[@]}"; do
   # Optional: export RACK_CLUSTERKIT_EXTRA_OPTS="--foo ..." (space-separated clusterkit.sh flags).
   # shellcheck disable=SC2086
   "${CK_SH}" --mpi_opt "${mpi_opt}" -r "${HPCX_DIR}" -f "${HOSTFILE}" --mapper "${CORE_TO_HCA}" \
-    --exe_opt "${_ck_exe_opt% }" --unidirectional ${RACK_CLUSTERKIT_EXTRA_OPTS-}
+    --exe_opt "${_ck_exe_opt% }" --unidirectional ${_ck_gdr} ${RACK_CLUSTERKIT_EXTRA_OPTS-}
   rc=$?
   set +x
   if [[ "${rc}" -eq 0 && "${CK_GPU_TESTS}" == 1 ]] && ! compgen -G "${CK_OUTPUT_SUBDIR}/GPU_*.json" >/dev/null; then

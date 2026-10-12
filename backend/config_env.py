@@ -582,6 +582,15 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     },
     {
         "section": "jobs_cluster",
+        "key": "RACK_CLUSTERKIT_GPUDIRECT",
+        "label": "ClusterKit GPU-Direct",
+        "description": (
+            "1 = ClusterKit's gpu_* tests use GPU-Direct (clusterkit.sh -G): each rail runs from its own GPU. "
+            "Set per cluster in Projects -> cluster -> ClusterKit, which wins over this value."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
         "key": "RACK_CLUSTERKIT_TESTS",
         "label": "ClusterKit test cases",
         "description": (

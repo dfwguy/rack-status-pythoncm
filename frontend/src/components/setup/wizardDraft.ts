@@ -233,6 +233,8 @@ export function toCluster(draft: WizardDraft): Cluster {
     fabric: { scaleout: "", addr_family: "", compute_hca: "", rail_rate_gbps: 0 },
     // Nor about NCCL variables: a new cluster runs the scripts' defaults until a site tunes them.
     nccl_env: { node: {}, rack: {}, multirack: {} },
+    // Nor about ClusterKit: the launcher's defaults (bandwidth + latency) until a site chooses.
+    clusterkit: { tests: [], gpudirect: false },
     connection: {
       exec_mode: draft.execMode,
       ssh_host: draft.sshHost.trim(),

@@ -38,10 +38,20 @@ import {
   saveProject,
 } from "../services/catalogService";
 import { useActiveCluster } from "../context/ActiveClusterContext";
-import type { CatalogVocab, Cluster, ClusterFabric, ClusterNcclEnv, NcclEnvScope, Platform, Project } from "../types/catalog";
+import type {
+  CatalogVocab,
+  Cluster,
+  ClusterClusterKit,
+  ClusterFabric,
+  ClusterNcclEnv,
+  NcclEnvScope,
+  Platform,
+  Project,
+} from "../types/catalog";
 import { intOr } from "../lib/catalogForm";
 import { bootstrapProjectScripts, deployScripts } from "../services/setupService";
 import { NcclEnvField } from "../components/NcclEnvField";
+import { MultiSelectCombobox } from "../components/MultiSelectCombobox";
 
 // Lazy AND conditionally rendered: the wizard is a whole second form, and this screen is on the
 // initial route. Loading it for everyone to serve the rare "set up another cluster" click is
@@ -53,6 +63,11 @@ const SetupWizard = lazy(() =>
 /** All blank: the on-node fabric scan decides. Also the fallback for a cluster stored before the field existed. */
 function emptyFabric(): ClusterFabric {
   return { scaleout: "", addr_family: "", compute_hca: "", rail_rate_gbps: 0, net_plugin: "" };
+}
+
+/** No tests chosen, no GPU-Direct: ClusterKit runs the launcher's defaults (bandwidth + latency). */
+function emptyClusterKit(): ClusterClusterKit {
+  return { tests: [], gpudirect: false };
 }
 
 /** No variables at any span: every launch runs with the scripts' own defaults. */
@@ -80,6 +95,7 @@ function emptyCluster(): Cluster {
     geometry: { pods: 1, rows_per_pod: 0, racks_per_row: 0, trays_per_rack: 0 },
     fabric: emptyFabric(),
     nccl_env: emptyNcclEnv(),
+    clusterkit: emptyClusterKit(),
     connection: {
       exec_mode: "",
       ssh_host: "",
@@ -223,6 +239,10 @@ export function ProjectsView() {
   const setFabric = (patch: Partial<ClusterFabric>) =>
     setClusterDraft((d) =>
       d ? { ...d, cluster: { ...d.cluster, fabric: { ...(d.cluster.fabric ?? emptyFabric()), ...patch } } } : d,
+    );
+  const setClusterKit = (patch: Partial<ClusterClusterKit>) =>
+    setClusterDraft((d) =>
+      d ? { ...d, cluster: { ...d.cluster, clusterkit: { ...(d.cluster.clusterkit ?? emptyClusterKit()), ...patch } } } : d,
     );
   const setNcclEnv = (scope: NcclEnvScope, env: Record<string, string>) =>
     setClusterDraft((d) =>
@@ -763,6 +783,31 @@ export function ProjectsView() {
               ))}
             </Box>
           )}
+
+          <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>ClusterKit</Text>
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginTop: -4 }}>
+            Used whenever ClusterKit is launched on this cluster. No tests chosen = bandwidth and latency from host
+            memory. GPU-Direct makes the gpu_* tests run each rail from its own GPU.
+          </Text>
+          <Box sx={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 2 }}>
+            <FormField name="cl-ck-tests" slotLabel="Test cases" slotHelp="RACK_CLUSTERKIT_TESTS">
+              <MultiSelectCombobox
+                items={vocab?.clusterkit_tests ?? []}
+                value={clusterDraft?.cluster.clusterkit?.tests ?? []}
+                onValueChange={(v) => setClusterKit({ tests: v })}
+                placeholder="Default (bw, lat)"
+                aria-label="ClusterKit test cases"
+                formatSummaryLabel={(n) => (clusterDraft?.cluster.clusterkit?.tests ?? []).slice(0, n).join(", ")}
+              />
+            </FormField>
+            <FormField name="cl-ck-gpudirect" slotLabel="GPU tests" slotHelp="RACK_CLUSTERKIT_GPUDIRECT">
+              <Switch
+                slotLabel="GPU-Direct"
+                checked={Boolean(clusterDraft?.cluster.clusterkit?.gpudirect)}
+                onCheckedChange={(on: boolean) => setClusterKit({ gpudirect: on })}
+              />
+            </FormField>
+          </Box>
 
           <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>Site geometry</Text>
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginTop: -4 }}>

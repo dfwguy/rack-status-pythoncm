@@ -39,6 +39,7 @@ every login, and what keeps it away from a deployment that upgrades.
 | `geometry` | object | `pods`, `rows_per_pod`, `racks_per_row`, `trays_per_rack`. |
 | `fabric` | object | How this site's compute fabric is wired and addressed, where it differs from the platform: `scaleout`, `addr_family`, `compute_hca`, `rail_rate_gbps`. All blank/0 = detect on each node; see below. |
 | `nccl_env` | object | Variables this cluster adds to every NCCL-using launch, one list per span: `node`, `rack`, `multirack`. All empty = the scripts' defaults; see below. |
+| `clusterkit` | object | How ClusterKit runs on this cluster: `tests` (ClusterKit test cases) and `gpudirect`. Empty = the launcher's defaults; see below. |
 | `scalable_units` | list | This cluster's SU-to-rack mapping. Empty derives it from the platform's `fabric.racks_per_su`; see below. |
 | `connection` | object | How the app reaches the cluster, below. |
 
@@ -228,6 +229,21 @@ prefix (`roce_vf_r`, the same string on every node) and sets `NCCL_IB_ADDR_FAMIL
 InfiniBand is unchanged: IB GIDs sit on `fe80::/64` by design, so IB rails are still chosen by rate
 and left to per-rank auto-detect. All three values are projected per cluster in the high overlay, so
 `scaleout` beats the platform's default, and they forward over SSH by their `NVIS_` prefix.
+
+### clusterkit
+
+How a ClusterKit launch on this cluster runs, so the choice is made once on the record instead of in
+Settings or the launcher. Shown as **ClusterKit** in the cluster form.
+
+| Field | Values | Exported as | Purpose |
+|---|---|---|---|
+| `tests` | ClusterKit test cases (`bw`, `lat`, `gpu_gpu_bw`, `gpu_gpu_lat`, `alltoall`, `bisection_bw`, ...) | `RACK_CLUSTERKIT_TESTS` | Which tests run on every compute rail. Empty = `bw lat` from host memory. Names are checked against ClusterKit's own list (served to the form by `GET /api/catalog/vocab`, `clusterkit_tests`). |
+| `gpudirect` | true / false | `RACK_CLUSTERKIT_GPUDIRECT=1` | The `gpu_*` tests use GPU-Direct (`clusterkit.sh -G`). On GB300 each rail then runs from its own GPU through Data Direct, ~700 Gb/s, instead of through host memory (~455 Gb/s via Grace). |
+
+Both are in the high overlay, so the cluster's choice beats a global Settings value. For GPU tests the
+launcher puts the workspace CUDA runtime on the library path, binds each rank's memory to its rail's
+NUMA node without pinning the CPU (a CPU pin on the second Grace socket makes ClusterKit skip its GPU
+tests), and fails any rail that asked for GPU tests and wrote no GPU results.
 
 ### nccl_env
 

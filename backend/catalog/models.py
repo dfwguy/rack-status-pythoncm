@@ -1007,6 +1007,47 @@ LAUNCH_ENV_MAX_VALUE_LEN = 2048
 NCCL_ENV_SCOPES = ("node", "rack", "multirack")
 
 
+#: ClusterKit's own test cases (``clusterkit --help``, HPC-X 2.25.1), the only names its ``-d`` accepts.
+#: One list for the record's validation and the cluster form's choices (served by the catalog vocab).
+CLUSTERKIT_TESTS = (
+    "lat", "bw", "mb", "flops", "beff_o", "beff_or", "gpumb",
+    "gpu_gpu_lat", "gpu_gpu_bw", "gpu_host_lat", "gpu_host_bw", "gpu_neighbor_lat", "gpu_neighbor_bw",
+    "noise", "barrier", "allreduce", "bcast", "alltoall", "bisection_bw",
+    "nccl_bw", "nccl_lat", "nccl_bcast", "nccl_allreduce", "nccl_reduce", "nccl_allgather", "nccl_reducescatter",
+)
+
+
+@dataclass
+class ClusterClusterKit:
+    """How this cluster runs ClusterKit: which test cases, and whether GPU tests use GPU-Direct.
+
+    A site's choice, so it lives on the record rather than in Settings or the launcher. Projected per
+    cluster (``catalog.context``) as ``RACK_CLUSTERKIT_TESTS`` and ``RACK_CLUSTERKIT_GPUDIRECT``, which
+    the ClusterKit launch forwards to ``clusterkit.sbatch``. Empty tests = the launcher's default
+    (bandwidth and latency from host memory). GPU-Direct only affects the gpu_* tests: on GB300 each
+    rail then runs from its own GPU through Data Direct (~700 Gb/s) instead of through host memory.
+    """
+
+    tests: list[str] = field(default_factory=list)
+    gpudirect: bool = False
+
+    @classmethod
+    def from_dict(cls, d: Any) -> ClusterClusterKit:
+        d = _as_dict(d)
+        return cls(
+            tests=[t.strip() for t in _as_str_list(d.get("tests")) if t.strip()],
+            gpudirect=_as_bool(d.get("gpudirect")),
+        )
+
+    def validate(self) -> list[str]:
+        problems = [
+            f"clusterkit.tests: {t!r} is not a ClusterKit test case" for t in self.tests if t not in CLUSTERKIT_TESTS
+        ]
+        if len(set(self.tests)) != len(self.tests):
+            problems.append("clusterkit.tests lists a test case twice")
+        return problems
+
+
 @dataclass
 class ClusterNcclEnv:
     """Environment variables this cluster adds to every NCCL-using launch, per launch span.
@@ -1299,6 +1340,8 @@ class Cluster:
     fabric: ClusterFabric = field(default_factory=ClusterFabric)
     # Variables this site adds to NCCL-using launches, per launch span (node / rack / multirack).
     nccl_env: ClusterNcclEnv = field(default_factory=ClusterNcclEnv)
+    # How this site runs ClusterKit (test cases, GPU-Direct).
+    clusterkit: ClusterClusterKit = field(default_factory=ClusterClusterKit)
     connection: ClusterConnection = field(default_factory=ClusterConnection)
     # Empty means "derive from the platform's racks_per_su"; see scalable_units_for().
     scalable_units: list[ClusterScalableUnit] = field(default_factory=list)
@@ -1330,6 +1373,7 @@ class Cluster:
             geometry=ClusterGeometry.from_dict(d.get("geometry")),
             fabric=ClusterFabric.from_dict(d.get("fabric")),
             nccl_env=ClusterNcclEnv.from_dict(d.get("nccl_env")),
+            clusterkit=ClusterClusterKit.from_dict(d.get("clusterkit")),
             connection=ClusterConnection.from_dict(d.get("connection")),
             scalable_units=(
                 [ClusterScalableUnit.from_dict(s) for s in sus_raw]
@@ -1388,6 +1432,7 @@ class Cluster:
         problems.extend(self._validate_scalable_units())
         problems.extend(self.fabric.validate())
         problems.extend(self.nccl_env.validate())
+        problems.extend(self.clusterkit.validate())
         problems.extend(self._validate_campaigns())
         return problems
 

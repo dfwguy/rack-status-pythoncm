@@ -256,6 +256,10 @@ def high_overlay(
     # fabric_defaults() only projects where the cluster runs the platform's protocol.
     if fab.rail_rate_gbps > 0:
         _put(out, "NVIS_FABRIC_EXPECT_RATE", str(fab.rail_rate_gbps))
+    # How this cluster runs ClusterKit. RACK_ forwards over SSH; the ClusterKit launch reads both
+    # through _eget, so the cluster's choice beats a global Settings value.
+    _put(out, "RACK_CLUSTERKIT_TESTS", " ".join(cluster.clusterkit.tests))
+    _put(out, "RACK_CLUSTERKIT_GPUDIRECT", "1" if cluster.clusterkit.gpudirect else "")
     _put(out, "RACK_CLUSTER_NAME", cluster.name)
     # The active ids, so `script_tree` can pick a project's own copy of a script without
     # importing the catalog. Every other per-cluster value already reaches its consumer this

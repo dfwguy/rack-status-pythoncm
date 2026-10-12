@@ -211,6 +211,16 @@ export interface ClusterFabric {
   net_plugin?: string;
 }
 
+/**
+ * How this cluster runs ClusterKit. Projected as RACK_CLUSTERKIT_TESTS / RACK_CLUSTERKIT_GPUDIRECT,
+ * which the ClusterKit launch forwards to clusterkit.sbatch. Empty tests = bandwidth + latency from
+ * host memory; GPU-Direct makes the gpu_* tests run each rail from its own GPU.
+ */
+export interface ClusterClusterKit {
+  tests: string[];
+  gpudirect: boolean;
+}
+
 /** The span a launch runs over, which picks one of a cluster's NCCL environment lists. */
 export type NcclEnvScope = "node" | "rack" | "multirack";
 
@@ -270,6 +280,8 @@ export interface Cluster {
   fabric: ClusterFabric;
   /** Per-span variables for NCCL-using launches; all empty = launch with the scripts' defaults. */
   nccl_env: ClusterNcclEnv;
+  /** How this cluster runs ClusterKit; empty = the launcher's defaults. Optional on older records. */
+  clusterkit?: ClusterClusterKit;
   connection: ClusterConnection;
   /** Empty means "derive from the platform's `fabric.racks_per_su`", not "one SU". */
   scalable_units: ClusterScalableUnit[];
@@ -327,6 +339,8 @@ export interface CatalogVocab {
   form_factors: string[];
   cluster_managers: string[];
   schedulers: string[];
+  /** ClusterKit's own test cases (its -d names), the choices for a cluster's ClusterKit tests. */
+  clusterkit_tests?: string[];
   tool_categories: string[];
   exec_modes: string[];
   exec_targets: string[];

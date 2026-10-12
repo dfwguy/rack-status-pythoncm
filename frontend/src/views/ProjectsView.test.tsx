@@ -41,6 +41,7 @@ const VOCAB = {
   form_factors: [],
   cluster_managers: ["bcm", "maas"],
   schedulers: ["slurm", "pythoncm"],
+  clusterkit_tests: ["lat", "bw", "gpu_gpu_lat", "gpu_gpu_bw"],
   tool_categories: [],
   exec_modes: [],
   exec_targets: [],
@@ -313,5 +314,36 @@ describe("NCCL environment", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
     expect(savedProject().clusters[0].nccl_env).toEqual({ node: {}, rack: {}, multirack: { NCCL_IB_DYNAMIC_FLOW: "1" } });
+  });
+});
+
+describe("ClusterKit", () => {
+  const savedProject = () => vi.mocked(catalogService.saveProject).mock.calls.at(-1)?.[0] as Project;
+
+  it("saves a new cluster with no ClusterKit choice, so the launcher's defaults apply", async () => {
+    await openNewCluster();
+    fireEvent.change(screen.getByPlaceholderText("e.g. Pod A"), { target: { value: "NC" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
+    expect(savedProject().clusters[0].clusterkit).toEqual({ tests: [], gpudirect: false });
+  });
+
+  it("states the test cases and GPU-Direct for the cluster and saves them", async () => {
+    await openNewCluster();
+    fireEvent.change(screen.getByPlaceholderText("e.g. Pod A"), { target: { value: "NC" } });
+    const tests = screen.getByPlaceholderText("Default (bw, lat)");
+    for (const name of ["gpu_gpu_bw", "gpu_gpu_lat"]) {
+      fireEvent.focus(tests);
+      fireEvent.change(tests, { target: { value: name } });
+      const listbox = tests.getAttribute("aria-controls");
+      const options = (await screen.findAllByRole("option", { name, hidden: true })).filter((o) =>
+        listbox ? o.closest(`#${CSS.escape(listbox)}`) !== null : true,
+      );
+      fireEvent.click(options[0]);
+    }
+    fireEvent.click(screen.getByRole("switch", { name: "GPU tests" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
+    expect(savedProject().clusters[0].clusterkit).toEqual({ tests: ["gpu_gpu_bw", "gpu_gpu_lat"], gpudirect: true });
   });
 });
