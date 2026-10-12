@@ -164,14 +164,13 @@ fi
 # problem, not a rail-count problem. MPI is only the bootstrap here (NCCL does the
 # collectives over IB directly), so letting UCX use tcp costs nothing.
 # Set NVIS_LLMB_KEEP_UCX_ENV=1 to keep the host pins (host/non-container runs only).
-if [[ "${NVIS_LLMB_KEEP_UCX_ENV:-0}" != "1" ]]; then
-  for _v in UCX_TLS UCX_NET_DEVICES; do
-    if [[ -n "${!_v:-}" ]]; then
-      echo "run_llmb_nccl: unsetting ${_v}=${!_v} (host-only pin; fatal inside the llmb container)" >&2
-      unset "${_v}"
-    fi
-  done
-fi
+# A value the launch STATED (the cluster's nccl_env or the operator's dialog, listed in
+# NVIS_EXTRA_ENV_KEYS) is not a host pin: it stays, and is forced into the job's --export --
+# that is how a site pins MPI's own transport for this sweep (see lib/llmb_env.inc.sh).
+# shellcheck source=lib/llmb_env.inc.sh
+source "${_SCRIPT_DIR}/lib/llmb_env.inc.sh"
+nvis_llmb_drop_host_ucx_pins
+nvis_llmb_force_export_stated
 
 # --- Apply the operator's NCCL debug level to the workload's testset config ------
 # THE JOB ENVIRONMENT DOES NOT REACH THE RANKS ON THIS PATH. The workload is NVIDIA
