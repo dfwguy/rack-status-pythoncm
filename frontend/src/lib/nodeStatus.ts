@@ -44,9 +44,11 @@ export const SCHEDULER_STATUS: Record<SchedulerNodeStatus, StatusStyle> = {
   draining: {
     label: "Draining",
     background:
-      "repeating-linear-gradient(135deg, var(--color-blue-500) 0 3px, var(--color-yellow-500) 3px 6px)",
+      "repeating-linear-gradient(135deg, var(--color-blue-500) 0 3px, var(--color-yellow-200) 3px 6px)",
   },
-  drained: { label: "Drained", background: "var(--color-yellow-500)" },
+  // KUI's yellow scale runs to orange early: yellow-500 is #d73d00, next to red-500 on the floor.
+  // yellow-200 is the step that reads yellow, so drained never passes for down.
+  drained: { label: "Drained", background: "var(--color-yellow-200)" },
   down: { label: "Down", background: "var(--color-red-500)" },
   unknown: { label: "Unknown", background: "var(--color-gray-400)" },
 };

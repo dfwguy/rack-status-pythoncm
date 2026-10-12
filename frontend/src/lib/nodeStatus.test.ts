@@ -78,4 +78,10 @@ describe("SCHEDULER_STATUS", () => {
     // Design tokens only -- a hex here ships the wrong colour in the other theme.
     for (const look of looks) expect(look).not.toMatch(/#[0-9a-f]{3,8}\b/i);
   });
+
+  it("keeps drained off the red end of KUI's yellow scale", () => {
+    // yellow-300 and up are orange (yellow-500 is #d73d00): drained read as down on NC's floor.
+    expect(SCHEDULER_STATUS.drained.background).toBe("var(--color-yellow-200)");
+    expect(SCHEDULER_STATUS.draining.background).toContain("var(--color-yellow-200)");
+  });
 });
