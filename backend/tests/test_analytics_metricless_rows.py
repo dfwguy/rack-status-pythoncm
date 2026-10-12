@@ -110,3 +110,38 @@ def test_a_measured_run_still_reports_means(client, stub_analytics, monkeypatch)
     assert row["n_logs_no_metrics"] == 0
     assert row["mean_tflops_per_gpu"] == pytest.approx(1954.6)
     assert row["mean_step_s"] == pytest.approx(4.22)
+
+
+NCCL_LOG = "nccl-mpi_a2a-30n-c256_181274.out"
+
+
+def test_an_nccl_log_is_never_a_nemo_run_even_when_the_parser_emits_a_row_for_it(client, stub_analytics, monkeypatch, tmp_path):
+    """parser.sh emits a placeholder Nemotron row for any file. On Nscale NC that filed 52 NCCL logs
+    under Rack 2-4 as 'successful NeMo runs with no step timings'."""
+    monkeypatch.setattr(analytics_module, "_multirack_done_log_paths", lambda *_a, **_k: [Path(tmp_path / NCCL_LOG)])
+    monkeypatch.setattr(analytics_module, "_pick_nemotron_row", lambda *_a, **_k: METRICLESS_NEMOTRON)
+    mr = _aggregate(client)["multirack"]
+    assert mr["nemotron_scaling"] == []
+    assert mr["nemotron_throughput_scaling"] == []
+
+
+def test_a_log_named_for_both_stays_a_nemo_candidate(client, stub_analytics, monkeypatch, tmp_path):
+    both = "root-NEMO-NCCL-p05-r01+p05-r02-36N-131805.txt"
+    monkeypatch.setattr(analytics_module, "_multirack_done_log_paths", lambda *_a, **_k: [Path(tmp_path / both)])
+    monkeypatch.setattr(analytics_module, "_pick_nemotron_row", lambda *_a, **_k: METRICLESS_NEMOTRON)
+    (row,) = _aggregate(client)["multirack"]["nemotron_scaling"]
+    assert row["n_logs_no_metrics"] == 1
+
+
+def test_the_nccl_scaling_table_carries_the_nccl_log_at_its_declared_scale(client, stub_analytics, monkeypatch, tmp_path):
+    """The 2-rack passes that had no table: an NCCL log appears at the node count it ran on."""
+    nccl_row = {"all_reduce_gbps": "798.0", "alltoall_gbps": "135.0", **NCCL_SWEEP}
+    monkeypatch.setattr(analytics_module, "_multirack_done_log_paths", lambda *_a, **_k: [Path(tmp_path / "nccl-mpi_U22+U23_138496.out")])
+    monkeypatch.setattr(analytics_module, "_pick_nccl_row", lambda *_a, **_k: nccl_row)
+    monkeypatch.setattr(analytics_module, "_pick_nemotron_row", lambda *_a, **_k: None)
+    monkeypatch.setattr(analytics_module, "_nccl_log_node_count", lambda lp: 36)
+    (row,) = _aggregate(client)["multirack"]["nccl_scaling"]
+    assert row["num_nodes"] == 36
+    assert row["n_logs"] == 1
+    assert row["mean_all_reduce_gbps"] == 798.0
+    assert row["mean_alltoall_gbps"] == 135.0

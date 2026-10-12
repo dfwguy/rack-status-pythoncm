@@ -497,6 +497,30 @@ def _nemotron_scaling_append_entry(
     )
 
 
+_RE_NODES_IN_NAME = re.compile(r"(?<![A-Za-z0-9])(\d{1,4})[nN](?![A-Za-z0-9])")
+
+
+def _nccl_log_node_count(lp: Path) -> int | None:
+    """Nodes an NCCL log's run used, or ``None`` when the log does not say.
+
+    In order of authority: the launcher's own ``nccl_allreduce: nodes=N`` header (the run's declared
+    scale, read by the whole-file scan), the Slurm allocation's ``SLURM_NNODES``, then a count the
+    file name declares (``-18N-``, ``-30n-``). The name is last because it is only a label.
+    """
+    rec = _logscan_record(lp)
+    if rec:
+        g = rec.get("geometry") or {}
+        for key in ("nccl_nodes", "slurm_nnodes"):
+            try:
+                n = int(g.get(key) or 0)
+            except (TypeError, ValueError):
+                n = 0
+            if n > 0:
+                return n
+    m = _RE_NODES_IN_NAME.search(Path(str(lp)).name)
+    return int(m.group(1)) if m else None
+
+
 _NCCL_SCALING_KEYS = (
     "all_reduce_gbps", "all_gather_gbps", "alltoall_gbps", "reduce_scatter_gbps", "sendrecv_gbps",
 )
@@ -514,7 +538,7 @@ def _nccl_scaling_append_entry(bucket: dict[int, list[dict[str, object]]], lp: P
     for key in _NCCL_SCALING_KEYS:
         entry[key] = _parse_gbps_scalar(nc.get(key))
     try:
-        nodes = _nemotron_run_hw_tokens_for_path(lp, 1.0).get("num_nodes")
+        nodes = _nccl_log_node_count(lp)
     except Exception:  # noqa: BLE001 - geometry is enrichment; the bandwidth is the point
         nodes = None
     entry["num_nodes"] = nodes
@@ -1215,7 +1239,12 @@ def _analytics_aggregate_compute(log_dir, rows_in, body, progress=None):
             nccl_multirack.append({"label": label, "basename": lp.name, "series": ser_out})
         if isinstance(nc, dict):
             _nccl_scaling_append_entry(nccl_scaling_entries, lp, nc)
-        nm = _pick_nemotron_row(parsed, "")
+        # parser.sh (the non-batch path) emits a placeholder Nemotron row for any file, so an NCCL log
+        # is not a NeMo run however its row looks. The single-rack loop above already selects NeMo
+        # logs by this same name test; the multirack loop did not, and filed 52 NCCL logs under
+        # Rack 2-4 as NeMo runs with no step timings.
+        is_nccl_only = "nccl" in lp.name.lower() and "nemo" not in lp.name.lower()
+        nm = None if is_nccl_only else _pick_nemotron_row(parsed, "")
         if isinstance(nm, dict):
             n_r = _multirack_rack_count_from_basename(lp.name)
             n_r = max(n_r, 1)

@@ -318,10 +318,7 @@ def _nc(**peaks):
 
 def test_nccl_scaling_groups_by_node_count_not_by_a_rack_count_read_from_the_name(analytics_module, monkeypatch, tmp_path):
     nodes = {"pass36.out": 36, "a2a30.out": 30, "ref6.out": 6, "ref6b.out": 6, "mystery.out": None}
-    monkeypatch.setattr(
-        analytics_module, "_nemotron_run_hw_tokens_for_path",
-        lambda lp, st: {"num_nodes": nodes[Path(str(lp)).name]},
-    )
+    monkeypatch.setattr(analytics_module, "_nccl_log_node_count", lambda lp: nodes[Path(str(lp)).name])
     bucket: dict = {}
     add = lambda name, **peaks: analytics_module._nccl_scaling_append_entry(  # noqa: E731
         bucket, tmp_path / name, _nc(**peaks)
@@ -342,7 +339,7 @@ def test_nccl_scaling_groups_by_node_count_not_by_a_rack_count_read_from_the_nam
 
 
 def test_an_nccl_log_with_no_measured_collective_is_counted_apart_not_averaged(analytics_module, monkeypatch, tmp_path):
-    monkeypatch.setattr(analytics_module, "_nemotron_run_hw_tokens_for_path", lambda lp, st: {"num_nodes": 36})
+    monkeypatch.setattr(analytics_module, "_nccl_log_node_count", lambda lp: 36)
     bucket: dict = {}
     analytics_module._nccl_scaling_append_entry(bucket, tmp_path / "ok.out", _nc(all_reduce_gbps=800))
     analytics_module._nccl_scaling_append_entry(bucket, tmp_path / "dead.out", _nc())
@@ -353,10 +350,10 @@ def test_an_nccl_log_with_no_measured_collective_is_counted_apart_not_averaged(a
 
 
 def test_geometry_failure_does_not_lose_the_bandwidth(analytics_module, monkeypatch, tmp_path):
-    def boom(lp, st):
+    def boom(lp):
         raise OSError("log gone")
 
-    monkeypatch.setattr(analytics_module, "_nemotron_run_hw_tokens_for_path", boom)
+    monkeypatch.setattr(analytics_module, "_nccl_log_node_count", boom)
     bucket: dict = {}
     analytics_module._nccl_scaling_append_entry(bucket, tmp_path / "x.out", _nc(all_reduce_gbps=700))
     (row,) = analytics_module._nccl_scaling_rows(bucket)
@@ -366,3 +363,31 @@ def test_geometry_failure_does_not_lose_the_bandwidth(analytics_module, monkeypa
 def test_the_demo_aggregate_carries_nccl_scaling(analytics_module):
     demo = analytics_module._demo_analytics_aggregate()
     assert {r["num_nodes"] for r in demo["multirack"]["nccl_scaling"]} == {18, 36}
+
+
+def test_the_scanner_reads_the_nccl_launchers_node_count(tmp_path):
+    """MPI NCCL logs carry neither SLURM_NNODES nor NODELIST; the launcher's own header is the only
+    declared scale, and it was why those runs could not be placed on a scaling table."""
+    p = _nccl_log(tmp_path / "nccl-mpi_U22+U23_138496.out")
+    p.write_text(
+        "nccl_allreduce: nodes=36 np=144 gpus/node=4 sizes=8..16G rounds=1\n" + p.read_text(),
+        encoding="utf-8",
+    )
+    assert logscan.scan(str(p), inventory=False)["geometry"]["nccl_nodes"] == "36"
+
+
+def test_node_count_precedence_is_header_then_slurm_then_the_file_name(analytics_module, monkeypatch, tmp_path):
+    def with_geometry(**g):
+        monkeypatch.setattr(analytics_module, "_logscan_record", lambda lp: {"geometry": g})
+
+    with_geometry(nccl_nodes="36", slurm_nnodes="1")
+    assert analytics_module._nccl_log_node_count(tmp_path / "x-18N-1.txt") == 36  # the launcher's declaration wins
+    with_geometry(slurm_nnodes="18")
+    assert analytics_module._nccl_log_node_count(tmp_path / "x-30n-1.txt") == 18
+    with_geometry()
+    assert analytics_module._nccl_log_node_count(tmp_path / "nccl-mpi_a2a-30n-c256_181274.out") == 30
+    assert analytics_module._nccl_log_node_count(tmp_path / "rkoike-NCCL-1Rack-gpu55-su19-18N-118993.txt") == 18
+    # Nothing declared anywhere: unknown, never a guess.
+    assert analytics_module._nccl_log_node_count(tmp_path / "nccl-mpi_U22+U23_138496.out") is None
+    monkeypatch.setattr(analytics_module, "_logscan_record", lambda lp: None)
+    assert analytics_module._nccl_log_node_count(tmp_path / "nccl-mpi_a2a-6n-c256_1.out") == 6

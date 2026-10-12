@@ -62,7 +62,7 @@ import sys
 from collections.abc import Iterator
 from typing import Any
 
-SCAN_VERSION = 2  # 2: peaks count only completed, unfailed tests (see COMPLETION in nccl_parse.inc.sh)
+SCAN_VERSION = 3  # 3: geometry gains nccl_nodes; 2: peaks count only completed, unfailed tests (see COMPLETION in nccl_parse.inc.sh)
 
 # ---------------------------------------------------------------------------------------------
 # Output bounds. These cap what we KEEP, never what we read, so memory is O(1) in file size.
@@ -110,7 +110,7 @@ _METRIC = re.compile(
     rb"|Test CUDA failure|Test failure|Test timeout"
     rb"|MODEL_TFLOP|train_step_timing|iteration|# job=|max_steps="
     rb"|Traceback|OutOfMemory|CUDA out of memory|error:"
-    rb"|--num_gpus|--gpus_per_node|-gb |SLURM_NNODES=|NODELIST:|seq_len"
+    rb"|--num_gpus|--gpus_per_node|-gb |SLURM_NNODES=|NODELIST:|seq_len|nccl_allreduce:"
 )
 
 _COLL_START = re.compile(rb"^#\s*Collective test starting:\s*([a-z_]+)_perf(?:_mpi)?\s*$")
@@ -136,6 +136,10 @@ _G_GPN = re.compile(rb"--gpus_per_node\s+(\d+)\b", re.IGNORECASE)
 _G_GB = re.compile(rb"(?<![\w-])-gb\s+(\d+)\b", re.IGNORECASE)
 _G_NNODES = re.compile(rb"SLURM_NNODES=(\d+)\b")
 _G_NODELIST = re.compile(rb"NODELIST:\s*(\S+)")
+#: The NCCL launchers' own header, e.g. ``nccl_allreduce: nodes=36 np=144 gpus/node=4 ...``. It is
+#: the run's declared scale and the only node count an MPI NCCL log carries (no SLURM_NNODES, no
+#: NODELIST), which is why the scaling table could not place those runs at all.
+_G_NCCL_NODES = re.compile(rb"nccl_allreduce:[^\n]*?\bnodes=(\d+)\b")
 _G_SEQ = re.compile(rb"(?:--seq[_-]?len(?:gth)?|seq_length)[= ]\s*(\d+)\b", re.IGNORECASE)
 
 #: Wall-clock window for the Grafana embed: the timestamp on any training-progress line. app.py
@@ -151,6 +155,7 @@ _GEOM = (
     ("slurm_nnodes", _G_NNODES),
     ("nodelist", _G_NODELIST),
     ("seq_len", _G_SEQ),
+    ("nccl_nodes", _G_NCCL_NODES),
 )
 
 _SLURM_FAIL = re.compile(rb"srun:.*error:.*Exited|error:.*SIGNAL")
