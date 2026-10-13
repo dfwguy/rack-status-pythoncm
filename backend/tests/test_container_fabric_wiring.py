@@ -138,6 +138,48 @@ def test_the_launcher_reports_the_container_wiring():
     assert re.search(r"run_llmb_nccl: container: MELLANOX_VISIBLE_DEVICES=", LAUNCHER.read_text(encoding="utf-8"))
 
 
+# ---------------------------------------------------------------- the NeMo job's block, as written
+#
+# NeMo 188619 (U22+U23, 2026-10-12) trained at 110 s/step against 4.1 s on one rack: its ranks named
+# the Spectrum-X plugin by a host path, fell back to NCCL's built-in transport on the multiplane RoCE
+# VFs, and its NCCL pre-flight alltoall took 595 ms for 4 MB. Both NeMo launch paths (Multirack NEMO
+# and the NeMo validation preset) submit this one batch script.
+
+NEMO_JOB = SCRIPTS / "nemo-nemotron5h_56b-mbridge-fp8.sh"
+
+
+def _nemo_plugin_block() -> str:
+    text = NEMO_JOB.read_text(encoding="utf-8")
+    start = text.index('export NCCL_IGNORE_COLLNET_MISMATCH=')
+    end = text.index("nvis_fabric_container_env\nfi\n", start) + len("nvis_fabric_container_env\nfi\n")
+    return text[start:end]
+
+
+def _nemo(root: Path, single_rack: int, **env: str) -> dict[str, str]:
+    body = f'eval "$(nvis_fabric_scan)"\nsingle_rack={single_rack}\n{_nemo_plugin_block()}\n{_SHOW}'
+    return _bash(body, root, **env)
+
+
+def test_a_cross_rack_nemo_job_loads_the_clusters_plugin_inside_the_image(tmp_path):
+    _nc_node(tmp_path)
+    assert _nemo(tmp_path, 0, NVIS_FABRIC_NET_PLUGIN=SPCX)["PLUGIN"] == SPCX
+
+
+def test_the_nemo_launch_override_still_wins(tmp_path):
+    _nc_node(tmp_path)
+    assert _nemo(tmp_path, 0, NVIS_FABRIC_NET_PLUGIN=SPCX, NVIS_NCCL_NET_PLUGIN="none")["PLUGIN"] == "none"
+
+
+def test_a_single_rack_nemo_job_stays_as_it_was(tmp_path):
+    _nc_node(tmp_path)
+    assert _nemo(tmp_path, 1, NVIS_FABRIC_NET_PLUGIN=SPCX)["PLUGIN"] == ""
+
+
+def test_the_nemo_job_sources_the_fabric_library_before_the_plugin_block():
+    text = NEMO_JOB.read_text(encoding="utf-8")
+    assert text.index('. "${_nvis_lib}"') < text.index(_nemo_plugin_block())
+
+
 # ---------------------------------------------------------------- the cluster setting
 
 

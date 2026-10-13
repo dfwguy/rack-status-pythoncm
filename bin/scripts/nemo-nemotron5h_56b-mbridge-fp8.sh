@@ -217,6 +217,16 @@ export NCCL_IGNORE_COLLNET_MISMATCH="${NVIS_NCCL_IGNORE_COLLNET_MISMATCH:-1}"
 if [ -n "${NVIS_NCCL_NET_PLUGIN:-}" ]; then
   export NCCL_NET_PLUGIN="${NVIS_NCCL_NET_PLUGIN}"
 fi
+# Across racks the ranks reach each other over the compute fabric, from inside the container: load
+# the cluster's NCCL net plugin as a path INSIDE the image (fabric.net_plugin), the same wiring the
+# LLMB launcher gets. Without it NeMo 188619 (U22+U23, Nscale NC 2026-10-12) named the Spectrum-X
+# plugin by a host path ("NET/Plugin: Could not find"), fell back to NCCL's built-in transport on the
+# multiplane RoCE VFs and trained at 110 s/step against 4.1 s on one rack; the llmb sweep on the same
+# racks and image loaded SPCX and ran clean. An explicit NVIS_NCCL_NET_PLUGIN above still wins.
+# Single-rack stays on NVLink and is left alone.
+if [ $single_rack -eq 0 ] && declare -F nvis_fabric_container_env >/dev/null 2>&1; then
+  nvis_fabric_container_env
+fi
 
 # --- Container NCCL workaround (validated 2026-07-02 on bos01-b05 / bos01-b06) --------------------
 # The nemo-25.11.01 container's bundled NCCL 2.28.3 SEGFAULTS at MNNVL init on GB200 NVL72
