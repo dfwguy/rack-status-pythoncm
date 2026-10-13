@@ -38,11 +38,10 @@ srun --kill-on-bad-exit=1 --nodes="${nodes}" --ntasks="${nodes}" --ntasks-per-no
   bash -euo pipefail -c '
     source_path="$NVIS_STAGE_SOURCE"
     destination="$NVIS_STAGE_DEST"
-    source_size="$(stat -c %s "$source_path" 2>/dev/null || true)"
-    [[ "$source_size" == "$NVIS_STAGE_EXPECTED_SIZE" ]] || {
-      echo "IMAGE_STAGE_FAIL $(hostname): source size expected=$NVIS_STAGE_EXPECTED_SIZE actual=${source_size:-missing}: $source_path" >&2
-      exit 2
-    }
+    # The node cache is checked first and the source only when a copy is needed: where P2P fills
+    # the cache (rsync off) the source need not be visible from the node at all -- on Nscale NC
+    # /cluster/containers lives on the app server, and checking it first failed a 48-node NeMo preset
+    # launch (Slurm 192718) in two seconds while every node held the image P2P had verified.
     mkdir -p "$(dirname "$destination")"
     lock="${destination}.nvis-stage.lock"
     exec 9>"$lock"
@@ -60,6 +59,11 @@ srun --kill-on-bad-exit=1 --nodes="${nodes}" --ntasks="${nodes}" --ntasks-per-no
       echo "IMAGE_STAGE_FAIL $(hostname): expected=$NVIS_STAGE_EXPECTED_SIZE actual=${destination_size:-missing} path=$destination rsync=$NVIS_STAGE_RSYNC" >&2
       exit 3
     fi
+    source_size="$(stat -c %s "$source_path" 2>/dev/null || true)"
+    [[ "$source_size" == "$NVIS_STAGE_EXPECTED_SIZE" ]] || {
+      echo "IMAGE_STAGE_FAIL $(hostname): source size expected=$NVIS_STAGE_EXPECTED_SIZE actual=${source_size:-missing}: $source_path" >&2
+      exit 2
+    }
     partial="${destination}.partial"
     if [[ -s "$partial" ]]; then
       # Preserve useful work after an interrupted stage and verify the overlap.
