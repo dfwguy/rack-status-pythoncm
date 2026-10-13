@@ -216,11 +216,20 @@ export interface ClusterFabric {
  * which the ClusterKit launch forwards to clusterkit.sbatch. Empty tests = bandwidth + latency from
  * host memory; GPU-Direct makes the gpu_* tests run each rail from its own GPU.
  */
+/** The levels ClusterKit launches at: pairwise inside one rack, or rack against rack. No single node. */
+export type ClusterKitEnvScope = "rack" | "multirack";
+
 export interface ClusterClusterKit {
   tests: string[];
   gpudirect: boolean;
   /** Tests for a run across racks (each rack a ClusterKit scope); empty = bisection_bw. Optional on older records. */
   multirack_tests?: string[];
+  /**
+   * Variables every ClusterKit job on this cluster gets, per launch level, applied over what the launch
+   * derives (``CUDA_MAJ=13`` picks the site's CUDA 13 HPC-X over a platform default of 12) and forwarded
+   * to every MPI rank. The lists do not inherit from one another. Optional on older records.
+   */
+  env?: Record<ClusterKitEnvScope, Record<string, string>>;
 }
 
 /** The span a launch runs over, which picks one of a cluster's NCCL environment lists. */

@@ -36,7 +36,10 @@ class TestTheRecord:
 
     def test_choices_round_trip(self):
         c = _cluster(tests=["gpu_gpu_bw", "gpu_gpu_lat"], gpudirect=True)
-        assert c.to_dict()["clusterkit"] == {"tests": ["gpu_gpu_bw", "gpu_gpu_lat"], "gpudirect": True, "multirack_tests": []}
+        assert c.to_dict()["clusterkit"] == {
+            "tests": ["gpu_gpu_bw", "gpu_gpu_lat"], "gpudirect": True, "multirack_tests": [],
+            "env": {"rack": {}, "multirack": {}},
+        }
         assert not c.validate()
 
     @pytest.mark.parametrize("bad", ["gpu_bw", "bw lat", "-G", "$(id)"])
@@ -133,25 +136,28 @@ class TestMultirackRecord:
         assert any("clusterkit.multirack_tests" in p for p in _cluster(multirack_tests=["bisect"]).validate())
 
 
+@pytest.fixture
+def vr(monkeypatch, tmp_path):
+    """The ClusterKit prepares with the cluster around them stubbed: two placed racks, no campaign."""
+    os.environ.setdefault("RACK_STATUS_DEMO", "1")
+    from api import validation_runs
+
+    monkeypatch.setattr(validation_runs, "_eget", lambda key, *a, **k: "")
+    monkeypatch.setattr(validation_runs, "_resolve_log_dir", lambda _raw: tmp_path)
+    monkeypatch.setattr(validation_runs, "_normalize_rack_id", lambda rack: rack)
+    monkeypatch.setattr(validation_runs, "_script_exists", lambda _p: True)
+    monkeypatch.setattr(validation_runs, "_nvis_workspace_dir_effective", lambda: "/home/cmods/workspace")
+    monkeypatch.setattr(validation_runs, "_multirack_campaign_snapshot", lambda: {"active": False, "id": ""})
+    placed = {"U19": U19, "U21": U21}
+    monkeypatch.setattr(validation_runs, "_rack_node_hostnames_from_inventory", lambda rack: placed.get(rack, []))
+    monkeypatch.setattr(validation_runs, "validation_target_for_rack", lambda rack, _ov: f"{rack}-ct[01-18]")
+    from app import app
+
+    with app.app_context():  # the refusals build their responses with jsonify
+        yield validation_runs
+
+
 class TestMultirackPrepare:
-    @pytest.fixture
-    def vr(self, monkeypatch, tmp_path):
-        os.environ.setdefault("RACK_STATUS_DEMO", "1")
-        from api import validation_runs
-
-        monkeypatch.setattr(validation_runs, "_eget", lambda key, *a, **k: "")
-        monkeypatch.setattr(validation_runs, "_resolve_log_dir", lambda _raw: tmp_path)
-        monkeypatch.setattr(validation_runs, "_normalize_rack_id", lambda rack: rack)
-        monkeypatch.setattr(validation_runs, "_script_exists", lambda _p: True)
-        monkeypatch.setattr(validation_runs, "_nvis_workspace_dir_effective", lambda: "/home/cmods/workspace")
-        monkeypatch.setattr(validation_runs, "_multirack_campaign_snapshot", lambda: {"active": False, "id": ""})
-        placed = {"U19": U19, "U21": U21}
-        monkeypatch.setattr(validation_runs, "_rack_node_hostnames_from_inventory", lambda rack: placed.get(rack, []))
-        from app import app
-
-        with app.app_context():  # the refusals build their responses with jsonify
-            yield validation_runs
-
     def test_two_racks_run_across_racks_with_each_rack_a_scope(self, vr):
         prep, err = vr._prepare_run_clusterkit_singlerack({"racks": ["U19", "U21"]})
         assert err is None, err
@@ -162,8 +168,7 @@ class TestMultirackPrepare:
         assert env["RACK_CLUSTERKIT_RACK"] == "U19+U21"
         assert env["RACK_CLUSTERKIT_SCOPES"] == f"U19:{','.join(U19)};U21:{','.join(U21)}"
 
-    def test_a_single_rack_in_racks_stays_the_single_rack_run(self, vr, monkeypatch):
-        monkeypatch.setattr(vr, "validation_target_for_rack", lambda rack, _ov: f"{rack}-ct[01-18]")
+    def test_a_single_rack_in_racks_stays_the_single_rack_run(self, vr):
         prep, err = vr._prepare_run_clusterkit_singlerack({"racks": ["U19"]})
         assert err is None and "RACK_CLUSTERKIT_SCOPES" not in prep["env_updates"]
         assert prep["env_updates"]["RACK_CLUSTERKIT_RACK"] == "U19"
@@ -244,3 +249,96 @@ class TestMultirackLauncher:
         tool = {t["id"]: t for t in seed.SEED_TOOLS}["clusterkit-multirack"]
         assert "multirack" in tool["surfaces"] and tool["execution"]["target"] == "multirack"
         assert tool["launch"]["endpoint"] == "/api/run-clusterkit-async"
+
+
+# --- the cluster's environment, per launch level --------------------------------------------------
+
+
+class TestTheClustersEnvironment:
+    """Variables a site gives every ClusterKit job, per level, without touching Settings or the scripts.
+
+    NscaleTX-NC's GB300 platform defaults to CUDA 12, but the site's workspace holds only the CUDA 13
+    HPC-X (2.25.1): job 190457 on U2 died at start looking for hpcx-v2.22.1-...-cuda12. CUDA_MAJ=13 in
+    the cluster's ClusterKit environment is the site saying what it installed.
+    """
+
+    @staticmethod
+    def _with_cluster(vr, monkeypatch, **env):
+        cluster = _cluster(env=env)
+        monkeypatch.setattr(vr.catalog_context, "resolve", lambda: (None, cluster, None))
+        # The platform's default, as the low overlay serves it on NC.
+        monkeypatch.setattr(vr, "_eget", lambda key, *a, **k: "12" if key == "CUDA_MAJ" else "")
+
+    def test_a_cluster_stored_before_the_field_has_empty_lists(self):
+        ck = models.Cluster.from_dict({"id": "c1", "name": "C1", "clusterkit": {"tests": ["bw"]}}).clusterkit
+        assert ck.env == {"rack": {}, "multirack": {}}
+
+    def test_the_lists_round_trip_and_keep_numbers_as_values(self):
+        c = _cluster(env={"rack": {"CUDA_MAJ": 13}, "multirack": {"UCX_TLS": "rc,cuda"}})
+        assert c.to_dict()["clusterkit"]["env"] == {"rack": {"CUDA_MAJ": "13"}, "multirack": {"UCX_TLS": "rc,cuda"}}
+        assert not c.validate()
+
+    @pytest.mark.parametrize(("env", "fragment"), [
+        ({"rack": {"9BAD": "1"}}, "clusterkit.env.rack: '9BAD' is not an environment variable name"),
+        ({"multirack": {"A": "x\ny"}}, "clusterkit.env.multirack.A must be a single line"),
+        ({"rack": {f"V{i}": "1" for i in range(models.LAUNCH_ENV_MAX_VARS + 1)}}, "at most"),
+    ])
+    def test_the_launch_dialogs_rules_apply(self, env, fragment):
+        # The same rules as the launch dialog's extra variables: both end in the same job env.
+        assert any(fragment in p for p in _cluster(env=env).validate())
+
+    def test_a_rack_launch_takes_the_rack_list_over_the_platform_default(self, vr, monkeypatch):
+        self._with_cluster(vr, monkeypatch, rack={"CUDA_MAJ": "13"}, multirack={"ONLY_ACROSS": "1"})
+        prep, err = vr._prepare_run_clusterkit_singlerack({"rack": "U19"})
+        assert err is None, err
+        env = prep["env_updates"]
+        assert env["CUDA_MAJ"] == "13"
+        assert "ONLY_ACROSS" not in env  # the lists do not inherit from one another
+        assert env["NVIS_EXTRA_ENV_KEYS"] == "CUDA_MAJ"
+
+    def test_a_multirack_launch_takes_the_multirack_list(self, vr, monkeypatch):
+        self._with_cluster(vr, monkeypatch, rack={"CUDA_MAJ": "13"}, multirack={"CUDA_MAJ": "13", "UCX_TLS": "rc"})
+        prep, err = vr._prepare_run_clusterkit_singlerack({"racks": ["U19", "U21"]})
+        assert err is None, err
+        env = prep["env_updates"]
+        assert (env["CUDA_MAJ"], env["UCX_TLS"]) == ("13", "rc")
+        assert env["NVIS_EXTRA_ENV_KEYS"] == "CUDA_MAJ UCX_TLS"
+        # The scopes are the launch's structure, never something a list can replace.
+        assert env["RACK_CLUSTERKIT_SCOPES"].startswith("U19:")
+
+    def test_without_a_list_the_platform_default_and_no_forwarding(self, vr, monkeypatch):
+        self._with_cluster(vr, monkeypatch)
+        prep, _err = vr._prepare_run_clusterkit_singlerack({"rack": "U19"})
+        assert prep["env_updates"]["CUDA_MAJ"] == "12"
+        assert "NVIS_EXTRA_ENV_KEYS" not in prep["env_updates"]
+
+    def test_an_unreadable_catalog_launches_without_the_list(self, vr, monkeypatch):
+        def broken():
+            raise RuntimeError("catalog unavailable")
+
+        monkeypatch.setattr(vr.catalog_context, "resolve", broken)
+        prep, err = vr._prepare_run_clusterkit_singlerack({"rack": "U19"})
+        assert err is None and "NVIS_EXTRA_ENV_KEYS" not in prep["env_updates"]
+
+    @staticmethod
+    def _forwarded(keys: str) -> str:
+        sbatch = (SCRIPTS / "clusterkit.sbatch").read_text()
+        start = sbatch.index('_ck_extra_x=""')
+        snippet = sbatch[start:sbatch.index('for idx in "${!_CK_ROWS[@]}"', start)]
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "NVIS_EXTRA_ENV_KEYS": keys}
+        r = subprocess.run(["bash", "-c", snippet + 'printf "|%s" "$_ck_extra_x"'],
+                           env=env, capture_output=True, text=True, timeout=30, check=False)
+        return r.stdout.split("|", 1)[1]
+
+    def test_the_launcher_forwards_each_listed_name_to_every_rank(self):
+        assert self._forwarded("CUDA_MAJ UCX_TLS") == " -x CUDA_MAJ -x UCX_TLS"
+
+    def test_the_launcher_forwards_nothing_it_cannot_name(self):
+        # The names reach mpirun's command line; one that is not a variable name never does.
+        assert self._forwarded("GOOD $(id) 1BAD") == " -x GOOD"
+        assert self._forwarded("") == ""
+
+    def test_both_fabric_branches_carry_the_forwarding(self):
+        sbatch = (SCRIPTS / "clusterkit.sbatch").read_text()
+        mpi_opts = [ln for ln in sbatch.splitlines() if ln.strip().startswith("mpi_opt=")]
+        assert len(mpi_opts) == 2 and all(ln.rstrip().endswith('${_ck_extra_x}"') for ln in mpi_opts)

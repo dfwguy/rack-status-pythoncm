@@ -39,7 +39,7 @@ every login, and what keeps it away from a deployment that upgrades.
 | `geometry` | object | `pods`, `rows_per_pod`, `racks_per_row`, `trays_per_rack`. |
 | `fabric` | object | How this site's compute fabric is wired and addressed, where it differs from the platform: `scaleout`, `addr_family`, `compute_hca`, `rail_rate_gbps`. All blank/0 = detect on each node; see below. |
 | `nccl_env` | object | Variables this cluster adds to every NCCL-using launch, one list per span: `node`, `rack`, `multirack`. All empty = the scripts' defaults; see below. |
-| `clusterkit` | object | How ClusterKit runs on this cluster: `tests`, `gpudirect` and `multirack_tests`. Empty = the launcher's defaults; see below. |
+| `clusterkit` | object | How ClusterKit runs on this cluster: `tests`, `gpudirect`, `multirack_tests` and `env` (variables per launch level). Empty = the launcher's defaults; see below. |
 | `scalable_units` | list | This cluster's SU-to-rack mapping. Empty derives it from the platform's `fabric.racks_per_su`; see below. |
 | `connection` | object | How the app reaches the cluster, below. |
 
@@ -250,8 +250,9 @@ Settings or the launcher. Shown as **ClusterKit** in the cluster form.
 | `tests` | ClusterKit test cases (`bw`, `lat`, `gpu_gpu_bw`, `gpu_gpu_lat`, `alltoall`, `bisection_bw`, ...) | `RACK_CLUSTERKIT_TESTS` | Which tests run on every compute rail. Empty = `bw lat` from host memory. Names are checked against ClusterKit's own list (served to the form by `GET /api/catalog/vocab`, `clusterkit_tests`). |
 | `multirack_tests` | ClusterKit test cases | `RACK_CLUSTERKIT_MULTIRACK_TESTS` | Tests for a run across racks, where each rack is a ClusterKit scope. Empty = `bisection_bw` (rack-to-rack bandwidth on every rail). |
 | `gpudirect` | true / false | `RACK_CLUSTERKIT_GPUDIRECT=1` | The `gpu_*` tests use GPU-Direct (`clusterkit.sh -G`). On GB300 each rail then runs from its own GPU through Data Direct, ~700 Gb/s, instead of through host memory (~455 Gb/s via Grace). |
+| `env.rack`, `env.multirack` | `{NAME: value}` per launch level | (read at launch) | Variables every ClusterKit job at that level gets. See below. |
 
-Both are in the high overlay, so the cluster's choice beats a global Settings value. For GPU tests the
+`tests`, `multirack_tests` and `gpudirect` are in the high overlay, so the cluster's choice beats a global Settings value. For GPU tests the
 launcher puts the workspace CUDA runtime on the library path, binds each rank's memory to its rail's
 NUMA node without pinning the CPU (a CPU pin on the second Grace socket makes ClusterKit skip its GPU
 tests), and fails any rail that asked for GPU tests and wrote no GPU results.
@@ -263,6 +264,19 @@ rack's hosts as `RACK_CLUSTERKIT_SCOPES` (`RACK:h1,h2;RACK:h3,...`). `clusterkit
 ClusterKit's scope file and runs `multirack_tests` on every rail, so `bisection_bw` reports bandwidth rack
 against rack under concurrent flows. A rail where a node cannot connect (a silent dead plane breaks
 UCX's connection setup for every rank) fails by name and the other rails still run.
+
+**Environment, per launch level.** `env.rack` goes to a ClusterKit run inside one rack, and
+`env.multirack` to a run across racks. The lists do not inherit from one another. There is no
+single-node list, because ClusterKit has no single-node run: every network test needs a partner.
+Each list is read when the job is launched and applied over the values the launch derives for itself.
+That is how a site states what its workspace holds: NscaleTX-NC's GB300 platform defaults to
+`CUDA_MAJ=12`, but the site installed only the CUDA 13 HPC-X (2.25.1), so the cluster sets
+`CUDA_MAJ=13` here. Without it, job 190457 failed at start looking for `hpcx-v2.22.1-...-cuda12`. The
+names are listed in `NVIS_EXTRA_ENV_KEYS`, and `clusterkit.sbatch` forwards each to every MPI rank with
+`-x`. Names and values follow the launch dialog's rules: a variable name, one line, at most 32 per list.
+The structure of a launch (`RACK_CLUSTERKIT_SCOPES`, the target) is set after the list and cannot be
+replaced by it. Shown as **Rack environment** / **Multi-rack environment** under **ClusterKit** in the
+cluster form.
 
 ### nccl_env
 

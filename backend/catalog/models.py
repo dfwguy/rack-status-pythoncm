@@ -991,9 +991,10 @@ class ClusterFabric:
         return problems
 
 
-#: Bounds on operator-supplied launch environment. One definition for both places an operator can
+#: Bounds on operator-supplied launch environment. One definition for every place an operator can
 #: hand a job variables -- the launch dialog's "Extra environment variables" (validated per request
-#: in ``api.validation_runs``) and a cluster's ``nccl_env`` (validated when the record is saved) --
+#: in ``api.validation_runs``) and a cluster's ``nccl_env`` and ``clusterkit.env`` (validated when the
+#: record is saved) --
 #: because the two end in the same job environment, so a name or value one accepts must not be one
 #: the other refuses. Names are POSIX-ish; values are single-line (a newline would end the variable
 #: inside the generated job script) and capped, as is the count.
@@ -1005,6 +1006,36 @@ LAUNCH_ENV_MAX_VALUE_LEN = 2048
 #: domain, or several racks over the scale-out fabric. NCCL behaves differently in each -- inside a
 #: rack nothing touches the RDMA network, across racks everything does -- so a site tunes them apart.
 NCCL_ENV_SCOPES = ("node", "rack", "multirack")
+
+#: The levels ClusterKit launches at, as the cluster's ClusterKit environment is keyed: pairwise
+#: tests between the nodes of one rack, or rack against rack. There is no single-node level -- every
+#: ClusterKit network test needs a partner -- so there is no list for one.
+CLUSTERKIT_ENV_SCOPES = ("rack", "multirack")
+
+
+def _launch_env_from(raw: Any) -> dict[str, str]:
+    """A stored ``{NAME: value}`` map; a number is a value an operator means (``16``), not a blank."""
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(k).strip(): str(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else _as_str(v)
+        for k, v in raw.items()
+    }
+
+
+def _launch_env_problems(where: str, env: dict[str, str]) -> list[str]:
+    """What is wrong with one launch environment list, each problem prefixed with *where* it is."""
+    problems: list[str] = []
+    if len(env) > LAUNCH_ENV_MAX_VARS:
+        problems.append(f"{where} has {len(env)} variables; at most {LAUNCH_ENV_MAX_VARS} are allowed")
+    for key, value in env.items():
+        if not LAUNCH_ENV_KEY_RE.match(key):
+            problems.append(f"{where}: {key!r} is not an environment variable name")
+        elif "\n" in value or "\r" in value:
+            problems.append(f"{where}.{key} must be a single line")
+        elif len(value) > LAUNCH_ENV_MAX_VALUE_LEN:
+            problems.append(f"{where}.{key} is longer than {LAUNCH_ENV_MAX_VALUE_LEN} characters")
+    return problems
 
 
 #: ClusterKit's own test cases (``clusterkit --help``, HPC-X 2.25.1), the only names its ``-d`` accepts.
@@ -1019,7 +1050,8 @@ CLUSTERKIT_TESTS = (
 
 @dataclass
 class ClusterClusterKit:
-    """How this cluster runs ClusterKit: which test cases, and whether GPU tests use GPU-Direct.
+    """How this cluster runs ClusterKit: which test cases, whether GPU tests use GPU-Direct, and the
+    variables each launch level adds (``env``).
 
     A site's choice, so it lives on the record rather than in Settings or the launcher. Projected per
     cluster (``catalog.context``) as ``RACK_CLUSTERKIT_TESTS`` and ``RACK_CLUSTERKIT_GPUDIRECT``, which
@@ -1033,15 +1065,27 @@ class ClusterClusterKit:
     #: Test cases for a run across racks, where ClusterKit compares rack against rack (each rack a
     #: "scope"). Empty = the launcher's default, bisection_bw. Projected as RACK_CLUSTERKIT_MULTIRACK_TESTS.
     multirack_tests: list[str] = field(default_factory=list)
+    #: Variables every ClusterKit job on this cluster gets, per launch level (``CLUSTERKIT_ENV_SCOPES``;
+    #: the lists do not inherit from one another). Read at launch, applied over the values the launch
+    #: derives -- so ``CUDA_MAJ=13`` here picks the site's CUDA 13 HPC-X over a platform default of 12 --
+    #: and forwarded to every MPI rank. Not projected into the process environment: which list
+    #: applies depends on the launch, not on the cluster.
+    env: dict[str, dict[str, str]] = field(default_factory=lambda: {s: {} for s in CLUSTERKIT_ENV_SCOPES})
 
     @classmethod
     def from_dict(cls, d: Any) -> ClusterClusterKit:
         d = _as_dict(d)
+        env = _as_dict(d.get("env"))
         return cls(
             tests=[t.strip() for t in _as_str_list(d.get("tests")) if t.strip()],
             gpudirect=_as_bool(d.get("gpudirect")),
             multirack_tests=[t.strip() for t in _as_str_list(d.get("multirack_tests")) if t.strip()],
+            env={scope: _launch_env_from(env.get(scope)) for scope in CLUSTERKIT_ENV_SCOPES},
         )
+
+    def env_for(self, scope: str) -> dict[str, str]:
+        """The variables for one launch level; empty for a level this record does not know."""
+        return dict(self.env.get(scope) or {}) if scope in CLUSTERKIT_ENV_SCOPES else {}
 
     def validate(self) -> list[str]:
         problems: list[str] = []
@@ -1051,6 +1095,8 @@ class ClusterClusterKit:
             )
             if len(set(tests)) != len(tests):
                 problems.append(f"clusterkit.{name} lists a test case twice")
+        for scope in CLUSTERKIT_ENV_SCOPES:
+            problems.extend(_launch_env_problems(f"clusterkit.env.{scope}", self.env_for(scope)))
         return problems
 
 
@@ -1072,18 +1118,7 @@ class ClusterNcclEnv:
     @classmethod
     def from_dict(cls, d: Any) -> ClusterNcclEnv:
         d = _as_dict(d)
-
-        def _env(key: str) -> dict[str, str]:
-            raw = d.get(key)
-            if not isinstance(raw, dict):
-                return {}
-            # A number is a value an operator means (``NCCL_MIN_NCHANNELS: 16``), not a blank.
-            return {
-                str(k).strip(): str(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else _as_str(v)
-                for k, v in raw.items()
-            }
-
-        return cls(**{scope: _env(scope) for scope in NCCL_ENV_SCOPES})
+        return cls(**{scope: _launch_env_from(d.get(scope)) for scope in NCCL_ENV_SCOPES})
 
     def for_scope(self, scope: str) -> dict[str, str]:
         """The variables for one launch span; empty for a span this record does not know."""
@@ -1092,20 +1127,7 @@ class ClusterNcclEnv:
     def validate(self) -> list[str]:
         problems: list[str] = []
         for scope in NCCL_ENV_SCOPES:
-            env = self.for_scope(scope)
-            if len(env) > LAUNCH_ENV_MAX_VARS:
-                problems.append(
-                    f"nccl_env.{scope} has {len(env)} variables; at most {LAUNCH_ENV_MAX_VARS} are allowed"
-                )
-            for key, value in env.items():
-                if not LAUNCH_ENV_KEY_RE.match(key):
-                    problems.append(f"nccl_env.{scope}: {key!r} is not an environment variable name")
-                elif "\n" in value or "\r" in value:
-                    problems.append(f"nccl_env.{scope}.{key} must be a single line")
-                elif len(value) > LAUNCH_ENV_MAX_VALUE_LEN:
-                    problems.append(
-                        f"nccl_env.{scope}.{key} is longer than {LAUNCH_ENV_MAX_VALUE_LEN} characters"
-                    )
+            problems.extend(_launch_env_problems(f"nccl_env.{scope}", self.for_scope(scope)))
         return problems
 
 

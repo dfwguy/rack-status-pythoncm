@@ -325,7 +325,9 @@ describe("ClusterKit", () => {
     fireEvent.change(screen.getByPlaceholderText("e.g. Pod A"), { target: { value: "NC" } });
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
-    expect(savedProject().clusters[0].clusterkit).toEqual({ tests: [], gpudirect: false, multirack_tests: [] });
+    expect(savedProject().clusters[0].clusterkit).toEqual({
+      tests: [], gpudirect: false, multirack_tests: [], env: { rack: {}, multirack: {} },
+    });
   });
 
   it("states the test cases and GPU-Direct for the cluster and saves them", async () => {
@@ -345,7 +347,69 @@ describe("ClusterKit", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
     await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
     expect(savedProject().clusters[0].clusterkit).toEqual({
-      tests: ["gpu_gpu_bw", "gpu_gpu_lat"], gpudirect: true, multirack_tests: [],
+      tests: ["gpu_gpu_bw", "gpu_gpu_lat"], gpudirect: true, multirack_tests: [], env: { rack: {}, multirack: {} },
+    });
+  });
+
+  it("saves each level's environment as its own list, apart from the NCCL lists", async () => {
+    // NscaleTX-NC: the GB300 platform defaults to CUDA 12, the site installed the CUDA 13 HPC-X.
+    await openNewCluster();
+    fireEvent.change(screen.getByPlaceholderText("e.g. Pod A"), { target: { value: "NC" } });
+    const level = (label: string) => screen.getByRole("textbox", { name: label }) as HTMLTextAreaElement;
+    fireEvent.change(level("Rack environment"), { target: { value: "CUDA_MAJ=13" } });
+    fireEvent.change(level("Multi-rack environment"), { target: { value: "CUDA_MAJ=13\nUCX_TLS=rc,cuda" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
+    const cluster = savedProject().clusters[0];
+    expect(cluster.clusterkit?.env).toEqual({
+      rack: { CUDA_MAJ: "13" },
+      multirack: { CUDA_MAJ: "13", UCX_TLS: "rc,cuda" },
+    });
+    expect(cluster.nccl_env).toEqual({ node: {}, rack: {}, multirack: {} });
+  });
+
+  it("shows a cluster's stored ClusterKit environment, and keeps the other level when one is edited", async () => {
+    const stored = {
+      id: "nc",
+      name: "NC",
+      platform_id: "",
+      cluster_manager: "bcm",
+      scheduler: "slurm",
+      rack_mapping_mode: "translate",
+      site_prefix: "",
+      naming: { rack_id_template: "", ct_id_template: "", nvsw_id_template: "", ct_joiner: "-ct", slurm_hostlist: "" },
+      geometry: { pods: 1, rows_per_pod: 0, racks_per_row: 0, trays_per_rack: 0 },
+      fabric: { scaleout: "roce", addr_family: "", compute_hca: "", rail_rate_gbps: 0 },
+      nccl_env: { node: {}, rack: {}, multirack: {} },
+      clusterkit: { tests: ["gpu_gpu_bw"], gpudirect: true, multirack_tests: [], env: { rack: { CUDA_MAJ: "13" }, multirack: { UCX_TLS: "rc" } } },
+      connection: {
+        exec_mode: "", ssh_host: "", ssh_user: "", ssh_key: "", remote_base_path: "",
+        log_dir: "", workspace_dir: "", shared_container_dir: "", node_container_dir: "",
+      },
+      scalable_units: [],
+      campaigns: [],
+      evidence: { snapshot_path: "", healthcheck_root: "" },
+      p2p_enabled: false,
+    };
+    const project = { ...PROJECT, clusters: [stored] } as unknown as Project;
+    vi.mocked(catalogService.getVocab).mockResolvedValue(VOCAB);
+    vi.mocked(catalogService.listPlatforms).mockResolvedValue([]);
+    render(
+      <ActiveClusterContext.Provider value={{ ...clusterStub(), projects: [project] }}>
+        <ProjectsView />
+      </ActiveClusterContext.Provider>,
+    );
+    const edits = await screen.findAllByRole("button", { name: /^Edit$/ });
+    fireEvent.click(edits[edits.length - 1]);
+    await waitFor(() => expect(screen.getByText("NCCL environment")).toBeTruthy());
+    const level = (label: string) => screen.getByRole("textbox", { name: label }) as HTMLTextAreaElement;
+    expect(level("Rack environment").value).toBe("CUDA_MAJ=13");
+    fireEvent.change(level("Rack environment"), { target: { value: "CUDA_MAJ=12" } });
+    fireEvent.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(catalogService.saveProject).toHaveBeenCalled());
+    expect(savedProject().clusters[0].clusterkit).toEqual({
+      tests: ["gpu_gpu_bw"], gpudirect: true, multirack_tests: [],
+      env: { rack: { CUDA_MAJ: "12" }, multirack: { UCX_TLS: "rc" } },
     });
   });
 });

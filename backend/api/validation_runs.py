@@ -1244,8 +1244,31 @@ _CLUSTERKIT_PASS_THROUGH = (
 )
 
 
-def _clusterkit_job_env(body: dict, label: str) -> tuple[dict[str, str] | None, tuple[object, int] | None]:
-    """The environment every ClusterKit job gets, single- or multi-rack. *label* names its logs."""
+def _cluster_clusterkit_env(scope: str) -> dict[str, str]:
+    """The active cluster's ``clusterkit.env`` list for one launch level (``rack`` / ``multirack``).
+
+    Read at launch for the same reason as ``_cluster_nccl_env``: which list applies is the launch's
+    choice. A catalog that cannot be read yields no variables, never a refused launch.
+    """
+    try:
+        _project, cluster, _platform = catalog_context.resolve()
+    except Exception:  # never let a catalog problem break a launch
+        _logger.warning("cluster clusterkit.env unavailable; launching without it", exc_info=True)
+        return {}
+    return cluster.clusterkit.env_for(scope) if cluster is not None else {}
+
+
+def _clusterkit_job_env(
+    body: dict, label: str, *, scope: str,
+) -> tuple[dict[str, str] | None, tuple[object, int] | None]:
+    """The environment every ClusterKit job gets, single- or multi-rack. *label* names its logs.
+
+    The cluster's ``clusterkit.env`` list for *scope* goes on last, over what the launch derives:
+    it is the site saying what its workspace actually holds -- ``CUDA_MAJ=13`` where the platform's
+    default of 12 names an HPC-X the site never installed. Its names are advertised in
+    ``NVIS_EXTRA_ENV_KEYS``, which ``clusterkit.sbatch`` forwards to every MPI rank with ``-x``.
+    Required, not defaulted, so a new ClusterKit launch path cannot forget the cluster's list.
+    """
     ws = _nvis_workspace_dir_effective()
     if not ws:
         return None, (jsonify({"ok": False, "error": _NO_WORKSPACE}), 400)
@@ -1267,6 +1290,10 @@ def _clusterkit_job_env(body: dict, label: str) -> tuple[dict[str, str] | None, 
         v = (_eget(k) or "").strip()
         if v:
             env_updates[k] = v
+    cluster_env = _cluster_clusterkit_env(scope)
+    env_updates.update(cluster_env)
+    if cluster_env:
+        env_updates["NVIS_EXTRA_ENV_KEYS"] = " ".join(sorted(cluster_env))
     return env_updates, None
 
 
@@ -1340,7 +1367,7 @@ def _prepare_run_clusterkit_multirack(body: dict) -> tuple[dict | None, tuple[ob
     nodes = [h for rack in rack_ids for h in groups[rack]]
     target = ",".join(nodes)
     label = "+".join(rack_ids)
-    env_updates, err = _clusterkit_job_env(body, label)
+    env_updates, err = _clusterkit_job_env(body, label, scope="multirack")
     if err is not None:
         return None, err
     assert env_updates is not None
@@ -1403,7 +1430,7 @@ def _prepare_run_clusterkit_singlerack(body: dict) -> tuple[dict | None, tuple[o
     cmd = ["bash", str(script), target]
     display_cmd = "./" + script.name + " " + shlex.quote(target)
     timeout = max(120, _job_env_int("RACK_CLUSTERKIT_TIMEOUT", 14400))
-    env_updates, err = _clusterkit_job_env(body, rk)
+    env_updates, err = _clusterkit_job_env(body, rk, scope="rack")
     if err is not None:
         return None, err
     return (

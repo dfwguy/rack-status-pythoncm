@@ -42,6 +42,7 @@ import type {
   CatalogVocab,
   Cluster,
   ClusterClusterKit,
+  ClusterKitEnvScope,
   ClusterFabric,
   ClusterNcclEnv,
   NcclEnvScope,
@@ -50,7 +51,7 @@ import type {
 } from "../types/catalog";
 import { intOr } from "../lib/catalogForm";
 import { bootstrapProjectScripts, deployScripts } from "../services/setupService";
-import { NcclEnvField } from "../components/NcclEnvField";
+import { EnvListField } from "../components/EnvListField";
 import { MultiSelectCombobox } from "../components/MultiSelectCombobox";
 
 // Lazy AND conditionally rendered: the wizard is a whole second form, and this screen is on the
@@ -67,8 +68,14 @@ function emptyFabric(): ClusterFabric {
 
 /** No tests chosen, no GPU-Direct: ClusterKit runs the launcher's defaults (bandwidth + latency). */
 function emptyClusterKit(): ClusterClusterKit {
-  return { tests: [], gpudirect: false, multirack_tests: [] };
+  return { tests: [], gpudirect: false, multirack_tests: [], env: { rack: {}, multirack: {} } };
 }
+
+/** ClusterKit's two launch levels and what each list reaches. There is no single-node ClusterKit run. */
+const CLUSTERKIT_ENV_LEVELS: ReadonlyArray<[ClusterKitEnvScope, string, string]> = [
+  ["rack", "Rack environment", "ClusterKit inside one rack: pairwise tests between its nodes."],
+  ["multirack", "Multi-rack environment", "ClusterKit across racks: rack against rack."],
+];
 
 /** No variables at any span: every launch runs with the scripts' own defaults. */
 function emptyNcclEnv(): ClusterNcclEnv {
@@ -244,6 +251,13 @@ export function ProjectsView() {
     setClusterDraft((d) =>
       d ? { ...d, cluster: { ...d.cluster, clusterkit: { ...(d.cluster.clusterkit ?? emptyClusterKit()), ...patch } } } : d,
     );
+  const setClusterKitEnv = (scope: ClusterKitEnvScope, env: Record<string, string>) =>
+    setClusterDraft((d) => {
+      if (!d) return d;
+      const ck = d.cluster.clusterkit ?? emptyClusterKit();
+      const levels = { rack: {}, multirack: {}, ...ck.env, [scope]: env };
+      return { ...d, cluster: { ...d.cluster, clusterkit: { ...ck, env: levels } } };
+    });
   const setNcclEnv = (scope: NcclEnvScope, env: Record<string, string>) =>
     setClusterDraft((d) =>
       d ? { ...d, cluster: { ...d.cluster, nccl_env: { ...(d.cluster.nccl_env ?? emptyNcclEnv()), [scope]: env } } } : d,
@@ -772,13 +786,14 @@ export function ProjectsView() {
           {clusterDraft && (
             <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 2 }}>
               {NCCL_ENV_SPANS.map(([scope, label, help]) => (
-                <NcclEnvField
+                <EnvListField
                   key={`${clusterDraft.session}-${scope}`}
                   name={`cl-nccl-${scope}`}
                   label={label}
                   help={help}
                   value={clusterDraft.cluster.nccl_env?.[scope] ?? {}}
                   onChange={(env) => setNcclEnv(scope, env)}
+                  placeholder={"NCCL_NET_PLUGIN=/path/libnccl-net-spcx.so\nNCCL_IB_DYNAMIC_FLOW=1"}
                 />
               ))}
             </Box>
@@ -819,6 +834,26 @@ export function ProjectsView() {
               />
             </FormField>
           </Box>
+          <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block" }}>
+            Environment for ClusterKit jobs on this cluster, by launch level. It is applied over what the
+            launch works out for itself and forwarded to every rank, for example CUDA_MAJ=13 where the site
+            installed the CUDA 13 HPC-X. Each level gets only its own list. One KEY=VALUE per line.
+          </Text>
+          {clusterDraft && (
+            <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 2 }}>
+              {CLUSTERKIT_ENV_LEVELS.map(([scope, label, help]) => (
+                <EnvListField
+                  key={`${clusterDraft.session}-ck-${scope}`}
+                  name={`cl-ck-env-${scope}`}
+                  label={label}
+                  help={help}
+                  value={clusterDraft.cluster.clusterkit?.env?.[scope] ?? {}}
+                  onChange={(env) => setClusterKitEnv(scope, env)}
+                  placeholder={"CUDA_MAJ=13\nUCX_TLS=rc,cuda"}
+                />
+              ))}
+            </Box>
+          )}
 
           <Text kind="body/bold/sm" style={{ display: "block", marginTop: 4 }}>Site geometry</Text>
           <Text kind="body/regular/sm" style={{ color: "var(--text-color-secondary)", display: "block", marginTop: -4 }}>

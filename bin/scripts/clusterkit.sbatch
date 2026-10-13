@@ -32,6 +32,8 @@
 #              (default "bisection_bw": rack-to-rack bandwidth) instead of the pairwise tests.
 #              Both are set per cluster in Projects -> cluster -> ClusterKit.
 #            RACK_CLUSTERKIT_EXTRA_OPTS, CUDA_MAJ / RACK_NVLOOM_CUDA_MAJOR.
+#            NVIS_EXTRA_ENV_KEYS — names of the cluster's ClusterKit variables (Projects -> cluster ->
+#              ClusterKit -> environment, per launch level), each forwarded to every rank with -x.
 # A rail whose test fails is reported and the remaining rails still run; the job exits non-zero if any
 # failed. (One bad rail used to abort the job and leave the healthy ones unmeasured.)
 # Pairwise NIC tests require ≥2 distinct hosts in the Slurm allocation (same as validation/clusterkit/clusterkit.sh).
@@ -194,6 +196,14 @@ if [[ "${RACK_CLUSTERKIT_GPUDIRECT:-}" == 1 && " ${RACK_CLUSTERKIT_EXTRA_OPTS:-}
 fi
 _ck_failed=()
 
+# The cluster's ClusterKit variables (Projects -> cluster -> ClusterKit -> environment) arrive in the
+# batch env; mpirun hands remote ranks only what -x names, so forward exactly the keys the app lists.
+_ck_extra_x=""
+for _k in ${NVIS_EXTRA_ENV_KEYS:-}; do
+  [[ "${_k}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && _ck_extra_x+=" -x ${_k}"
+done
+[[ -n "${_ck_extra_x}" ]] && echo "clusterkit: forwarding cluster env to all ranks:${_ck_extra_x// -x/}"
+
 for idx in "${!_CK_ROWS[@]}"; do
   row="${_CK_ROWS[$idx]}"
   if [[ "${LINK_TECH}" == "roce" ]]; then
@@ -207,14 +217,14 @@ for idx in "${!_CK_ROWS[@]}"; do
     export CK_OUTPUT_SUBDIR="${PWD}/${DATE}_${SLURM_JOB_ID}_${HCA_TAG}"
     # Match validation/clusterkit/clusterkit.sh: Slurm / Open MPI default binding can pin ranks to a
     # single CPU so numactl -C <core> fails ("cpu argument N is out of range"). Clear binding for mapper.
-    mpi_opt="-x CK_OUTPUT_SUBDIR -x CLUSTERKIT_HCA -x CORE -x NUMA -x GPU -x CK_GPU_TESTS -x SLURM_CPU_BIND=none --bind-to none"
+    mpi_opt="-x CK_OUTPUT_SUBDIR -x CLUSTERKIT_HCA -x CORE -x NUMA -x GPU -x CK_GPU_TESTS -x SLURM_CPU_BIND=none --bind-to none${_ck_extra_x}"
   else
     device="${row}"
     export HCA_TAG="${device}"
     export CLUSTERKIT_HCA="${idx}"
     unset CORE NUMA GPU
     export CK_OUTPUT_SUBDIR="${PWD}/${DATE}_${SLURM_JOB_ID}_${device}"
-    mpi_opt="-x CK_OUTPUT_SUBDIR -x CLUSTERKIT_HCA"
+    mpi_opt="-x CK_OUTPUT_SUBDIR -x CLUSTERKIT_HCA${_ck_extra_x}"
   fi
   set -x
   # Optional: export RACK_CLUSTERKIT_EXTRA_OPTS="--foo ..." (space-separated clusterkit.sh flags).
