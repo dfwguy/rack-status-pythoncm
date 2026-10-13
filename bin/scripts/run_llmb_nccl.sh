@@ -137,6 +137,13 @@ fi
 [[ -f "${LLMB_VENV}/bin/activate" ]] && source "${LLMB_VENV}/bin/activate"
 export LLMB_INSTALL
 
+# What this launch states (the cluster's nccl_env for its span, the dialog's variables) is captured
+# before the fabric wiring below and restored after it, so a stated value wins over every pick the
+# probe and the container wiring make (lib/stated_env.inc.sh).
+# shellcheck source=lib/stated_env.inc.sh
+source "${_SCRIPT_DIR}/lib/stated_env.inc.sh"
+nvis_stated_env_capture
+
 # --- Fabric wireup (NCCL/UCX/OMPI onto the compute rails) -----------------------
 # Classify NICs on a representative compute node (homogeneous rack) and export the
 # NCCL/UCX/Open MPI env so collectives ride the correct plane cross-rack. Everything
@@ -190,6 +197,7 @@ if [[ " ${NVIS_FABRIC_CONTAINER_EXPORTS} " == *" MELLANOX_VISIBLE_DEVICES "* \
   nvis_fabric_mpi_xrack_transport
   NVIS_FABRIC_CONTAINER_EXPORTS="${NVIS_FABRIC_CONTAINER_EXPORTS} UCX_TLS${UCX_NET_DEVICES:+ UCX_NET_DEVICES}"
 fi
+nvis_stated_env_restore run_llmb_nccl
 for _k in ${NVIS_FABRIC_CONTAINER_EXPORTS}; do
   [[ " ${NVIS_FORCE_EXPORT_VARS:-} " == *" ${_k} "* ]] || NVIS_FORCE_EXPORT_VARS="${NVIS_FORCE_EXPORT_VARS:+${NVIS_FORCE_EXPORT_VARS} }${_k}"
 done

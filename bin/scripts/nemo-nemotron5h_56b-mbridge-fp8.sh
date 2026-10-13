@@ -113,6 +113,12 @@ for _cand in \
   "${RACK_REMOTE_BASE_PATH:+${RACK_REMOTE_BASE_PATH}/bin/scripts/lib/fabric.inc.sh}"; do
   [[ -n "${_cand}" && -f "${_cand}" ]] && { _nvis_lib="${_cand}"; break; }
 done
+# What this launch states -- the cluster's nccl_env for its span, the dialog's variables -- is captured
+# here, before any tuning below, and restored right before each launch (lib/stated_env.inc.sh): the
+# exports below are this script's defaults, and a site's stated value is meant to win over them.
+# shellcheck disable=SC1091
+[[ -n "${_nvis_lib}" && -f "${_nvis_lib%/*}/stated_env.inc.sh" ]] && . "${_nvis_lib%/*}/stated_env.inc.sh"
+declare -F nvis_stated_env_capture >/dev/null 2>&1 && nvis_stated_env_capture
 # shellcheck disable=SC1090
 if [[ -n "${_nvis_lib}" ]]; then
   echo "INFO: fabric classifier: ${_nvis_lib}"
@@ -286,6 +292,8 @@ srun -N ${SLURM_NNODES} --ntasks-per-node=1 enroot remove -f pyxis_nemo &>/dev/n
 # INFO|TRACE) to diagnose a silent cross-rack hang: INFO names the stuck rank/peer connection.
 export NCCL_DEBUG="${NVIS_NCCL_DEBUG:-WARN}"
 export NCCL_NVLS_ENABLE=${NVIS_NEMO_NVLS_ENABLE:-${_nvls_default}}
+# The stated values over this script's tuning, for the pre-flight (see lib/stated_env.inc.sh).
+declare -F nvis_stated_env_restore >/dev/null 2>&1 && nvis_stated_env_restore nemo
 
 # NCCL pre-flight selector: which collectives to run before NeMo training (space/comma
 # list of: allreduce alltoall allgather). Default = all three (original behavior). The
@@ -464,6 +472,8 @@ else
 fi
 echo "INFO: LLM params model=nemotronh size=${NVIS_NEMO_MODEL_SIZE} dtype=${NVIS_NEMO_DTYPE} gbs=${NVIS_NEMO_GBS} max_steps=${MAX_STEPS} recipe_default=${NVIS_NEMO_RECIPE_DEFAULT:-0} cli=${NVIS_NEMO_CLI:-v2} gpu=${NVIS_NEMO_GPU_TYPE}"
 echo "INFO: model_args=[${NVIS_NEMO_MODEL_ARGS}] extra_args=[${NVIS_NEMO_EXTRA_ARGS}]"
+# And again for training: the phase's own NCCL_DEBUG / NVLS defaults above are set after the first restore.
+declare -F nvis_stated_env_restore >/dev/null 2>&1 && nvis_stated_env_restore nemo
 train_rc=0
 srun --export=${EXPORT_ARG} --cpu-bind=none --mpi=pmix \
 --container-name=nemo \

@@ -152,6 +152,13 @@ PY
   fi
 fi
 
+# What this launch states (the cluster's nccl_env for its span, the dialog's variables) is captured
+# before the fabric tuning below and restored after it: the probe's picks are defaults, and a site's
+# stated value is meant to win over them (lib/stated_env.inc.sh).
+# shellcheck disable=SC1091
+source "${_D}/lib/stated_env.inc.sh"
+nvis_stated_env_capture
+
 # --- Fabric: NCCL on the IB rails, bootstrap on the routable NS iface -----------
 # shellcheck disable=SC1091
 source "${_D}/lib/fabric.inc.sh"
@@ -176,6 +183,7 @@ if [ "${NVIS_NCCL_HCA_AUTO:-0}" = "1" ]; then
   unset NCCL_IB_HCA UCX_NET_DEVICES
   echo "nccl_allreduce: NVIS_NCCL_HCA_AUTO=1 — per-node HCA auto-detect (not pinning NCCL_IB_HCA/UCX_NET_DEVICES)"
 fi
+nvis_stated_env_restore nccl_allreduce
 # Routable mgmt iface for MPI + NCCL bootstrap. Fall back to the fabric library's own resolver
 # (bond0/bond1, else the first up netdev with a global IPv4), never a literal bond0 -- GB300
 # nodes have none, and that literal is what aborted mpirun before any collective ran.
