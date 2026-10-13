@@ -335,7 +335,10 @@ python-test:
     # REQ-45: every file meets the 50% floor, or is on a list of known exceptions that may only
     # shrink. Runs after the suite because it reads the report the suite produced.
     - python bin/check-coverage-floor.py coverage.json
-  coverage: '/TOTAL.+\s(\d+%)/'
+  # The figure the Backend Coverage badge shows. .coveragerc prints it to one decimal (71.4%), so
+  # the pattern takes a fraction -- a whole-number-only pattern matched nothing and the badge read
+  # "unknown". test_ci_coverage_pattern.py holds the two together.
+  coverage: '/TOTAL.+\s(\d+(?:\.\d+)?%)/'
   artifacts:
     when: always
     paths:

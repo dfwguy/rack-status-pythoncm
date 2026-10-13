@@ -1,9 +1,5 @@
 # NVIS Rack Status (`nvis-rack-status`)
 
-[![Pipeline](https://gitlab-master.nvidia.com/nvis-ova/nvis-ova-rack-status/badges/v3/pipeline.svg)](https://gitlab-master.nvidia.com/nvis-ova/nvis-ova-rack-status/-/pipelines)
-[![Backend Coverage](https://gitlab-master.nvidia.com/nvis-ova/nvis-ova-rack-status/badges/v3/coverage.svg?job=python-test&key_text=Backend+Coverage&key_width=130)](https://gitlab-master.nvidia.com/nvis-ova/nvis-ova-rack-status/-/jobs)
-[![Frontend Coverage](https://gitlab-master.nvidia.com/nvis-ova/nvis-ova-rack-status/badges/v3/coverage.svg?job=frontend-test&key_text=Frontend+Coverage&key_width=130)](https://gitlab-master.nvidia.com/nvis-ova/nvis-ova-rack-status/-/jobs)
-
 NVIS Rack Status is a full-stack validation, observability, and operations platform for NVIDIA GPU clusters. It combines a Flask API, a React 19 single-page application, platform and scheduler providers, audited validation recipes, durable run history, and guarded Slurm operations.
 
 This README is the engineering and operator entry point. For step-by-step use of every current UI surface, validation, audit, report, and troubleshooting path, see the [Rack Status operator and administrator guide](docs/RACKSTATUS_USER_GUIDE.md). The complete environment-variable reference is [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md), and the deeper execution and result-pipeline designs are linked under [Further reading](#further-reading).
