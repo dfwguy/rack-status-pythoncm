@@ -26,8 +26,10 @@ import {
   fetchSlurmJson,
   findSqueueJobColumnIndex,
   formatSlurmCmdDetail,
+  parseSlurmJobStateFromScontrolText,
   parseSlurmStdOutPathFromScontrolText,
   slurmJobIdForScancel,
+  slurmJobStateLabel,
   type SlurmCmdJson,
 } from "../lib/slurmHelpers";
 import { parseSqueueStdout } from "../lib/parseSqueueStdout";
@@ -161,6 +163,15 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
           return;
         }
         const path = parseSlurmStdOutPathFromScontrolText(showBlock);
+        const { state, reason } = parseSlurmJobStateFromScontrolText(showBlock);
+        if (state === "PENDING") {
+          // Nothing to tail yet: Slurm creates the StdOut file when the job starts.
+          window.alert(
+            `Job ${jobId} has not started yet${reason ? ` (${reason})` : ""}. ` +
+              `Its log${path ? `, ${path},` : ""} is created when the job starts.`
+          );
+          return;
+        }
         if (!path) {
           window.alert(
             `No usable StdOut= path for job ${jobId} (missing, (none), or /dev/null). Use the job id link to inspect scontrol output.`
@@ -267,7 +278,8 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
                 {headers.map((h, ci) => (
                   <SortableHeaderCell
                     key={h}
-                    label={h}
+                    // squeue's ST is the job's state; say so (its cells are spelled out below).
+                    label={ci === stCol ? "Status" : h}
                     col={ci}
                     sortCol={rowsPage.sortCol}
                     sortDir={rowsPage.sortDir}
@@ -285,16 +297,18 @@ export function SqueuePanel({ logDir, active, tableMaxHeight = 480 }: SqueuePane
                 return (
                   <TableRow key={ri} hover sx={{ "&:nth-of-type(even)": { bgcolor: "action.hover" } }}>
                     {headers.map((_, ci) => {
-                      const value = cells[ci] ?? "";
+                      const raw = cells[ci] ?? "";
+                      // The state code in words (PD -> Pending); the code stays in the hover title.
+                      const value = ci === stCol ? slurmJobStateLabel(raw) : raw;
                       const isReason = ci === reasonCol;
-                      // Color the reason (and ST) cell by severity so launch/prolog failures pop.
+                      // Color the reason (and status) cell by severity so launch/prolog failures pop.
                       const toneSource = isReason || ci === stCol ? value : "";
                       const tone = toneSource ? slurmReasonTone(toneSource) : "none";
                       const toneColor = slurmToneColor(tone);
                       return (
                         <TableCell
                           key={ci}
-                          title={value}
+                          title={raw}
                           sx={{
                             fontFamily: "monospace",
                             fontSize: 12,

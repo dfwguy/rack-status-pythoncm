@@ -103,3 +103,62 @@ describe("SqueuePanel column sorting", () => {
     await waitFor(() => expect(firstColumn()[0]).toBe("140212"));
   });
 });
+
+describe("SqueuePanel open log", () => {
+  it("says a pending job has not started instead of tailing a log that does not exist yet", async () => {
+    // Job 194782 on Nscale NC: queued behind another 36-node run, so its StdOut file was never
+    // created and the tail dialog said only "path does not exist".
+    const scontrol =
+      "JobId=140212 JobName=microben\n   JobState=PENDING Reason=Resources Dependency=(null)\n" +
+      "   StdOut=/home/cmods/nvis/logs/root-NEMO-U20+U23-36N-140212.txt";
+    const respond = (body: object) => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(body),
+      json: async () => body,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: RequestInfo | URL) =>
+        String(url instanceof Request ? url.url : url).includes("scheduler-job-detail")
+          ? respond({ ok: true, stdout: scontrol })
+          : respond({ ok: true, stdout: squeueStdout(), command_display: "squeue" }),
+      ),
+    );
+    const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
+    render(<SqueuePanel active />);
+    await waitFor(() => expect(screen.getByText("JOBID")).toBeInTheDocument());
+    const row = screen.getAllByRole("row").find((r) => within(r).queryAllByRole("cell")[0]?.textContent?.trim() === "140212") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: /open log/i }));
+    await waitFor(() => expect(alert).toHaveBeenCalled());
+    expect(alert.mock.calls[0][0]).toBe(
+      "Job 140212 has not started yet (Resources). Its log, " +
+        "/home/cmods/nvis/logs/root-NEMO-U20+U23-36N-140212.txt, is created when the job starts.",
+    );
+    expect(screen.queryByText(/^tail -f/)).toBeNull();
+    alert.mockRestore();
+  });
+});
+
+describe("SqueuePanel status column", () => {
+  beforeEach(() => {
+    mockSqueue(squeueStdout());
+  });
+
+  it("calls squeue's ST column Status and spells each state out", async () => {
+    // A queue of PD and R next to node lists that are sometimes hosts and sometimes a reason: the
+    // words say at a glance which jobs have not started.
+    render(<SqueuePanel active />);
+    await waitFor(() => expect(screen.getByText("JOBID")).toBeInTheDocument());
+    expect(screen.getByText("Status")).toBeInTheDocument();
+    expect(screen.queryByText("ST")).toBeNull();
+    const rows = screen.getAllByRole("row").slice(1);
+    const statusOf = (jobId: string) => {
+      const row = rows.find((r) => within(r).getAllByRole("cell")[0]?.textContent?.trim() === jobId);
+      return within(row as HTMLElement).getAllByRole("cell")[4];
+    };
+    expect(statusOf("140212").textContent).toBe("Pending");
+    expect(statusOf("140212").getAttribute("title")).toBe("PD"); // the code stays on hover
+    expect(statusOf("140300").textContent).toBe("Running");
+  });
+});

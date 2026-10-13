@@ -263,10 +263,71 @@ def _run_sacct_recent(limit: int = 10, state: str = "COMPLETED") -> dict:
 
 
 # --- job stdout resolution (reads; the write side is slurm_admin.py) ---------------
+#: Slurm's output-filename placeholders (``sbatch --output``): ``%j`` job id, ``%x`` job name, ``%u``
+#: user, ``%N`` the batch node, ``%%`` a literal ``%``; an optional width zero-pads the job id.
+_SLURM_FILENAME_PATTERN_RE = re.compile(r"%(\d*)([A-Za-z%])")
+
+
+def _expand_slurm_filename_pattern(pattern: str, *, job_id: str, name: str, user: str, node: str) -> str:
+    """``--output`` as Slurm expanded it for this job, or "" if it uses a placeholder we cannot fill.
+
+    Accounting stores the pattern (``/logs/clusterkit/rkoike-CK-U2-%j.txt``), not the file it became.
+    A placeholder this record cannot answer -- an array index, a multi-node ``%N`` -- yields "" so the
+    caller falls back to looking, rather than guessing a path.
+    """
+    values = {"j": job_id, "J": job_id, "x": name, "u": user, "N": node, "%": "%"}
+    unknown = False
+
+    def _sub(m: re.Match[str]) -> str:
+        nonlocal unknown
+        width, key = m.group(1), m.group(2)
+        val = values.get(key, "")
+        if not val:
+            unknown = True
+            return ""
+        return val.zfill(int(width)) if width and key in "jJ" else val
+
+    out = _SLURM_FILENAME_PATTERN_RE.sub(_sub, pattern)
+    return "" if unknown else out
+
+
+def _sacct_stdout_path(job_id: str) -> str:
+    """A finished job's stdout file, as Slurm accounting recorded it -- "" when it has no answer.
+
+    The controller forgets a job after MinJobAge; accounting keeps its ``--output`` for days. That
+    answer covers every launcher, wherever under the log directory it writes (ClusterKit's
+    ``clusterkit/`` subdirectory, which the log-directory glob never searched), with no filename
+    convention to guess. Only a path that exists on the execution host is returned.
+    """
+    fmt = "StdOut,JobName,User,NodeList,WorkDir"
+    shell_cmd = _get_platform().sacct_cmd(f"-j {shlex.quote(job_id)} -X -n -P -o {shlex.quote(fmt)}")
+    try:
+        proc = host_exec.run_slurm_on_host(shell_cmd, timeout=max(5, _env_int("RACK_SLURM_SACCT_TIMEOUT", 60)))
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    for line in (proc.stdout or "").splitlines():
+        parts = line.strip().split("|")
+        if len(parts) < 5:
+            continue
+        pattern, name, user, nodelist, workdir = (p.strip() for p in parts[:5])
+        if not pattern or pattern.lower() in ("(null)", "/dev/null", "none", "(none)"):
+            return ""
+        # %N is the batch host; accounting gives the node list, which names it only for one node.
+        node = nodelist if nodelist and not any(c in nodelist for c in "[,") else ""
+        path = _expand_slurm_filename_pattern(pattern, job_id=job_id, name=name, user=user, node=node)
+        if path and not path.startswith("/") and workdir.startswith("/"):
+            path = f"{workdir.rstrip('/')}/{path}"
+        if path and path.startswith("/") and ".." not in path and host_exec.is_file(_rpath(Path(path))):
+            return path
+        return ""
+    return ""
+
+
 def _slurm_job_log_path(job_id: str, log_dir: Path) -> tuple[str, str]:
     """Resolve a finished job's stdout path: ``scontrol`` ``StdOut=`` (jobs still within
-    MinJobAge), else glob the dashboard log dir for the launcher's ``*_<jid>.out`` /
-    ``*-<jid>.txt`` (for jobs that have aged out of the controller)."""
+    MinJobAge), then Slurm accounting's recorded ``--output`` (jobs that have aged out of the
+    controller), else glob the dashboard log dir for the launcher's ``*_<jid>.out`` /
+    ``*-<jid>.txt`` (a cluster without accounting)."""
     jid = _slurm_job_base_id(job_id) or ""
     if not jid:
         return "", "invalid"
@@ -280,6 +341,9 @@ def _slurm_job_log_path(job_id: str, log_dir: Path) -> tuple[str, str]:
                     return p, "scontrol"
     except (ValueError, OSError):
         pass
+    recorded = _sacct_stdout_path(jid)
+    if recorded:
+        return recorded, "sacct"
     d = str(log_dir).rstrip("/")
     if d:
         listing = (

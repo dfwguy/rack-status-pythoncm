@@ -25,6 +25,66 @@ export function parseSlurmStdOutPathFromScontrolText(text: string): string {
   return p;
 }
 
+/**
+ * ``JobState=`` and ``Reason=`` from ``scontrol show job`` stdout. A PENDING job has no log yet --
+ * Slurm creates its StdOut file when the job starts -- so a view can say that instead of failing to
+ * open a path that does not exist (job 194782, queued behind another 36-node run).
+ */
+export function parseSlurmJobStateFromScontrolText(text: string): { state: string; reason: string } {
+  const t = String(text || "");
+  const state = /\bJobState=(\S+)/.exec(t)?.[1] ?? "";
+  const reason = /\bReason=(\S+)/.exec(t)?.[1] ?? "";
+  return { state: state.toUpperCase(), reason: reason === "None" ? "" : reason.replace(/_/g, " ") };
+}
+
+/**
+ * squeue's job state codes (``%t``, the ``ST`` column) in words. ``PD`` and ``R`` read as noise next
+ * to a node list that is sometimes a reason and sometimes hosts; "Pending" / "Running" say which.
+ * From squeue(1) JOB STATE CODES.
+ */
+const SLURM_JOB_STATE_WORDS: Record<string, string> = {
+  BF: "Boot fail",
+  CA: "Cancelled",
+  CD: "Completed",
+  CF: "Configuring",
+  CG: "Completing",
+  DL: "Deadline",
+  F: "Failed",
+  NF: "Node fail",
+  OOM: "Out of memory",
+  PD: "Pending",
+  PR: "Preempted",
+  R: "Running",
+  RD: "Held (reservation deleted)",
+  RF: "Requeue federation",
+  RH: "Requeue held",
+  RQ: "Requeued",
+  RS: "Resizing",
+  RV: "Revoked",
+  SE: "Special exit",
+  SI: "Signaling",
+  SO: "Staging out",
+  ST: "Stopped",
+  S: "Suspended",
+  TO: "Timeout",
+};
+
+/**
+ * A job state in words: a squeue code (``PD``) or a long name (``PENDING``, ``NODE_FAIL``) becomes
+ * "Pending" / "Node fail"; anything else is shown as Slurm wrote it.
+ */
+export function slurmJobStateLabel(raw: string | null | undefined): string {
+  const t = String(raw ?? "").trim();
+  if (!t) return "";
+  const word = SLURM_JOB_STATE_WORDS[t.toUpperCase()];
+  if (word) return word;
+  if (/^[A-Z_]{3,}$/.test(t)) {
+    const words = t.toLowerCase().replace(/_/g, " ");
+    return words.charAt(0).toUpperCase() + words.slice(1);
+  }
+  return t;
+}
+
 export type SlurmSacctJob = {
   job_id: string;
   name: string;

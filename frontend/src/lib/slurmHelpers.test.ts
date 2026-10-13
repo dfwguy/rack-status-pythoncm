@@ -15,7 +15,7 @@
  * raw `fetch`, so all of them failed once the access token expired.
  */
 import { afterEach, describe, expect, it } from "vitest";
-import { fetchSlurmJson } from "./slurmHelpers";
+import { fetchSlurmJson, parseSlurmJobStateFromScontrolText, slurmJobStateLabel } from "./slurmHelpers";
 
 const originalFetch = globalThis.fetch;
 
@@ -65,5 +65,52 @@ describe("fetchSlurmJson", () => {
     globalThis.fetch = (async () => new Response("<html>gateway</html>", { status: 502 })) as typeof fetch;
 
     await expect(fetchSlurmJson("/api/scheduler-jobs")).rejects.toThrow(/Invalid JSON \(HTTP 502\)/);
+  });
+});
+
+describe("parseSlurmJobStateFromScontrolText", () => {
+  it("reads a pending job's state and why it waits", () => {
+    const text = "JobId=194782 JobName=NEMO-36N\n   JobState=PENDING Reason=ReqNodeNotAvail,_May_be_reserved_for_other_job Dependency=(null)";
+    expect(parseSlurmJobStateFromScontrolText(text)).toEqual({
+      state: "PENDING",
+      reason: "ReqNodeNotAvail, May be reserved for other job",
+    });
+  });
+
+  it("reads a running job with no reason", () => {
+    expect(parseSlurmJobStateFromScontrolText("   JobState=RUNNING Reason=None Dependency=(null)")).toEqual({
+      state: "RUNNING",
+      reason: "",
+    });
+  });
+
+  it("says nothing for text without a state", () => {
+    expect(parseSlurmJobStateFromScontrolText("")).toEqual({ state: "", reason: "" });
+  });
+});
+
+describe("slurmJobStateLabel", () => {
+  it.each([
+    ["PD", "Pending"],
+    ["R", "Running"],
+    ["CG", "Completing"],
+    ["CA", "Cancelled"],
+    ["F", "Failed"],
+    ["NF", "Node fail"],
+    ["OOM", "Out of memory"],
+    ["S", "Suspended"],
+    ["ST", "Stopped"],
+  ])("spells squeue's %s as %s", (code, word) => {
+    expect(slurmJobStateLabel(code)).toBe(word);
+  });
+
+  it("reads a long state name too", () => {
+    expect(slurmJobStateLabel("PENDING")).toBe("Pending");
+    expect(slurmJobStateLabel("NODE_FAIL")).toBe("Node fail");
+  });
+
+  it("leaves what it does not know as Slurm wrote it", () => {
+    expect(slurmJobStateLabel("XZ")).toBe("XZ");
+    expect(slurmJobStateLabel("")).toBe("");
   });
 });
