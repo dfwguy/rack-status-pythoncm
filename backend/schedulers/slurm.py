@@ -24,7 +24,9 @@ _SLURM_NODE_STATE = {
     "idle": "idle",
     "alloc": "running", "allocated": "running", "mix": "running", "mixed": "running",
     "comp": "running", "completing": "running",
-    "plnd": "reserved", "planned": "reserved", "resv": "reserved", "reserved": "reserved",
+    # PLANNED: backfill has set the node aside for a job still pending on it.
+    "plnd": "pending", "planned": "pending",
+    "resv": "reserved", "reserved": "reserved",
     "maint": "reserved", "maintenance": "reserved", "block": "reserved", "blocked": "reserved",
     "drng": "draining", "draining": "draining",
     "drain": "drained", "drained": "drained",
@@ -48,7 +50,7 @@ def slurm_node_status(raw: str | None) -> str:
         return "down"
     if "draining" in parts or ("drained" in parts and "running" in parts):
         return "draining"
-    for status in ("drained", "running", "reserved", "idle"):
+    for status in ("drained", "running", "reserved", "pending", "idle"):
         if status in parts:
             return status
     return "unknown"

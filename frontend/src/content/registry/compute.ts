@@ -83,7 +83,7 @@ export const computeContent: HelpContent[] = [
       "Per-rack row menu: open detail, view parser charts, tail logs, run actions.",
       "Inline comment editing per rack.",
       "Command activity indicator showing in-flight jobs per rack.",
-      "Floor view with one cell per node, coloured by the orchestrator (BCM: up, installing, down) or by the scheduler (Slurm: idle, running, reserved, draining, drained, down, unknown).",
+      "Floor view with one cell per node, coloured by the orchestrator (BCM: up, installing, down) or by the scheduler (Slurm: idle, running, pending, reserved, draining, drained, down, unknown).",
     ],
     howTo: [
       {

@@ -36,12 +36,13 @@ TERMINAL_STATES = {
 # "can take work" to "cannot say"; a view rolling several nodes up reads severity off this order.
 #   idle      free to take a job
 #   running   holding work (allocated, mixed, or finishing it)
-#   reserved  held for work that has not started (a planned or reserved node, maintenance)
+#   pending   set aside for a job still waiting to start (Slurm's planned node)
+#   reserved  held out of the queue (an admin reservation, maintenance, a blocked node)
 #   draining  running its last job before it is taken out
 #   drained   out of service by an operator or a health check, otherwise healthy
 #   down      the scheduler cannot use it (down, failed, invalid)
 #   unknown   no answer, or a state outside this list
-NODE_STATES = ("idle", "running", "reserved", "draining", "drained", "down", "unknown")
+NODE_STATES = ("idle", "running", "pending", "reserved", "draining", "drained", "down", "unknown")
 
 
 @dataclass

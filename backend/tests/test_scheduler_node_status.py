@@ -39,7 +39,7 @@ from schedulers.slurm import slurm_node_status
         ("alloc", "running"),
         ("mix", "running"),
         ("comp", "running"),
-        ("plnd", "reserved"),
+        ("plnd", "pending"),
         ("resv", "reserved"),
         ("maint", "reserved"),
         ("drng", "draining"),
@@ -55,7 +55,7 @@ from schedulers.slurm import slurm_node_status
         ("IDLE", "idle"),
         ("ALLOCATED", "running"),
         ("DRAINED", "drained"),
-        ("PLANNED", "reserved"),
+        ("PLANNED", "pending"),
         # Suffix flags say how Slurm reached the state, not what it is.
         ("idle*", "idle"),
         ("mix-", "running"),
@@ -77,6 +77,10 @@ def test_slurm_states_map_onto_the_shared_vocabulary(raw, status):
         ("IDLE+DRAIN", "drained"),
         # Down outranks everything: the scheduler cannot use it whatever else is true.
         ("DOWN+DRAIN", "down"),
+        # An idle node backfill has planned for a pending job is that job's, not free.
+        ("IDLE+PLANNED", "pending"),
+        # A node already holding work stays running, whatever is pending behind it.
+        ("MIXED+PLANNED", "running"),
         # A completing job is still work on the node.
         ("idle+comp", "running"),
         # A part Slurm reports but this view has no word for does not hide the part it has.

@@ -39,6 +39,8 @@ export const ORCHESTRATOR_STATUS: Record<NodeInventoryEntry["status"], StatusSty
 export const SCHEDULER_STATUS: Record<SchedulerNodeStatus, StatusStyle> = {
   idle: { label: "Idle", background: "var(--color-green-500)" },
   running: { label: "Running", background: "var(--color-blue-500)" },
+  // Set aside for a job still waiting to start: running's blue, not yet at full strength.
+  pending: { label: "Pending", background: "var(--color-blue-200)" },
   reserved: { label: "Reserved", background: "var(--color-purple-500)" },
   // Still running work, and drained once it ends: both colours at once, so it reads as either.
   draining: {
@@ -57,6 +59,7 @@ export const SCHEDULER_STATUS: Record<SchedulerNodeStatus, StatusStyle> = {
 export const SCHEDULER_STATUS_ORDER: SchedulerNodeStatus[] = [
   "idle",
   "running",
+  "pending",
   "reserved",
   "draining",
   "drained",

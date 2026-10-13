@@ -94,7 +94,7 @@ Each record has `id`, nullable `rack`, `status`, `scheduler_state`, `scheduler_s
 `status` is the cluster manager's view of the node (`up`, `inst`, `down`, `unknown`).
 `scheduler_state` is the scheduler's raw state as it spells it (Slurm `drain`, `mix-`,
 `IDLE+DRAIN`). `scheduler_status` is the same state in a vocabulary shared by every scheduler:
-`idle`, `running`, `reserved`, `draining`, `drained`, `down`, `unknown` (`schedulers.base.NODE_STATES`,
+`idle`, `running`, `pending`, `reserved`, `draining`, `drained`, `down`, `unknown` (`schedulers.base.NODE_STATES`,
 mapped from Slurm by `schedulers.slurm.slurm_node_status`). The snapshot's `node_sources` names who
 answered for each: `{"orchestrator": "bcm", "scheduler": "slurm"}`. `scheduler` is `""` when no
 scheduler answered. A provider-inventoried cluster such as Nscale NC, recorded with scheduler

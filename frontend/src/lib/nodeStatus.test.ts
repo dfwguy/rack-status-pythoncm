@@ -41,6 +41,13 @@ describe("schedulerRackSummary", () => {
     expect(schedulerRackSummary(nodes).dominant).toBe("drained");
   });
 
+  it("reads a rack backfill has set aside for a waiting job as pending, not free", () => {
+    // Idle to the eye, but the next job in the queue is already waiting on these nodes.
+    const s = schedulerRackSummary([node("a", "pending"), node("b", "pending"), node("c", "idle"), node("d", "idle")]);
+    expect(s.counts.pending).toBe(2);
+    expect(s.dominant).toBe("pending");
+  });
+
   it("reads a node an older server sent without a status as unknown", () => {
     const s = schedulerRackSummary([node("a"), node("b", "idle"), node("c")]);
     expect(s.counts.unknown).toBe(2);
@@ -72,7 +79,7 @@ describe("sourceName", () => {
 
 describe("SCHEDULER_STATUS", () => {
   it("has a distinct look for every status in the server's vocabulary", () => {
-    // Seven states, seven colours: two that looked alike would be one state to the eye.
+    // Eight states, eight colours: two that looked alike would be one state to the eye.
     const looks = SCHEDULER_STATUS_ORDER.map((s) => SCHEDULER_STATUS[s].background);
     expect(new Set(looks).size).toBe(SCHEDULER_STATUS_ORDER.length);
     // Design tokens only -- a hex here ships the wrong colour in the other theme.

@@ -402,6 +402,7 @@ export interface MultirackJobsResponse {
 export type SchedulerNodeStatus =
   | "idle"
   | "running"
+  | "pending"
   | "reserved"
   | "draining"
   | "drained"

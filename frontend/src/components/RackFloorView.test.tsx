@@ -154,7 +154,7 @@ describe("RackFloorView status source", () => {
     expect(cellStates()).toEqual(["running", "idle", "drained", "drained"]);
     const legend = screen.getByTestId("floor-legend");
     expect(legend).toHaveTextContent("Slurm");
-    for (const label of ["Idle", "Running", "Reserved", "Draining", "Drained", "Down", "Unknown"]) {
+    for (const label of ["Idle", "Running", "Pending", "Reserved", "Draining", "Drained", "Down", "Unknown"]) {
       expect(legend).toHaveTextContent(label);
     }
     // The tile's count line asks the scheduler's question: how much of the rack can take work.
