@@ -12,6 +12,8 @@
 # ClusterKit SU-suite runner for Rack Status.
 #
 # Usage:
+#   run_clusterkit_suite.sh plan --nodelist <node1,node2> --hpcx-init <path> [options]
+#   run_clusterkit_suite.sh run --dry-run --nodelist <node1,node2> --hpcx-init <path> [options]
 #   run_clusterkit_suite.sh run <DOMAIN> <PREFIX> <SU_LABEL>
 #   run_clusterkit_suite.sh check [SU_LABEL ...]
 #
@@ -24,6 +26,172 @@
 # coverage/performance checks; the sbatch files own ClusterKit execution.
 
 set -uo pipefail
+
+# Explicit-node planning exits before initializing the legacy SU runner.
+# Live submission requires --execute, exactly two nodes, an explicit HCA/port,
+# and a time limit of at most five minutes. It submits one bounded CPU/RoCE job.
+plan_explicit_nodes() {
+  local mode="$1" nodelist="" label="explicit-nodes"
+  local hpcx_init="${NVIS_CLUSTERKIT_HPCX_INIT:-}"
+  local partition="${RACK_CLUSTERKIT_SUITE_PARTITION:-${RACK_CLUSTERKIT_PARTITION:-defq}}"
+  local walltime="00:05:00" dry_run="${DRY_RUN:-0}"
+  local execute=0 hca="" duration jobid
+  local gid_policy="${RACK_CLUSTERKIT_SUITE_GID_POLICY:-global}"
+  local log_level="${RACK_CLUSTERKIT_SUITE_LOG_LEVEL:-info}" path_check=0
+  local script_dir repo_dir results_root workspace outdir exports other _node0_lower _node1_lower
+  local nodes=() cmd=()
+  shift
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || return 1
+  repo_dir="$(cd "${script_dir}/../.." && pwd)" || return 1
+  results_root="${RACK_CLUSTERKIT_SUITE_RESULTS_ROOT:-${repo_dir}/results}"
+
+  while (($#)); do
+    case "$1" in
+      --dry-run) dry_run=1; shift ;;
+      --execute) execute=1; shift ;;
+      --path-check) path_check=1; shift ;;
+      --nodelist|--hpcx-init|--results-root|--partition|--time|--label|--hca|--gid-policy|--log-level)
+        if (($# < 2)) || [[ -z "$2" || "$2" == --* ]]; then
+          echo "ERROR: $1 requires a value" >&2; return 1
+        fi
+        case "$1" in
+          --nodelist) nodelist="$2" ;;
+          --hpcx-init) hpcx_init="$2" ;;
+          --results-root) results_root="$2" ;;
+          --partition) partition="$2" ;;
+          --time) walltime="$2" ;;
+          --label) label="$2" ;;
+          --hca) hca="$2" ;;
+          --gid-policy) gid_policy="$2" ;;
+          --log-level) log_level="$2" ;;
+        esac
+        shift 2
+        ;;
+      -h|--help)
+        cat <<'PLAN_USAGE'
+Print one two-node sbatch plan, or explicitly submit one bounded CPU/RoCE test.
+Usage: run_clusterkit_suite.sh plan --nodelist NODE1,NODE2 --hpcx-init /path/hpcx-init.sh
+       run_clusterkit_suite.sh run --dry-run --nodelist NODE1,NODE2 --hpcx-init /path/hpcx-init.sh
+Options: --results-root /path (default: <repo>/results), --partition NAME (default: defq),
+         --time HH:MM:SS (default: 00:05:00), --label NAME (default: explicit-nodes),
+         --hca DEVICE:PORT. Live run requires --execute and --hca, and at most five minutes.
+         --gid-policy global|auto (default: global; auto reproduces the diagnostic baseline).
+         --log-level info|debug (default: info), --path-check (also compare one UCX RC path).
+Use literal hostnames, not Slurm bracket expressions. Physical rack membership is not inferred.
+PLAN_USAGE
+        return 0
+        ;;
+      *) echo "ERROR: unknown explicit-node planning option '$1'" >&2; return 1 ;;
+    esac
+  done
+
+  if [[ "$mode" != plan && "$dry_run" != 1 && "$execute" != 1 ]]; then
+    echo "ERROR: explicit-node execution is disabled by default; use plan, --dry-run, or --execute" >&2
+    return 1
+  fi
+  if [[ ! "$nodelist" =~ ^[[:alnum:]][[:alnum:]._-]*(,[[:alnum:]][[:alnum:]._-]*)+$ ]]; then
+    echo "ERROR: --nodelist requires comma-separated literal hostnames (no blanks or ranges)" >&2
+    return 1
+  fi
+  IFS=, read -r -a nodes <<<"$nodelist"
+  if ((${#nodes[@]} != 2)); then
+    echo "ERROR: this planning mode requires exactly two nodes" >&2; return 1
+  fi
+  _node0_lower=$(printf '%s' "${nodes[0]}" | tr '[:upper:]' '[:lower:]')
+  _node1_lower=$(printf '%s' "${nodes[1]}" | tr '[:upper:]' '[:lower:]')
+  if [[ "${_node0_lower}" == "${_node1_lower}" ]]; then
+    echo "ERROR: duplicate hostname (case-insensitive)" >&2; return 1
+  fi
+  if [[ ! "$label" =~ ^[[:alnum:]][[:alnum:]_-]*$ || ! "$partition" =~ ^[[:alnum:]][[:alnum:]_-]*$ ]]; then
+    echo "ERROR: label and partition must contain only letters, digits, '_' or '-'" >&2
+    return 1
+  fi
+  if [[ ! "$walltime" =~ ^([0-9]{1,3}):([0-5][0-9]):([0-5][0-9])$ ]]; then
+    echo "ERROR: --time must be a positive HH:MM:SS duration" >&2; return 1
+  fi
+  if ((10#${BASH_REMATCH[1]} + 10#${BASH_REMATCH[2]} + 10#${BASH_REMATCH[3]} == 0)); then
+    echo "ERROR: --time must be positive" >&2; return 1
+  fi
+  duration=$((10#${BASH_REMATCH[1]} * 3600 + 10#${BASH_REMATCH[2]} * 60 + 10#${BASH_REMATCH[3]}))
+  if [[ -n "$hca" && ! "$hca" =~ ^[[:alnum:]_]+:[1-9][0-9]*$ ]]; then
+    echo "ERROR: --hca must be one RDMA device and port, e.g. roce_vf_r1:1" >&2; return 1
+  fi
+  if [[ "$gid_policy" != global && "$gid_policy" != auto ]]; then
+    echo "ERROR: --gid-policy must be global or auto" >&2; return 1
+  fi
+  if [[ "$log_level" != info && "$log_level" != debug ]]; then
+    echo "ERROR: --log-level must be info or debug" >&2; return 1
+  fi
+  if [[ "$mode" == run && "$dry_run" != 1 && ( -z "$hca" || "$duration" -gt 300 ) ]]; then
+    echo "ERROR: live explicit-node tests require --hca and a time limit of at most five minutes" >&2
+    return 1
+  fi
+  if [[ "$hpcx_init" != /* || ! -r "$hpcx_init" || ! -f "$hpcx_init" ]]; then
+    echo "ERROR: --hpcx-init must name an absolute, readable file (it will not be sourced)" >&2
+    return 1
+  fi
+  if [[ "$results_root" != /* ]]; then
+    echo "ERROR: --results-root must be absolute" >&2; return 1
+  fi
+  # Slurm --export uses commas as separators; shell quoting cannot escape them.
+  for other in "$hpcx_init" "$results_root" "$script_dir"; do
+    if [[ "$other" == *','* || "$other" == *$'\n'* || "$other" == *$'\r'* ]]; then
+      echo "ERROR: paths must not contain commas or line breaks" >&2; return 1
+    fi
+  done
+  if [[ ! -f "${script_dir}/clusterkit_suite_explicit_2_node.sbatch" ]]; then
+    echo "ERROR: missing clusterkit_suite_explicit_2_node.sbatch" >&2; return 1
+  fi
+
+  workspace="${hpcx_init%/*}"
+  workspace="${workspace%/*}"
+  outdir="${results_root%/}/${label}/2_node_test"
+  exports="ALL,NVIS_BIN_SCRIPTS=${script_dir},NVIS_CLUSTERKIT_HPCX_INIT=${hpcx_init}"
+  exports+=",RACK_CLUSTERKIT_SUITE_OUTDIR=${outdir},RACK_CLUSTERKIT_SUITE_TEST_TYPE=2_node_test"
+  exports+=",RACK_CLUSTERKIT_SUITE_RUN_LABEL=${label},RACK_CLUSTERKIT_SUITE_SU_LABEL=${label}"
+  exports+=",CUDA_MAJ=${CUDA_MAJ:-13},WORKSPACE_DIR=${workspace},NVIS_WORKSPACE_DIR=${workspace},TOPDIR=${workspace}"
+  exports+=",RACK_CLUSTERKIT_SUITE_HCA=${hca},RACK_CLUSTERKIT_SUITE_EXPECTED_NODES=${nodelist//,/:}"
+  exports+=",RACK_CLUSTERKIT_SUITE_GID_POLICY=${gid_policy}"
+  exports+=",RACK_CLUSTERKIT_SUITE_LOG_LEVEL=${log_level},RACK_CLUSTERKIT_SUITE_PATH_CHECK=${path_check}"
+  cmd=(sbatch --parsable "--partition=${partition}" --nodes=2 --ntasks=2 --ntasks-per-node=1
+       --cpus-per-task=1 --mem=1G --gres=none --no-requeue
+       "--time=${walltime}" "--nodelist=${nodelist}" "--export=${exports}"
+       "--output=${outdir}/slurm-2-node-%j.out" "${script_dir}/clusterkit_suite_explicit_2_node.sbatch")
+
+  if [[ "$mode" == run && "$dry_run" != 1 && "$execute" == 1 ]]; then
+    # Never archive, reuse, or overwrite previous results. A label is one attempt.
+    if [[ -e "$outdir" ]]; then
+      echo "ERROR: output directory already exists; choose a new --label" >&2; return 1
+    fi
+    source "${script_dir}/slurm-init.inc.sh"
+    command -v sbatch >/dev/null || { echo "ERROR: sbatch unavailable" >&2; return 1; }
+    mkdir -p "${results_root%/}/${label}" || return 1
+    mkdir "$outdir" || return 1
+    unset SBATCH_EXCLUSIVE SBATCH_OVERCOMMIT SBATCH_OVERSUBSCRIBE
+    printf 'Submitting one two-node CPU/RoCE test: %s, HCA=%s, limit=%s\n' "$nodelist" "$hca" "$walltime"
+    jobid=$("${cmd[@]}") || { echo "ERROR: sbatch failed; no retry" >&2; return 1; }
+    printf '%s\n' "$jobid" >"${outdir}/jobid.txt"
+    printf 'Submitted job: %s\nResults: %s\n' "$jobid" "$outdir"
+    return 0
+  fi
+
+  printf 'PRINT-ONLY DRY-RUN: no allocation, Slurm query, HPC-X load, or ClusterKit execution.\n'
+  printf 'Nodes: %s\nHPC-X init (not sourced): %s\nResults (not created): %s\n' "$nodelist" "$hpcx_init" "$outdir"
+  printf 'Topology: explicit selection; physical rack membership is unverified.\n'
+  printf 'HCA/port: %s (verified on both nodes inside the job before testing).\n' "${hca:-unresolved}"
+  printf 'GID policy: %s (global resolves the matching RoCE-v2 interface GID on each node).\n' "$gid_policy"
+  printf 'UCX logging: %s; single-path comparison: %s.\n' "$log_level" "$path_check"
+  printf 'Allocation: nonexclusive; one CPU and 1 GiB per node; no GPU resources.\n'
+  printf 'The Slurm output directory would need to exist before a future submission.\n'
+  printf 'SBATCH PLAN (not executed):\n'
+  printf '%q ' "${cmd[@]}"
+  printf '\n'
+}
+
+if [[ "${1:-}" == plan || ( "${1:-}" == run && "${2:-}" == --* ) ]]; then
+  plan_explicit_nodes "$@"
+  exit "$?"
+fi
 
 # Slurm CLI on PATH (non-login SSH shells do not init Modules).
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/slurm-init.inc.sh"
@@ -77,7 +245,7 @@ banner() { echo ""; sep; echo "  $1"; sep; }
 fail() { ISSUES=$((ISSUES + 1)); FAILED_TESTS+=("$1"); }
 
 usage() {
-  sed -n '12,24p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '12,26p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
