@@ -177,7 +177,11 @@ if [[ -n "${RACK_CLUSTERKIT_SCOPES:-}" ]]; then
     _ck_n=$((_ck_n + 1))
     IFS=',' read -ra _ck_hosts <<< "${_ck_part#*:}"
     for _ck_h in "${_ck_hosts[@]}"; do
-      [[ -n "${_ck_h}" ]] && printf '%s,%s,%s\n' "${_ck_h}" "${_ck_part%%:*}" "${_ck_n}" >> "${_ck_scope_file}"
+      [[ -n "${_ck_h}" ]] || continue
+      # Only hosts this job holds: the launcher drops unschedulable nodes, and one left out to make
+      # the count even, after the scopes were drawn up.
+      if [[ -s "${HOSTFILE:-}" ]] && ! grep -qxF "${_ck_h}" "${HOSTFILE}"; then continue; fi
+      printf '%s,%s,%s\n' "${_ck_h}" "${_ck_part%%:*}" "${_ck_n}" >> "${_ck_scope_file}"
     done
   done
   _ck_exe_opt+="-S ${_ck_scope_file} "

@@ -74,6 +74,18 @@ fi
 
 _nnodes=${_slurm_nnodes}
 
+# ClusterKit pairs nodes up and refuses an odd count outright ("pairwise tests must be run with an
+# even number of nodes") -- every rail then fails with no data. A rack with one node drained or busy
+# lands there routinely (U2: 9 of 18 drained, job 192679), so leave the last node out, by name, and
+# test the other pairs rather than none.
+if (( _nnodes > 2 && _nnodes % 2 == 1 )); then
+  _slurm_wlist="${_slurm_wlist%,}"
+  _ck_left_out="${_slurm_wlist##*,}"
+  _slurm_wlist="${_slurm_wlist%,*}"
+  _nnodes=$((_nnodes - 1))
+  echo "notice: ClusterKit pairs nodes; ${_nnodes} of $((_nnodes + 1)) schedulable nodes tested, ${_ck_left_out} left out" >&2
+fi
+
 if [[ "${_nnodes}" -lt 2 ]]; then
   echo "ERROR: ClusterKit needs at least two Slurm nodes for pairwise NIC latency/bandwidth (expanded count=${_nnodes})." >&2
   echo "       Widen the validation target / tray range, or set NVIS_SLURM_HOSTLIST to two or more NodeNames (comma-separated)." >&2

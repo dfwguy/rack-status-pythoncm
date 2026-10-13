@@ -342,3 +342,64 @@ class TestTheClustersEnvironment:
         sbatch = (SCRIPTS / "clusterkit.sbatch").read_text()
         mpi_opts = [ln for ln in sbatch.splitlines() if ln.strip().startswith("mpi_opt=")]
         assert len(mpi_opts) == 2 and all(ln.rstrip().endswith('${_ck_extra_x}"') for ln in mpi_opts)
+
+
+# --- pairs ------------------------------------------------------------------------------------------
+
+
+class TestPairs:
+    """ClusterKit pairs nodes and refuses an odd count, failing every rail with no data.
+
+    Job 192679 on U2: 9 of 18 nodes drained, the launcher sent the other 9, and ClusterKit answered
+    "pairwise tests must be run with an even number of nodes" on all four rails.
+    """
+
+    @staticmethod
+    def _submit(tmp_path, hosts: str) -> subprocess.CompletedProcess:
+        fake = tmp_path / "bin"
+        fake.mkdir()
+        (fake / "sbatch").write_text('#!/bin/bash\nprintf "%s\\n" "$@" > "$SBATCH_ARGS"\necho "Submitted batch job 1"\n')
+        (fake / "squeue").write_text("#!/bin/bash\nexit 0\n")
+        for f in ("sbatch", "squeue"):
+            (fake / f).chmod(0o755)
+        env = {
+            "PATH": f"{fake}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            "NVIS_SLURM_HOSTLIST": hosts,
+            "NVIS_WORKSPACE_DIR": str(tmp_path),
+            "RACK_JOB_LOG_DIR": str(tmp_path / "logs"),
+            "RACK_CLUSTERKIT_RACK": "U2",
+            "SBATCH_ARGS": str(tmp_path / "sbatch.args"),
+            "USER": "t",
+        }
+        return subprocess.run(["bash", str(SCRIPTS / "run_clusterkit.sh"), "U2"], env=env, cwd=tmp_path,
+                              capture_output=True, text=True, timeout=60, check=False)
+
+    def _sbatch_args(self, tmp_path) -> list[str]:
+        return (tmp_path / "sbatch.args").read_text().splitlines()
+
+    def test_an_odd_count_leaves_the_last_node_out_by_name(self, tmp_path):
+        r = self._submit(tmp_path, "n1,n2,n3,n4,n5")
+        assert r.returncode == 0, r.stderr
+        args = self._sbatch_args(tmp_path)
+        assert args[args.index("-N") + 1] == "4"
+        assert args[args.index("-w") + 1] == "n1,n2,n3,n4"
+        assert "4 of 5 schedulable nodes tested, n5 left out" in r.stderr
+
+    def test_an_even_count_is_submitted_whole(self, tmp_path):
+        r = self._submit(tmp_path, "n1,n2,n3,n4")
+        assert r.returncode == 0, r.stderr
+        args = self._sbatch_args(tmp_path)
+        assert args[args.index("-w") + 1] == "n1,n2,n3,n4" and "left out" not in r.stderr
+
+    def test_the_scope_file_holds_only_hosts_the_job_has(self, tmp_path):
+        # A multi-rack run whose scopes name a node the launcher dropped (drained, or the odd one out).
+        hostfile = tmp_path / "machinefile"
+        hostfile.write_text("a\nb\nc\nd\n")
+        sbatch = (SCRIPTS / "clusterkit.sbatch").read_text()
+        start = sbatch.index('_ck_exe_opt=""')
+        snippet = sbatch[start:sbatch.index("_ck_failed=()", start)]
+        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "SLURM_JOB_ID": "9", "HOSTFILE": str(hostfile),
+               "RACK_CLUSTERKIT_SCOPES": "U19:a,b,x;U21:c,d"}
+        subprocess.run(["bash", "-c", snippet], env=env, cwd=tmp_path, capture_output=True, text=True,
+                       timeout=30, check=False)
+        assert (tmp_path / "scopes_9.csv").read_text().splitlines() == ["a,U19,1", "b,U19,1", "c,U21,2", "d,U21,2"]
