@@ -200,7 +200,7 @@ npm run build && grep -rl '<package>' ../static/spa/assets/ | wc -l
 
 | Override | Reason |
 |---|---|
-| `dompurify: ^3.4.15` | ≤3.4.12 is vulnerable and it **ships**. Reached via KUI, mermaid and monaco, which pinned 3.4.8–3.4.11. A patch-level lift inside 3.4.x. |
+| `dompurify: ^3.4.16` | ≤3.4.12 is vulnerable and it **ships**. Reached via KUI, mermaid and monaco, which pinned 3.4.8–3.4.11. A patch-level lift inside 3.4.x. Also a **direct** dependency (with `marked`) since the AI chat renders Markdown through `lib/chatMarkdown.ts`: npm refuses (`EOVERRIDE`) a direct range that differs from its override, so bump the two together. |
 | `undici: ^7.29.0` | 7.0.0–7.28.0 is vulnerable. Does not ship, but jsdom is what **vitest** runs in, so it is worth being current where the tests live. |
 
 Re-check both when KUI is bumped: if the upstream pins move past these, the override is dead

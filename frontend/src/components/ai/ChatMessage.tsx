@@ -9,7 +9,7 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import { memo, useMemo } from "react";
+import { lazy, memo, Suspense } from "react";
 import Box from "@mui/material/Box";
 import Avatar from "@mui/material/Avatar";
 import { Text, Button, Banner } from "@nvidia/foundations-react-core";
@@ -20,6 +20,9 @@ import {
   type ToolActivity,
   type PendingApproval,
 } from "../../context/AIChatContext";
+
+// The Markdown parser is only needed once a reply is drawn, and the widget mounts with the app.
+const ChatMarkdown = lazy(() => import("./ChatMarkdown"));
 
 function ToolChip({ activity }: { activity: ToolActivity }) {
   const running = activity.status === "running";
@@ -100,30 +103,12 @@ function ApprovalCard({ messageId, approval }: { messageId: string; approval: Pe
   );
 }
 
-function formatMarkdown(text: string): string {
-  return text
-    .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="lang-$1">$2</code></pre>')
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*(.+?)\*/g, "<em>$1</em>")
-    .replace(/^- (.+)$/gm, "<li>$1</li>")
-    .replace(/^(\d+)\. (.+)$/gm, "<li>$2</li>")
-    .replace(/(<li>[\s\S]*?<\/li>)/g, "<ul>$1</ul>")
-    .replace(/<\/ul>\s*<ul>/g, "")
-    .replace(/\n\n/g, "</p><p>")
-    .replace(/\n/g, "<br/>");
-}
-
 interface ChatMessageProps {
   message: ChatMessageType;
 }
 
 function ChatMessageComponent({ message }: ChatMessageProps) {
   const isUser = message.role === "user";
-  const displayHtml = useMemo(
-    () => (isUser ? null : formatMarkdown(message.content)),
-    [isUser, message.content],
-  );
 
   return (
     <Box
@@ -156,26 +141,8 @@ function ChatMessageComponent({ message }: ChatMessageProps) {
           borderRadius: 2,
           px: 1.5,
           py: 1,
-          "& p": { m: 0, fontSize: 14, lineHeight: 1.6 },
-          "& p + p": { mt: 1 },
-          "& pre": {
-            bgcolor: "grey.900",
-            color: "grey.100",
-            borderRadius: 1,
-            p: 1,
-            my: 1,
-            overflow: "auto",
-            fontSize: 13,
-          },
-          "& code": { fontSize: 13, fontFamily: "monospace" },
-          "& :not(pre) > code": {
-            bgcolor: isUser ? "rgba(255,255,255,0.15)" : "action.selected",
-            px: 0.5,
-            borderRadius: 0.5,
-          },
-          "& ul, & ol": { pl: 2, my: 0.5, fontSize: 14 },
-          "& li": { mb: 0.25 },
-          "& strong": { fontWeight: 600 },
+          // Room for a table to scroll inside the bubble instead of pushing it wider.
+          minWidth: 0,
         }}
       >
         {isUser ? (
@@ -191,12 +158,16 @@ function ChatMessageComponent({ message }: ChatMessageProps) {
                 ))}
               </Box>
             )}
-            {displayHtml ? (
-              <Box
-                component="div"
-                dangerouslySetInnerHTML={{ __html: displayHtml }}
-                sx={{ "& > :first-of-type": { mt: 0 }, "& > :last-child": { mb: 0 } }}
-              />
+            {message.content ? (
+              <Suspense
+                fallback={
+                  <Text kind="body/regular/sm" style={{ whiteSpace: "pre-wrap" }}>
+                    {message.content}
+                  </Text>
+                }
+              >
+                <ChatMarkdown text={message.content} />
+              </Suspense>
             ) : null}
             {message.approval && <ApprovalCard messageId={message.id} approval={message.approval} />}
             {message.streaming && !message.content && !(message.tools && message.tools.length) && (
