@@ -73,6 +73,8 @@ subtrees:
 
   - caption: Explanation — why it is like this
     entries:
+      - file: explanation/the-parametric-platform
+        title: The parametric platform
       - file: explanation/why-authorization-is-default-deny
         title: Why authorization is default-deny
       - file: explanation/how-a-script-path-is-chosen
