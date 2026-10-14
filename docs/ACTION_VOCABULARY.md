@@ -65,7 +65,7 @@ case does not match.
 | [`rack.services`](#rackservices) | instance | 1 | Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts. |
 | [`report`](#report) | instance | 3 | Generated reports: the archive, per-node reports, and the post-run acceptance report. |
 | [`report.node`](#reportnode) | instance | 4 | Generated reports: the archive, per-node reports, and the post-run acceptance report. |
-| [`report.tracker`](#reporttracker) | singleton | 1 | The deployment tracker: ``GET /api/deployment-tracker`` and ``GET /api/deployment-tracker/site.zip``. |
+| [`report.tracker`](#reporttracker) | singleton | 1 | The deployment tracker: ``GET /api/deployment-tracker`` and ``GET /api/deployment-tracker/site.html``. |
 | [`results`](#results) | singleton | 4 | Parser results: what a finished run measured, per rack, as the dashboard charts it. |
 | [`scheduler.job`](#schedulerjob) | instance | 2 | Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log. |
 | [`scheduler.node`](#schedulernode) | instance | 3 | Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log. |
@@ -706,7 +706,7 @@ Identified by `node`, `host` on the request. The identifier is **case-folded**, 
 
 ## `report.tracker`
 
-The deployment tracker: ``GET /api/deployment-tracker`` and ``GET /api/deployment-tracker/site.zip``.
+The deployment tracker: ``GET /api/deployment-tracker`` and ``GET /api/deployment-tracker/site.html``.
 
 Owned by `backend/api/deployment_tracker.py`.
 

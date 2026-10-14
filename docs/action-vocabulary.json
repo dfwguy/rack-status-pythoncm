@@ -2353,7 +2353,7 @@
         }
       ],
       "module": "backend/api/deployment_tracker.py",
-      "summary": "The deployment tracker: ``GET /api/deployment-tracker`` and ``GET /api/deployment-tracker/site.zip``.",
+      "summary": "The deployment tracker: ``GET /api/deployment-tracker`` and ``GET /api/deployment-tracker/site.html``.",
       "scope": "singleton",
       "resource": {
         "identified_by": [],
