@@ -77,6 +77,35 @@ export const analyticsContent: HelpContent[] = [
       "This page is the first-class post-run node history, not a Google punchcard import. It joins durable validation activities to exact Slurm allocations, snapshots node membership, counts attributed failures only with node-specific evidence, flags repeat offenders across distinct runs, and shows current Slurm state/reason. It has persistent hardware and NVLink/network report sections. A selected node can launch either deep audit or receive an operator mark; draining requires an explicit confirmation.",
   },
   {
+    id: "deploymentTracker",
+    kind: "view",
+    title: "Deployment Tracker",
+    domain: "Analytics & Benchmarks",
+    routePath: "/analytics/deployment-tracker",
+    summary: "Bring-up progress per node, rolled up by rack, row and scalable unit, ready to publish as a static page.",
+    description:
+      "The Deployment Tracker folds everything Rack Status knows about the bring-up into one state per compute node — completed, in progress, in remediation, not started, or handed over — and lays it out on the floor: scalable unit, then row, then rack. A node is completed when its Stage 1 (single-node NCCL) and Stage 2 (single-node LLM training) have both passed; it is in remediation when a stage failed or Slurm holds it down or drained, so a node drained after passing is back on the list. A scalable unit with a handover date on the cluster record counts as handed over and leaves every validation step's denominator. The full-rack stages are shown as their own progress steps. Download static page exports the same view with today's data embedded, as one self-contained HTML file that opens from disk and that any static host (such as Linkify) can serve without reaching the cluster.",
+    features: [
+      "Headline tiles: total nodes, each state, and the share complete.",
+      "Validation steps: node Stage 1 and Stage 2, then rack Stage 1 and Stage 2, with passed, running, failed and not-run counts.",
+      "A card per scalable unit and per row with a stacked progress bar.",
+      "A node heatmap, one tile per node grouped by rack, filterable by state, scalable unit and free-text search.",
+      "An expandable table from scalable unit to row to rack.",
+      "A self-contained static export of the same page for publishing.",
+    ],
+    howTo: [
+      { task: "Publish the tracker", steps: ["Open Analytics & Benchmarks > Deployment Tracker.", "Choose Download static page.", "Upload deployment-tracker.html to the static host as a new deploy."] },
+      { task: "Mark a scalable unit handed over", steps: ["Open Platform > Projects & Clusters and edit the cluster.", "In Scalable Unit translation, set the SU's Handed over date.", "Save; the tracker counts its nodes as handed over on the next refresh."] },
+      { task: "Find the nodes that need attention", steps: ["In the node heatmap, choose In remediation.", "Hover a red tile to see the failed stage or the Slurm state."] },
+    ],
+    tips: ["The state definitions at the bottom of the page come from the backend classifier, so the published page always explains exactly what it counted."],
+    related: ["postRunNodeReport", "analytics", "nodes", "singleRack", "projects"],
+    keywords: ["deployment tracker", "bring-up", "progress", "rollout", "scalable unit", "su", "row", "heatmap", "handover", "linkify", "static export"],
+    aria: { label: "Deployment Tracker page", description: "Bring-up progress per compute node, by scalable unit, row and rack." },
+    aiContext:
+      "This page shows bring-up progress. Each node's state comes from backend/deployment_tracker.py: handed over (its SU has handed_over_at on the cluster record) > in progress (a stage running) > remediation (a stage failed, or Slurm down/drained, or BCM down) > completed (node Stage 1 and Stage 2 both done) > in progress (one stage done) > not started. Rack stages are reported separately as steps. The data is GET /api/deployment-tracker; GET /api/deployment-tracker/site.html is the static page with the data embedded.",
+  },
+  {
     id: "reports",
     kind: "view",
     title: "Reports",

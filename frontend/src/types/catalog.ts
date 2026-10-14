@@ -158,6 +158,11 @@ export interface ClusterScalableUnit {
   id: string;
   label: string;
   racks: string[];
+  /**
+   * The day this SU was handed to the customer, ISO `YYYY-MM-DD`; empty or absent while it is
+   * still in bring-up. The deployment tracker counts a handed-over SU's nodes apart.
+   */
+  handed_over_at?: string;
 }
 
 /**

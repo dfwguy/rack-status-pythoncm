@@ -1130,6 +1130,7 @@ def _merge_scalable_units_into_status_payload(payload: dict) -> None:
                 # can be down, or the record can run ahead of the floor. Filtering here
                 # keeps the view from drawing a tile with nothing behind it.
                 "racks": [rack for rack in unit.racks if rack.casefold() in known],
+                "handed_over_at": unit.handed_over_at,
             }
             for unit in units
         ]

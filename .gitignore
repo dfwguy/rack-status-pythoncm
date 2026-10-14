@@ -87,6 +87,7 @@ frontend/node_modules/
 frontend/dist/
 static/spa/
 static/docs/
+static/tracker/
 docs/_build/
 
 # ---- Desktop shell (Electron) ----

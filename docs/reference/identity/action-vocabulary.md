@@ -10,7 +10,7 @@ Every action the product declares, which is what a policy's `actions` field may 
 **Generated from the live registry** — a route without a declaration cannot appear here,
 and the build gate in `backend/tests/test_action_coverage.py` fails if one exists.
 
-201 actions across 56 services: 64 reads and 137 mutations.
+202 actions across 57 services: 65 reads and 137 mutations.
 
 A read-only role is `["*:read", "*:list"]` — the two read verbs — rather than an
 enumeration of the reads below.
@@ -69,6 +69,7 @@ case does not match.
 | [`rack.services`](#rackservices) | instance | 1 | Node-level operations on a rack: power, GPU reset, BMC recovery, MAC swap, service restarts. |
 | [`report`](#report) | instance | 3 | Generated reports: the archive, per-node reports, and the post-run acceptance report. |
 | [`report.node`](#reportnode) | instance | 4 | Generated reports: the archive, per-node reports, and the post-run acceptance report. |
+| [`report.tracker`](#reporttracker) | singleton | 1 | The deployment tracker: ``GET /api/deployment-tracker`` and ``GET /api/deployment-tracker/site.zip``. |
 | [`results`](#results) | singleton | 4 | Parser results: what a finished run measured, per rack, as the dashboard charts it. |
 | [`scheduler.job`](#schedulerjob) | instance | 2 | Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log. |
 | [`scheduler.node`](#schedulernode) | instance | 3 | Slurm operations an operator drives from the dashboard: drain, undrain, cancel, read a job log. |
@@ -706,6 +707,18 @@ Identified by `node`, `host` on the request. The identifier is **case-folded**, 
 | `report.node:list` | read | instance | `GET reports.api_node_report_kinds` |
 | `report.node:mark` | mutate | instance | `POST reports.api_post_run_node_mark` |
 | `report.node:read` | read | instance | `GET reports.api_node_report`<br>`GET reports.api_node_report_result`<br>`GET reports.api_node_report_status`<br>`GET reports.api_post_run_node_report` |
+
+## `report.tracker`
+
+The deployment tracker: ``GET /api/deployment-tracker`` and ``GET /api/deployment-tracker/site.zip``.
+
+Owned by `backend/api/deployment_tracker.py`.
+
+**One instance per deployment.** A policy names it as `report.tracker:default`; there is no id to narrow a grant to.
+
+| Action | Kind | Scope | Routes |
+|---|---|---|---|
+| `report.tracker:read` | read | singleton | `GET deployment_tracker.api_deployment_tracker`<br>`GET deployment_tracker.api_deployment_tracker_site` |
 
 ## `results`
 

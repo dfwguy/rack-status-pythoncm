@@ -107,6 +107,8 @@ RUN cat backend/build-info.json 2>/dev/null \
     || echo "note: backend/build-info.json absent - this image reports <version>-dev"
 
 COPY --from=frontend-build /build/static/spa/ ./static/spa/
+# The deployment tracker's static page, which /api/deployment-tracker/site.zip packages with data.
+COPY --from=frontend-build /build/static/tracker/ ./static/tracker/
 COPY --from=docs-build /build/static/docs/ ./static/docs/
 
 EXPOSE 5000

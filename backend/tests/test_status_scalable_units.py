@@ -110,7 +110,9 @@ class TestTheClusterRecordOverridesTheDerivation:
         _resolve(monkeypatch, cluster, 0)
         payload = _payload(["r01"])
         dashboard._merge_scalable_units_into_status_payload(payload)
-        assert payload["scalable_units"] == [{"id": "su09", "label": "SU9", "racks": []}]
+        assert payload["scalable_units"] == [
+            {"id": "su09", "label": "SU9", "racks": [], "handed_over_at": ""}
+        ]
 
 
 class TestItNeverBreaksStatus:

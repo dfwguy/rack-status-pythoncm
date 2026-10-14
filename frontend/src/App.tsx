@@ -71,6 +71,9 @@ const SlurmView = lazy(() => import("./views/SlurmView").then((m) => ({ default:
 const ReportsView = lazy(() => import("./views/ReportsView").then((m) => ({ default: m.ReportsView })));
 const AnalyticsView = lazy(() => import("./views/AnalyticsView").then((m) => ({ default: m.AnalyticsView })));
 const PostRunNodeReportView = lazy(() => import("./views/PostRunNodeReportView").then((m) => ({ default: m.PostRunNodeReportView })));
+const DeploymentTrackerView = lazy(() =>
+  import("./features/deployment-tracker/views/DeploymentTrackerView").then((m) => ({ default: m.DeploymentTrackerView })),
+);
 const ToolsView = lazy(() => import("./views/ToolsView").then((m) => ({ default: m.ToolsView })));
 const WorkflowsView = lazy(() => import("./views/WorkflowsView").then((m) => ({ default: m.WorkflowsView })));
 const MetricsView = lazy(() => import("./views/MetricsView").then((m) => ({ default: m.MetricsView })));
@@ -130,6 +133,7 @@ const VIEW_TITLES: Record<ViewId, string> = {
   reports: "Reports",
   analytics: "Analytics",
   postRunNodeReport: "Post Run Node Report",
+  deploymentTracker: "Deployment Tracker",
   tools: "Operations & Scripts",
   workflows: "Workflows",
   terminal: "Terminal",
@@ -442,6 +446,7 @@ function AppContent() {
           <Route path="/tools/terminal" element={<TerminalWorkspaceView logDir={logDir} />} />
           <Route path="/analytics/overview" element={<AnalyticsView logDir={logDir} rows={data?.rows ?? []} status={data} />} />
           <Route path="/analytics/post-run-nodes" element={<PostRunNodeReportView />} />
+          <Route path="/analytics/deployment-tracker" element={<DeploymentTrackerView />} />
           <Route path="/analytics/reports" element={<ReportsView />} />
             <Route path="/identity/users" element={<UsersView />} />
             <Route path="/identity/groups" element={<GroupsView />} />

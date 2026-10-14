@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<!--
+  The deployment tracker as a static page (vite.tracker.config.ts). The backend writes the
+  dataset into #tracker-data when it renders site.html (backend/deployment_tracker.py, embed());
+  the element must stay exactly as written here, `null` included, or the export refuses.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0d0d0d" />
+    <title>Deployment Tracker</title>
+  </head>
+  <body>
+    <script id="tracker-data" type="application/json">null</script>
+    <div id="root"></div>
+    <script type="module" src="../src/features/deployment-tracker/static/main.tsx"></script>
+  </body>
+</html>

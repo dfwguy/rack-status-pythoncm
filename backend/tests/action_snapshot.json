@@ -486,6 +486,18 @@
   "variant": "sync"
  },
  {
+  "endpoint": "deployment_tracker.api_deployment_tracker",
+  "method": "GET",
+  "action": "report.tracker:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "deployment_tracker.api_deployment_tracker_site",
+  "method": "GET",
+  "action": "report.tracker:read",
+  "variant": "sync"
+ },
+ {
   "endpoint": "diagnostics.api_hw_check_async",
   "method": "POST",
   "action": "diag:hw_check",

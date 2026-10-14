@@ -171,7 +171,9 @@ class TestClusterMembership:
         payload = {
             "id": "c",
             "name": "C",
-            "scalable_units": [{"id": "su01", "label": "SU1", "racks": ["r1", "r2"]}],
+            "scalable_units": [
+                {"id": "su01", "label": "SU1", "racks": ["r1", "r2"], "handed_over_at": ""}
+            ],
         }
         c = models.Cluster.from_dict(payload)
         assert c.validate() == []

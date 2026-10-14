@@ -303,6 +303,9 @@ _RESOLVERS: dict[str, Extractor] = {
     "scheduler.node": _by("node", "nodes", "host", "target"),
     "report": _by("report_id", "id"),
     "report.node": _by("node", "host"),
+    # The deployment tracker is one document about the whole fleet: there is no instance to name,
+    # and narrowing it per rack would be a different report.
+    "report.tracker": _singleton,
     # -- catalog documents, keyed by operator-chosen slug. `doc_id` is the URL parameter the
     #    catalog routes actually use; omitting it made every per-document read resolve to the
     #    collection instead of the instance, silently disabling per-document grants.

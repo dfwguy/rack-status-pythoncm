@@ -23,6 +23,7 @@ import hashlib
 import re
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field, replace
+from datetime import date
 from typing import Any
 
 # ---------------------------------------------------------------------------
@@ -726,6 +727,11 @@ class ClusterScalableUnit:
     id: str
     label: str = ""  # display name; falls back to the id
     racks: list[str] = field(default_factory=list)
+    # The day this SU was handed to the customer (ISO ``YYYY-MM-DD``); empty while it is ours.
+    # A handed-over SU leaves the bring-up: we stop running on it, so its nodes are neither
+    # "completed" nor "stuck" -- the deployment tracker counts them apart, and only a person
+    # who signed the handover knows the date, which is why it is on the record.
+    handed_over_at: str = ""
 
     @classmethod
     def from_dict(cls, d: Any) -> ClusterScalableUnit:
@@ -735,7 +741,20 @@ class ClusterScalableUnit:
             id=su_id,
             label=_as_str(d.get("label")) or su_id,
             racks=_as_str_list(d.get("racks")),
+            handed_over_at=_as_str(d.get("handed_over_at")).strip(),
         )
+
+    def validate(self) -> list[str]:
+        if not self.handed_over_at:
+            return []
+        try:
+            date.fromisoformat(self.handed_over_at)
+        except ValueError:
+            return [(
+                f"scalable unit {self.id!r}: handed_over_at {self.handed_over_at!r} "
+                "is not a date (expected YYYY-MM-DD)"
+            )]
+        return []
 
 
 @dataclass
@@ -1496,6 +1515,7 @@ class Cluster:
             if not valid_id(su.id):
                 problems.append(f"invalid scalable unit id: {su.id!r} (expected slug like su01)")
                 continue
+            problems.extend(su.validate())
             if su.id in seen_ids:
                 problems.append(f"duplicate scalable unit id: {su.id!r}")
                 continue

@@ -17,6 +17,7 @@ import {
   Banner,
   Button as KuiButton,
   Card,
+  DatePicker,
   Flex,
   FormField,
   Modal,
@@ -123,6 +124,22 @@ function emptyCluster(): Cluster {
     evidence: { snapshot_path: "", healthcheck_root: "" },
     p2p_enabled: false,
   };
+}
+
+/**
+ * An SU handover date (`YYYY-MM-DD`, a calendar day with no zone) as the local-midnight `Date`
+ * the picker shows, and back. Parsed by parts, never `new Date(iso)`: that reads the string as
+ * UTC midnight, which is the previous day for every operator west of Greenwich.
+ */
+function isoToDate(iso: string | undefined): Date | undefined {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso ?? "");
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : undefined;
+}
+
+function dateToIso(d: Date | undefined): string {
+  if (!d || Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 function slugify(s: string): string {
@@ -591,7 +608,7 @@ export function ProjectsView() {
               </Text>
               <Flex direction="column" gap="1.5">
                 {clSUs.map((su, i) => (
-                  <Box key={i} sx={{ display: "grid", gridTemplateColumns: "1fr 3fr auto", gap: 1.5, alignItems: "end" }}>
+                  <Box key={i} sx={{ display: "grid", gridTemplateColumns: "1fr 3fr 1.4fr auto", gap: 1.5, alignItems: "end" }}>
                     <FormField name={`cl-su-label-${i}`} slotLabel={i === 0 ? "SU label" : undefined}>
                       <TextInput
                         value={su.label || ""}
@@ -610,6 +627,21 @@ export function ProjectsView() {
                           const racks = v.split(",").map((r) => r.trim()).filter(Boolean);
                           setSUs(clSUs.map((s, j) => (j === i ? { ...s, racks } : s)));
                         }}
+                      />
+                    </FormField>
+                    <FormField
+                      name={`cl-su-handover-${i}`}
+                      slotLabel={i === 0 ? "Handed over" : undefined}
+                      slotHelp={i === 0 ? "Leave empty while the SU is in bring-up" : undefined}
+                    >
+                      <DatePicker
+                        format="yyyy-MM-dd"
+                        placeholder="Not handed over"
+                        dismissible
+                        value={isoToDate(su.handed_over_at)}
+                        onValueChange={(d?: Date) =>
+                          setSUs(clSUs.map((s, j) => (j === i ? { ...s, handed_over_at: dateToIso(d) } : s)))
+                        }
                       />
                     </FormField>
                     <KuiButton kind="secondary" size="small" onClick={() => setSUs(clSUs.filter((_, j) => j !== i))}>Remove</KuiButton>

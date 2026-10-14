@@ -41,6 +41,8 @@ subtrees:
         title: How to distribute a catalog image to the fleet
       - file: how-to/recover-p2p-peers-after-a-reimage
         title: How to bring P2P peers up on new or reimaged nodes
+      - file: how-to/publish-the-deployment-tracker
+        title: How to publish the deployment tracker
 
   - caption: Reference — the machinery, described
     entries:

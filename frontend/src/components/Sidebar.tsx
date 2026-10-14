@@ -54,6 +54,7 @@ import {
   CircuitBoard,
   Code2,
   ClipboardCheck,
+  LayoutGrid,
   ShieldCheck,
   Users,
   UsersRound,
@@ -86,6 +87,7 @@ export type ViewId =
   | "reports"
   | "analytics"
   | "postRunNodeReport"
+  | "deploymentTracker"
   | "tools"
   | "workflows"
   | "terminal"
@@ -213,6 +215,7 @@ const navEntries: NavEntry[] = [
     leaves: [
       { id: "analytics", label: "Analytics", icon: <LineChart size={ICON_SIZE} /> },
       { id: "postRunNodeReport", label: "Post Run Node Report", icon: <ClipboardCheck size={ICON_SIZE} /> },
+      { id: "deploymentTracker", label: "Deployment Tracker", icon: <LayoutGrid size={ICON_SIZE} /> },
       { id: "reports", label: "Reports", icon: <FileDown size={ICON_SIZE} /> },
     ],
   },
