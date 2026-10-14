@@ -27,7 +27,7 @@ A statement matches when **both** its action patterns and its resource patterns 
 | Outcome | Status | Body |
 | --- | --- | --- |
 | Allowed | the handler's own | the handler's own |
-| Refused by policy | `403` | `{"ok": false, "error": "not authorized", "reason": "policy"}` |
+| Refused by policy | `403` | `{"ok": false, "error": "Access Denied. Contact administrator to request access to this resource", "reason": "policy"}` |
 | Target not identifiable | `400` | `{"ok": false, "reason": "unresolvable_target"}` |
 
 `403`, not `401`: the caller *is* authenticated and simply may not do this. Answering `401` would

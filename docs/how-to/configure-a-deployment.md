@@ -120,7 +120,7 @@ Two consequences:
   policy would either lock the operators out or hand somebody everything. `cli.py check` reports
   this before a restart discovers it.
 
-## If a feature says "not authorized" after an upgrade
+## If a feature says "Access Denied" after an upgrade
 
 The `administrators` policy is written once, at first boot, from the resource types that existed
 then. A type added later is absent from it, and the symptom is an administrator being refused on

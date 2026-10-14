@@ -184,6 +184,19 @@ class TestAuthorizationIsSeparateFromAuthentication:
         assert resp.status_code == 403
         assert resp.get_json().get("reason") == "policy"
 
+    def test_a_denied_action_tells_the_caller_who_can_grant_it(self, gated):
+        """The words a refused user reads in the SPA's error banner. They point at the person who can
+        review the policy, and name neither the action nor the resource that was refused."""
+        _log_in(gated)
+        authz.set_engine(authz.DenyAllEngine())
+        body = gated.post("/api/rack-uptime", json={"rack": "p5-r01"}).get_json()
+        assert body == {
+            "ok": False,
+            "error": "Access Denied. Contact administrator to request access to this resource",
+            "reason": "policy",
+        }
+        assert "rack" not in body["error"].lower()
+
     def test_the_permissive_engine_allows(self, gated):
         """Installs it by name. `install_default()` would hand back the *enforcing* engine whenever
         a policy file exists, which is the state the suite runs in — so this would then assert

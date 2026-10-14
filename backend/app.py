@@ -979,9 +979,16 @@ def _require_dashboard_auth():
                 # 403 and the HTML branch was unreachable code that looked like a feature. If a
                 # gated page route is ever added, that is when to reintroduce it -- with a test
                 # that can actually exercise it.
+                #
+                # The message says what to do next, not why. A bare "not authorized" read like a
+                # fault and left an operator nowhere to go; the usual cause is a policy that has not
+                # caught up with a newer feature (see identity_bootstrap.admin_policy_gaps), which
+                # only an administrator can review. It names no action or resource: what a principal
+                # may not touch is not the caller's to learn. ``reason`` stays the machine-readable
+                # half.
                 return jsonify({
                     "ok": False,
-                    "error": "not authorized",
+                    "error": "Access Denied. Contact administrator to request access to this resource",
                     "reason": "policy",
                 }), 403
         return None

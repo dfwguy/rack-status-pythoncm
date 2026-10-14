@@ -157,7 +157,7 @@ describe("an expired session is renewed once and the request retried", () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       calls.push(String(input));
-      return json({ error: "not authorized" }, 403);
+      return json({ error: "Access Denied. Contact administrator to request access to this resource", reason: "policy" }, 403);
     }) as typeof fetch;
 
     const resp = await apiFetch("/api/identity/users");
