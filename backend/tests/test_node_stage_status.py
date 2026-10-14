@@ -224,6 +224,56 @@ def test_stage2_reads_unknown_until_the_bringup_verdicts_land(monkeypatch):
     assert out["nodes"][0]["stage2"] == {"state": "unknown"} and out["stage2_loading"] is True
 
 
+def _fresh_verdicts(monkeypatch, *, fail=False):
+    import bringup
+
+    calls: list[list[str]] = []
+
+    def run(*, tests=(), timeout=None):
+        calls.append(list(tests))
+        if fail:
+            raise RuntimeError("report_job-status.sh timed out")
+        return f"----------------\n{HOST}\n----------------\n{tests[0]}: DONE\n"
+
+    monkeypatch.setattr(bringup, "run_status_check_all", run)
+    monkeypatch.setattr(bringup, "is_enabled", lambda: True)
+    return node_stages._BringupVerdicts(), calls
+
+
+def test_the_refresh_asks_the_bringup_report_for_the_stage2_job_only(monkeypatch):
+    monkeypatch.delenv("RACK_NODE_STAGE2_BRINGUP_JOB", raising=False)
+    verdicts, calls = _fresh_verdicts(monkeypatch)
+    out = verdicts.get(wait=True)
+    assert calls == [["llm-pretrain-solo"]]
+    assert out[HOST]["llm-pretrain-solo"]["status"] == "DONE"
+    verdicts.get(wait=True)
+    assert len(calls) == 1  # fresh: served from the cache
+
+
+def test_a_changed_stage2_job_expires_the_cached_verdicts(monkeypatch):
+    """The cache holds one job's column; another job's answer must not be read from it."""
+    monkeypatch.delenv("RACK_NODE_STAGE2_BRINGUP_JOB", raising=False)
+    verdicts, calls = _fresh_verdicts(monkeypatch)
+    verdicts.get(wait=True)
+    monkeypatch.setenv("RACK_NODE_STAGE2_BRINGUP_JOB", "llm-pretrain")
+    out = verdicts.get(wait=True)
+    assert calls == [["llm-pretrain-solo"], ["llm-pretrain"]]
+    assert "llm-pretrain" in out[HOST]
+
+
+def test_a_failed_refresh_waits_out_the_ttl_instead_of_rerunning_every_call(monkeypatch):
+    monkeypatch.delenv("RACK_NODE_STAGE2_BRINGUP_JOB", raising=False)
+    verdicts, calls = _fresh_verdicts(monkeypatch, fail=True)
+    assert verdicts.get(wait=True) is None
+    verdicts.get(wait=True)
+    assert len(calls) == 1
+    assert "timed out" in verdicts.error
+    # ...and is tried again once the retry wait has passed.
+    verdicts._at -= node_stages._RETRY_AFTER_ERROR_SEC
+    verdicts.get(wait=True)
+    assert len(calls) == 2
+
+
 def test_the_stage2_job_is_a_setting(monkeypatch):
     monkeypatch.setenv("RACK_NODE_STAGE2_BRINGUP_JOB", "llm-pretrain")
     assert node_stages.stage2_bringup_job() == "llm-pretrain"

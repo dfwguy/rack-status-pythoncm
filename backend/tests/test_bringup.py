@@ -142,6 +142,47 @@ def test_daily_report_cache(monkeypatch):
     assert calls["n"] == 1  # second call served from cache
 
 
+def _capture_runs(monkeypatch):
+    seen: list[dict] = []
+
+    def run(cmd, **kw):
+        seen.append({"cmd": cmd, **kw})
+        return subprocess.CompletedProcess(cmd, 0, stdout=DAILY_CSV, stderr="")
+
+    monkeypatch.setattr(bringup.host_exec, "run_on_host", run)
+    return seen
+
+
+def test_a_fleet_report_can_be_narrowed_to_the_jobs_a_caller_reads(monkeypatch):
+    """node-stages reads one column; the full report built all five plus burn-in hours."""
+    seen = _capture_runs(monkeypatch)
+    bringup.run_status_check_all(tests=["llm-pretrain-solo"])
+    assert seen[-1]["cmd"][-2:] == ["-t", "llm-pretrain-solo"]
+    bringup.run_status_check_all(tests=["a", "", "b"])
+    assert seen[-1]["cmd"][2:] == ["-t", "a", "-t", "b"]  # a blank name is not a filter
+    bringup.run_status_check_all()
+    assert seen[-1]["cmd"] == ["bash", f"{bringup.bringup_home()}/{bringup.REPORT_JOB_STATUS}"]
+
+
+def test_the_fleet_report_limit_is_a_setting(monkeypatch):
+    bringup._daily_cache.clear()
+    monkeypatch.setenv("RACK_BRINGUP_CACHE_TTL_SEC", "0")
+    seen = _capture_runs(monkeypatch)
+    monkeypatch.delenv("RACK_BRINGUP_REPORT_TIMEOUT", raising=False)
+    bringup.run_status_check_all()
+    bringup.run_daily_report()
+    assert [r["timeout"] for r in seen] == [bringup.DEFAULT_REPORT_TIMEOUT_SEC] * 2
+    monkeypatch.setenv("RACK_BRINGUP_REPORT_TIMEOUT", "420")
+    bringup.run_status_check_all()
+    bringup.run_daily_report()
+    assert [r["timeout"] for r in seen[2:]] == [420, 420]
+    # A caller's explicit limit still wins, and a nonsense setting cannot make it instant.
+    bringup.run_status_check_all(timeout=60)
+    assert seen[-1]["timeout"] == 60
+    monkeypatch.setenv("RACK_BRINGUP_REPORT_TIMEOUT", "1")
+    assert bringup.report_timeout() == 30
+
+
 def test_bringup_home_and_enabled(monkeypatch):
     monkeypatch.delenv("RACK_BRINGUP_HOME", raising=False)
     assert bringup.bringup_home() == "/home/cmods/bringup"

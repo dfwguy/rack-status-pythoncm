@@ -92,6 +92,9 @@ def stage2_state(verdict: dict[str, str] | None) -> dict[str, Any]:
     return out
 
 
+_RETRY_AFTER_ERROR_SEC = 60
+
+
 class _BringupVerdicts:
     """The bring-up job's verdict for every node, refreshed in the background.
 
@@ -104,6 +107,7 @@ class _BringupVerdicts:
         self._lock = threading.Lock()
         self._data: dict[str, dict[str, dict[str, str]]] | None = None
         self._at = 0.0
+        self._job = ""
         self._refreshing = False
         self.error = ""
 
@@ -112,7 +116,16 @@ class _BringupVerdicts:
 
     def get(self, *, wait: bool = False) -> dict[str, dict[str, dict[str, str]]] | None:
         with self._lock:
-            stale = self._data is None or time.monotonic() - self._at >= self._ttl()
+            # The answer covers one job (see _refresh), so a changed Stage 2 setting expires it too.
+            # A failed refresh is retried after a short wait, not on every call: each wait=1 caller
+            # would otherwise sit through another full run of a script that is already failing.
+            age = time.monotonic() - self._at
+            stale = (
+                self._at == 0.0
+                or self._job != stage2_bringup_job()
+                or age >= self._ttl()
+                or (self.error != "" and age >= min(self._ttl(), _RETRY_AFTER_ERROR_SEC))
+            )
             start = stale and not self._refreshing
             if start:
                 self._refreshing = True
@@ -125,20 +138,23 @@ class _BringupVerdicts:
             return self._data
 
     def _refresh(self) -> None:
+        job = stage2_bringup_job()
         try:
             import bringup
 
             if not bringup.is_enabled():
                 data: dict[str, dict[str, dict[str, str]]] = {}
             else:
-                data = bringup.parse_status_check_fleet(bringup.run_status_check_all())
+                # Only the Stage 2 column: the full report builds every bring-up column (and
+                # burn-in hours) for the fleet, which a cold /api/node-stages?wait=1 waited on.
+                data = bringup.parse_status_check_fleet(bringup.run_status_check_all(tests=[job]))
             with self._lock:
-                self._data, self._at, self.error = data, time.monotonic(), ""
+                self._data, self._at, self._job, self.error = data, time.monotonic(), job, ""
         except Exception as exc:  # noqa: BLE001 - keep the last answer; Stage 1 still renders
             _logger.warning("node stages: bring-up verdicts unavailable: %s", exc)
             with self._lock:
                 self.error = str(exc)
-                self._at = time.monotonic()
+                self._at, self._job = time.monotonic(), job
         finally:
             with self._lock:
                 self._refreshing = False

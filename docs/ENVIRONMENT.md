@@ -307,6 +307,7 @@ Requires `RACK_WEB_SECRET_KEY`, **Settings → `RACK_PROJECT_TOKEN`**, vault NVF
 | **`RACK_BRINGUP_HOME`** | `/home/cmods/bringup` | Root of Travis's bring-up automation tree on the execution host. `/api/bringup/node` shells out to `<home>/daily-report.sh` and `<home>/status-check.sh`; `/api/bringup/config` probes `<home>/results`. |
 | **`RACK_BRINGUP_DISABLED`** | *(unset)* | Truthy → hide the Nodes "Bring-up" panel (`/api/bringup/*` returns disabled). |
 | **`RACK_BRINGUP_CACHE_TTL_SEC`** | `30` | TTL for the cached cluster-wide `daily-report.sh -c` (it re-scans every result dir; the cache makes repeated node opens cheap). |
+| **`RACK_BRINGUP_REPORT_TIMEOUT`** | `180` | Seconds a fleet-wide bring-up report (`report_job-status.sh`, `report_benchmarks.sh -c`) may run on the head before the call gives up. Also a Settings value. Node Stage 2 runs only its own column (`-t <RACK_NODE_STAGE2_BRINGUP_JOB>`), ~34 s on a 4,608-node fleet. |
 | **`RACK_STATUS_TIMEOUT`** | `300` | `rack_status.sh` timeout (shell mode). |
 | **`RACK_STATUS_DEFAULT_REFRESH`** | `30` | UI default refresh (clamped 5–86400). |
 | **`RACK_STATUS_BACKGROUND_DISABLED`** | *(unset)* | Truthy → no `rack-status-bg` cache thread. |
@@ -746,6 +747,7 @@ Use this as a checklist against **`app.py`** / **`native_status.py`**. Defaults 
 RACK_BRINGUP_CACHE_TTL_SEC
 RACK_BRINGUP_DISABLED
 RACK_BRINGUP_HOME
+RACK_BRINGUP_REPORT_TIMEOUT
 RACK_BUG_REPORT_DISABLED
 RACK_BUG_REPORT_DRY_RUN
 RACK_BUG_REPORT_LIST_TIMEOUT

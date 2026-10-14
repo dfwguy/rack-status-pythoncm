@@ -38,8 +38,10 @@ import os
 import re
 import threading
 import time
+from collections.abc import Iterable
 
 import host_exec
+from config_env import _eget_int
 
 DEFAULT_HOME = "/home/cmods/bringup"
 
@@ -89,6 +91,16 @@ def bringup_home() -> str:
 def is_enabled() -> bool:
     """False when ``RACK_BRINGUP_DISABLED`` is truthy."""
     return os.environ.get("RACK_BRINGUP_DISABLED", "").strip().lower() not in ("1", "true", "yes", "on")
+
+
+#: Default limit for a fleet-wide bring-up report. A 4,608-node NC fleet's full report took
+#: 131-150 s before the burn-in fix and 66 s after; the one-column form node-stages runs, ~34 s.
+DEFAULT_REPORT_TIMEOUT_SEC = 180
+
+
+def report_timeout() -> int:
+    """Seconds a fleet-wide report may run (``RACK_BRINGUP_REPORT_TIMEOUT``, a Settings value)."""
+    return max(30, _eget_int("RACK_BRINGUP_REPORT_TIMEOUT", DEFAULT_REPORT_TIMEOUT_SEC))
 
 
 def _cache_ttl() -> int:
@@ -164,7 +176,7 @@ def parse_status_check(text: str) -> dict[str, dict[str, str]]:
     return out
 
 
-def run_daily_report(*, timeout: int = 150) -> str:
+def run_daily_report(*, timeout: int | None = None) -> str:
     """Run (and briefly cache) ``report_benchmarks.sh -c`` on the head node."""
     home = bringup_home()
     ttl = _cache_ttl()
@@ -176,7 +188,7 @@ def run_daily_report(*, timeout: int = 150) -> str:
     proc = host_exec.run_on_host(
         ["bash", f"{home}/{REPORT_BENCHMARKS}", "-c"],
         cwd=home,
-        timeout=timeout,
+        timeout=timeout or report_timeout(),
         env_extra=_slurm_env_extra(),
     )
     out = proc.stdout or ""
@@ -199,17 +211,23 @@ def run_status_check(node: str, *, timeout: int = 90) -> str:
     return proc.stdout or ""
 
 
-def run_status_check_all(*, timeout: int = 180) -> str:
+def run_status_check_all(*, tests: Iterable[str] = (), timeout: int | None = None) -> str:
     """Run ``report_job-status.sh`` with no pattern: every node under ``results/``.
 
-    Its own scan cache makes this cheap (~0.5 s for 564 nodes), so a fleet view costs one
-    round trip instead of one per node.
+    One round trip for the fleet instead of one per node. *tests* narrows the report to those
+    jobs (``-t``, repeatable): a caller that reads one column should not pay for every column --
+    on Nscale NC the full report took ~66 s and the one-column form ~34 s, with identical verdicts
+    for that column on all 4,608 nodes.
     """
     home = bringup_home()
+    cmd = ["bash", f"{home}/{REPORT_JOB_STATUS}"]
+    for test in tests:
+        if test:
+            cmd += ["-t", test]
     proc = host_exec.run_on_host(
-        ["bash", f"{home}/{REPORT_JOB_STATUS}"],
+        cmd,
         cwd=home,
-        timeout=timeout,
+        timeout=timeout or report_timeout(),
         env_extra=_slurm_env_extra(),
     )
     out = proc.stdout or ""

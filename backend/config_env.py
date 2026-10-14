@@ -447,6 +447,15 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     },
     {
         "section": "jobs_cluster",
+        "key": "RACK_BRINGUP_REPORT_TIMEOUT",
+        "label": "Bring-up report timeout (seconds)",
+        "description": (
+            "Longest a fleet-wide bring-up report may run on the head before the call gives up "
+            "(node Stage 2 verdicts, the bring-up fleet view). Default 180."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
         "key": "RACK_VALIDATION_TIMEOUT",
         "label": "Validation timeout (seconds)",
         "description": "Max wall time for synchronous / async singlerack validation.",
