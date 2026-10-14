@@ -371,6 +371,7 @@ if [[ "${probe_json_mode:-0}" -eq 1 ]]; then
   bn=$(basename "$f")
   vt="$(validation_test_raw)"
   export _RJ_BN=$bn _RJ_JID=$jid _RJ_ON=$ongoing _RJ_NO=$nccl_ok _RJ_LO=$llm_ok _RJ_ST=$nemo_state _RJ_JT=$jt _RJ_VT=$vt
+  export _RJ_NI="${_OUT_NCCL_ISSUE:-}"
   python3 <<'PY'
 import json, os
 
@@ -391,6 +392,9 @@ print(
             "jid": g("_RJ_JID"),
             "ongoing": bool(on),
             "nccl_ok": bool(nco),
+            # Why an NCCL log is not a pass despite its bandwidth (wrong results, a failed or
+            # unfinished test); empty when clean. See nccl_integrity_issue.
+            "nccl_issue": g("_RJ_NI"),
             "llm_ok": bool(lko),
             "nemo_state": g("_RJ_ST", "fail"),
             "squeue_time": g("_RJ_JT"),

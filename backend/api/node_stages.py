@@ -69,9 +69,14 @@ def api_node_stages():
         and (not node or str(n.get("id")) == node)
     ]
     node_logs = payload.get("node_stage_logs")
+    busy = {
+        str(n.get("id")) for n in inventory
+        if isinstance(n, dict) and n.get("id") and node_stages.scheduler_busy(n.get("scheduler_state"))
+    }
     try:
         out = node_stages.node_stages(
-            pairs, node_logs if isinstance(node_logs, dict) else {}, wait_for_bringup=wait
+            pairs, node_logs if isinstance(node_logs, dict) else {}, wait_for_bringup=wait,
+            busy_hosts=busy,
         )
     except Exception as e:
         _logger.warning("node stages failed", exc_info=True)

@@ -274,6 +274,51 @@ def test_a_failed_refresh_waits_out_the_ttl_instead_of_rerunning_every_call(monk
     assert len(calls) == 2
 
 
+def test_a_failed_stage1_says_why_from_the_probes_integrity_finding():
+    """A log with a peak but wrong results reads as a failure that names the wrong results."""
+    probe = {"jid": "167578", "_path": "/l/x.txt", "nccl_ok": False,
+             "nccl_issue": "data errors: 2447 out-of-bounds values (wrong results)"}
+    st = node_stages.stage1_state(probe, "", set())
+    assert st["state"] == "fail" and "out-of-bounds" in st["reason"]
+    # The log scan's own reason (what stopped the run) still wins when it has one.
+    st = node_stages.stage1_state({**probe, "fail_reason": "NVLink fabric not initialized"}, "", set())
+    assert st["reason"] == "NVLink fabric not initialized"
+
+
+@pytest.mark.parametrize("state,busy", [
+    ("allocated", True), ("mixed", True), ("alloc", True), ("mix+drain", True), ("completing", True),
+    ("idle", False), ("down*", False), ("drained", False), ("", False), (None, False),
+])
+def test_scheduler_busy(state, busy):
+    assert node_stages.scheduler_busy(state) is busy
+
+
+def test_an_incomplete_bringup_result_is_ongoing_only_while_the_node_is_busy():
+    """INCOMPLETE = no end marker: still being written on a busy node, a dead job on an idle one."""
+    v = {"status": "INCOMPLETE", "reason": "no end marker -- job died before finishing"}
+    assert node_stages.stage2_state(v, node_busy=True)["state"] == "ongoing"
+    assert node_stages.stage2_state(v, node_busy=False)["state"] == "fail"
+    assert node_stages.stage2_state(v)["state"] == "ongoing"  # scheduler state unknown: no guess
+    # Every other status reads the same whether or not the node is busy.
+    for status, state in (("DONE", "done"), ("FAIL", "fail"), ("RUNNING", "ongoing"), ("NOT_RUN", "pending")):
+        assert node_stages.stage2_state({"status": status}, node_busy=False)["state"] == state
+
+
+def test_node_stages_passes_who_is_busy_through_to_stage2(monkeypatch):
+    monkeypatch.setattr(native_status, "load_squeue_jobs_map", lambda: (set(), {}))
+    idle, busy = HOST, "sys1-gso1-p-phy-gpu20-su23"
+    verdict = {"llm-pretrain-solo": {"status": "INCOMPLETE", "reason": "no end marker"}}
+    monkeypatch.setattr(node_stages._bringup, "get", lambda wait=False: {idle: verdict, busy: verdict})
+    out = node_stages.node_stages([(idle, "V20"), (busy, "V20")], {}, busy_hosts={busy})
+    rows = {r["node"]: r["stage2"]["state"] for r in out["nodes"]}
+    assert rows == {idle: "fail", busy: "ongoing"}
+
+
+def test_the_probe_cache_is_rejudged_under_the_new_rule():
+    """Cached verdicts are keyed on log size and mtime; the rule change must discard them."""
+    assert native_status._NATIVE_LOG_CACHE_VERSION >= 4
+
+
 def test_the_stage2_job_is_a_setting(monkeypatch):
     monkeypatch.setenv("RACK_NODE_STAGE2_BRINGUP_JOB", "llm-pretrain")
     assert node_stages.stage2_bringup_job() == "llm-pretrain"
@@ -308,7 +353,7 @@ def test_the_snapshot_carries_each_nodes_evidence_and_status_does_not_serve_it(m
         {one: NCCL_1N},
     )
     payload = st.node_stage_logs_payload()
-    assert payload == {HOST: {"nccl": {"jid": 119310, "nccl_ok": True, "llm_ok": None,
+    assert payload == {HOST: {"nccl": {"jid": 119310, "nccl_ok": True, "nccl_issue": None, "llm_ok": None,
                                        "_path": f"/logs/{one}", "_mtime": 1.0, "_rack": "V20",
                                        "fail_reason": ""}}}
 

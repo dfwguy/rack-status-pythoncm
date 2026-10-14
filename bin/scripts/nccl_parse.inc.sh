@@ -119,6 +119,48 @@ nccl_oob_csv() {
   grep 'Out of bounds values' "$1" 2>/dev/null | awk '{ print $NF }' | paste -sd, - || true
 }
 
+# INTEGRITY: what makes an nccl-tests log not a pass, whatever bandwidth it measured.
+# Peak busbw (nccl_busbw_csv) answers "how fast"; this answers "did the run hold up", for the
+# whole file rather than the collectives a suite happens to want. Prints the first problem in
+# operator words, or nothing for a clean log. Three things fail a log:
+#   - nccl-tests' data check: "Out of bounds values : N FAILED" with N > 0 (wrong results);
+#   - a failure line: Test NCCL failure / Test CUDA failure / Test failure / Test timeout;
+#   - a test that never concluded: fewer "concluded" markers than the larger of the tests the
+#     manifest declares (# job=... tests=N) and the tests that started.
+# Nscale NC 2026-10-14: gpu92-su34 (job 167578) passed Stage 1 with 178 out-of-bounds values in
+# a non-all_reduce test, and gpu124-su25 (job 126229) with an all_reduce that aborted mid-sweep,
+# because the verdict only asked whether all_reduce produced a peak. A log that never armed (no
+# nccl-tests table: a NeMo log, an empty or pre-start failure) has nothing to judge here.
+nccl_integrity_issue() {
+  [[ -f "$1" ]] || return 0
+  awk '
+    /^# job=/ {
+      for (i = 1; i <= NF; i++) if ($i ~ /^tests=[0-9]+$/) {
+        split($i, a, "="); if ((a[2] + 0) > expected) expected = a[2] + 0
+      }
+    }
+    /^# Collective test starting:/                  { armed = 1; started++; next }
+    /^# Collective test concluded:/                 { armed = 1; concluded++; next }
+    /^#/ && (/out-of-place/ || (/size/ && /busbw/)) { armed = 1 }
+    /Out of bounds values[[:space:]]*:/ {
+      n = $0; sub(/.*Out of bounds values[[:space:]]*:[[:space:]]*/, "", n); n = n + 0
+      if (n > 0) oob += n
+      next
+    }
+    /Test (NCCL|CUDA) failure|Test failure|Test timeout/ {
+      if (fail == "") { fail = $0; sub(/^[[:space:]]+/, "", fail); fail = substr(fail, 1, 160) }
+      next
+    }
+    END {
+      if (!armed) exit
+      if (oob > 0)   { printf "data errors: %d out-of-bounds values (wrong results)\n", oob; exit }
+      if (fail != "") { printf "test failure: %s\n", fail; exit }
+      want = (expected > started) ? expected : started
+      if (want > concluded) printf "%d of %d tests did not finish\n", want - concluded, want
+    }
+  ' "$1"
+}
+
 # Sweep-block completeness: "<started-or-expected>,<concluded>".
 #
 # nccl-tests brackets each sweep with "# Collective test starting:" and "# Collective test

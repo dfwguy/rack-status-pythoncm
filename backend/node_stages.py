@@ -46,7 +46,7 @@ _BRINGUP_STATE = {
     "FAIL": "fail",
     "RUNNING": "ongoing",
     "RETRY": "ongoing",
-    "INCOMPLETE": "ongoing",
+    "INCOMPLETE": "ongoing",  # only while the node is busy; see stage2_state
     "NOT_RUN": "pending",
 }
 
@@ -75,17 +75,38 @@ def stage1_state(probe: dict[str, Any] | None, live_jid: str, running: set[str])
         out["state"] = "fail"
         # What stopped it (the log scan's words), so a fabric that is not up or an image that is
         # not on the node reads differently from a slow link -- they are fixed by different people.
-        reason = str(probe.get("fail_reason") or "").strip()
+        # Else the probe's own integrity finding: wrong results, a failed or an unfinished test.
+        reason = str(probe.get("fail_reason") or probe.get("nccl_issue") or "").strip()
         if reason:
             out["reason"] = reason
     return out
 
 
-def stage2_state(verdict: dict[str, str] | None) -> dict[str, Any]:
+#: Scheduler states in which a job can still be writing its result file.
+_BUSY_STATES = frozenset({"alloc", "allocated", "mix", "mixed", "comp", "completing"})
+
+
+def scheduler_busy(state: object) -> bool:
+    """True when a node's scheduler state (``allocated``, ``mixed+drain``, ...) means a job is on it."""
+    parts = {p.strip().lower().rstrip("*~#") for p in str(state or "").split("+")}
+    return bool(parts & _BUSY_STATES)
+
+
+def stage2_state(verdict: dict[str, str] | None, *, node_busy: bool | None = None) -> dict[str, Any]:
+    """A node's Stage 2 from its bring-up verdict.
+
+    ``INCOMPLETE`` is a result file with no end marker: the job is either still writing it or died.
+    Only a node the scheduler has busy can still be writing, so an idle one reads ``fail`` -- a
+    dead job must not show as ongoing forever. *node_busy* None (scheduler state unknown) keeps
+    the old reading rather than guessing.
+    """
     if not verdict:
         return {"state": "pending"}
     status = str(verdict.get("status") or "").upper()
-    out: dict[str, Any] = {"state": _BRINGUP_STATE.get(status, "pending"), "status": status}
+    state = _BRINGUP_STATE.get(status, "pending")
+    if status == "INCOMPLETE" and node_busy is False:
+        state = "fail"
+    out: dict[str, Any] = {"state": state, "status": status}
     reason = str(verdict.get("reason") or "").strip()
     if reason:
         out["reason"] = reason
@@ -168,6 +189,7 @@ def node_stages(
     node_logs: dict[str, dict[str, dict[str, Any]]],
     *,
     wait_for_bringup: bool = False,
+    busy_hosts: set[str] | None = None,
 ) -> dict[str, Any]:
     """Stage 1 and Stage 2 for each ``(host, rack)`` in *nodes*.
 
@@ -196,7 +218,10 @@ def node_stages(
             "node": host,
             "rack": rack,
             "stage1": stage1_state(logs.get("nccl"), str((live.get(host) or {}).get("nccl") or ""), running),
-            "stage2": stage2_state(((verdicts or {}).get(host) or {}).get(job))
+            "stage2": stage2_state(
+                ((verdicts or {}).get(host) or {}).get(job),
+                node_busy=None if busy_hosts is None else host in busy_hosts,
+            )
             if verdicts is not None else {"state": "unknown"},
         })
     return {

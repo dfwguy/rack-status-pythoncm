@@ -69,7 +69,8 @@ _NATIVE_LOG_JSON = _REPO_ROOT / "var" / "cache" / "native_log_analysis.json"
 # Deliberately shared by BOTH the single-rack and multirack caches below: they are produced by the
 # same probe path, so a logic change invalidates both. Giving them separate counters would let one
 # keep serving verdicts from superseded parse logic.
-_NATIVE_LOG_CACHE_VERSION = 3  # 3: NCCL busbw counts only completed, unfailed nccl-tests tests
+_NATIVE_LOG_CACHE_VERSION = 4  # 4: an NCCL log with wrong results, a failed or an unfinished test is not a pass
+# 3: NCCL busbw counts only completed, unfailed nccl-tests tests
 
 
 def _job_env_overrides_file() -> Path:
@@ -2105,7 +2106,7 @@ class NativeRackTableState:
         restart and does not depend on which worker serves the request -- the same reason the
         rack rows live there.
         """
-        keep = ("jid", "nccl_ok", "llm_ok", "_path", "_mtime", "_rack", "fail_reason")
+        keep = ("jid", "nccl_ok", "nccl_issue", "llm_ok", "_path", "_mtime", "_rack", "fail_reason")
         with self.lock:
             return {
                 host: {kind: {k: rec.get(k) for k in keep} for kind, rec in kinds.items()}
@@ -2145,7 +2146,7 @@ class NativeRackTableState:
                         rec = None
                 if rec is None:
                     pr = probe_fn(p) or {}
-                    rec = {k: pr.get(k) for k in ("ok", "jid", "ongoing", "nccl_ok", "llm_ok", "nemo_state", "squeue_time")}
+                    rec = {k: pr.get(k) for k in ("ok", "jid", "ongoing", "nccl_ok", "nccl_issue", "llm_ok", "nemo_state", "squeue_time")}
                     disk[keyp] = {"mtime_ns": mtime_ns, "size": size, "probe": rec}
                     dirty = True
                 rec_d = rec if isinstance(rec, dict) else {}
@@ -2792,7 +2793,7 @@ class MultirackTableState:
                         rec = None
                 if rec is None:
                     pr = probe_fn(p) or {}
-                    rec = {k: pr.get(k) for k in ("ok", "jid", "ongoing", "nccl_ok", "llm_ok", "nemo_state", "squeue_time")}
+                    rec = {k: pr.get(k) for k in ("ok", "jid", "ongoing", "nccl_ok", "nccl_issue", "llm_ok", "nemo_state", "squeue_time")}
                     need_save = True
                 else:
                     rec = dict(rec)

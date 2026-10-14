@@ -70,9 +70,16 @@ validation_eval_suite_for_file() {
   local f=$1 ongoing=$2 ar_bw=$3 aa_bw=$4 ag_bw=$5 llm_line finished="${7:-}"
   _validation_test_ensure_parsed
   _OUT_NCCL_OK=1
+  _OUT_NCCL_ISSUE=""
   ((WANT_AR)) && { [[ -n "${ar_bw:-}" ]] || _OUT_NCCL_OK=0; }
   ((WANT_AA)) && { [[ -n "${aa_bw:-}" ]] || _OUT_NCCL_OK=0; }
   ((WANT_AG)) && { [[ -n "${ag_bw:-}" ]] || _OUT_NCCL_OK=0; }
+  # A wanted peak is not a pass on its own: wrong results, a failed or an unfinished test anywhere
+  # in the log fail it too (nccl_integrity_issue in nccl_parse.inc.sh). The reason is kept for callers.
+  if ((WANT_AR || WANT_AA || WANT_AG)) && declare -F nccl_integrity_issue >/dev/null 2>&1; then
+    _OUT_NCCL_ISSUE=$(nccl_integrity_issue "$f")
+    [[ -n "$_OUT_NCCL_ISSUE" ]] && _OUT_NCCL_OK=0
+  fi
   if [[ $# -ge 6 ]]; then
     llm_line=$6
   else
