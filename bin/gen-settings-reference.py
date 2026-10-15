@@ -44,6 +44,7 @@ import os
 import pathlib
 import re
 import sys
+from typing import NamedTuple
 
 import tomllib
 
@@ -65,13 +66,69 @@ _RAW_READERS = {"getenv"}
 #: variable by key straight from the process environment -- raw, not the ladder. Their callers pass
 #: the name as a literal, so the scan has to know them by name: before it did, 99 of the 100
 #: settings read through this family were missing from a document whose one claim is completeness.
-#: Every `_env_int` in the backend delegates to `config_env.env_int`; a new one that read through
-#: the ladder instead would have to be named for it, not added here.
+#: Every `_env_int` in the backend delegates to `config_env.env_int`; `_unclassified_readers` fails
+#: the build if a new one reads through the ladder instead, since this set would call it raw.
 _RAW_HELPERS = {"env_int", "_env_int"}
 #: `config_env._job_env_int` checks Settings -> job environment first and only then the process
 #: environment, so the Settings screen CAN change it -- which is what `ladder` tells a reader, even
 #: though it skips the cluster overlay `_eget` consults. Thirteen settings are read only this way.
 _LADDER_HELPERS = {"_job_env_int"}
+
+
+class _Reader(NamedTuple):
+    """A bespoke reader that takes the setting's name as a parameter, and where its arguments sit.
+
+    ``key`` and ``default`` are ``(position, keyword)``: either may be ``None`` where the argument
+    is only ever passed the other way.
+    """
+
+    kind: str
+    key: tuple[int | None, str | None] = (0, None)
+    default: tuple[int | None, str | None] | None = (1, None)
+
+
+#: Module-local readers that take the setting's name as a parameter, each classified by reading its
+#: body. Keyed by **(module, function)** and matched by resolving each call through the caller's
+#: imports, never by bare name: `_env` here is four unrelated functions in four modules, and
+#: `transport/topology.py` has a `_truthy` that parses a dict value, not the environment. Before these
+#: were known, 100+ settings -- every Grafana knob, every `RACK_*_SCRIPT` override, every flag read
+#: through `core.truthy_env` -- were missing from a document whose one claim is completeness.
+#:
+#: `kind` is what a reader can rely on: `ladder` where the Settings screen can change the value.
+#: `native_status._native_env_ds` reads `os.environ` directly, but only after consulting its own
+#: subset of the job-env overrides file -- the Settings screen wins, so it is `ladder`.
+#:
+#: `_unclassified_readers` finds every function that forwards a parameter into an environment read,
+#: so a new one fails the build until it is added here (or to `_NOT_SETTING_READERS`).
+_PARAM_READERS: dict[tuple[str, str], _Reader] = {
+    ("app", "_validation_activities_refresh_number"): _Reader("ladder"),
+    ("config_preflight", "_is_set"): _Reader("raw", (0, None), None),
+    ("core", "truthy_env"): _Reader("raw"),
+    ("grafana_embeds", "_env"): _Reader("raw"),
+    ("grafana_embeds", "_env_truthy"): _Reader("raw", (0, None), None),
+    ("grafana_embeds", "_env_float"): _Reader("raw"),
+    ("identity.tokens", "_configured_ttl"): _Reader("raw"),
+    ("lake_sink", "_env"): _Reader("raw"),
+    ("metrics_query", "_env"): _Reader("raw"),
+    ("native_status", "_native_env_ds"): _Reader("ladder"),
+    ("native_status", "_env_truthy"): _Reader("raw", (0, None), None),
+    ("nvftp_cache_sync", "_truthy"): _Reader("raw", (0, None), None),
+    ("nvis_id_templates", "_env_marker_list"): _Reader("raw", (0, None), None),
+    # `_script(basename, env_key)`: the override goes through `_eget`.
+    ("paths", "_script"): _Reader("ladder", (1, "env_key"), None),
+    ("stream_exec", "_merged_stdout_stream_generator"): _Reader(
+        "ladder", (None, "linebuffer_env_var"), (None, "linebuffer_default")
+    ),
+    # A dataclass field, not a parameter the audit can see: `AgentTool.is_available` reads
+    # `os.environ.get(self.disabled_env)`, and the name is given at construction.
+    ("agent.tools", "AgentTool"): _Reader("raw", (None, "disabled_env"), None),
+}
+
+#: Functions that take an environment variable's name as a parameter but do not read a setting.
+_NOT_SETTING_READERS = {
+    # Materialises the catalog overlay into `os.environ`; it reads only to remember the original.
+    ("app", "_catalog_set_environ"),
+}
 
 #: Names that are not configuration: loop variables, test scaffolding, and the handful of
 #: all-caps locals that happen to be read from the environment by a helper taking a key.
@@ -108,15 +165,27 @@ def _is_env_read(node: ast.Call) -> str | None:
     return None
 
 
-def _literal_default(node: ast.Call) -> str:
-    """The second positional argument when it is a literal, else ``""``.
+def _arg(node: ast.Call, where: tuple[int | None, str | None]) -> ast.expr | None:
+    """The argument at ``(position, keyword)``, whichever way the call passed it."""
+    index, keyword = where
+    if index is not None and len(node.args) > index:
+        return node.args[index]
+    for kw in node.keywords:
+        if keyword is not None and kw.arg == keyword:
+            return kw.value
+    return None
+
+
+def _literal_default(
+    node: ast.Call, where: tuple[int | None, str | None] | None = (1, None)
+) -> str:
+    """The default argument (the second positional, unless a reader says otherwise) when it is a
+    literal, else ``""``.
 
     Only literals: a default computed from another setting is not a value a reader can copy, and
     printing the expression would be noise.
     """
-    if len(node.args) < 2:
-        return ""
-    arg = node.args[1]
+    arg = _arg(node, where) if where is not None else None
     if isinstance(arg, ast.Constant) and isinstance(arg.value, (str, int, float, bool)):
         return str(arg.value)
     return ""
@@ -145,9 +214,11 @@ def _module_constants(tree: ast.Module) -> dict[str, str]:
     return out
 
 
-def _key_of(node: ast.Call, constants: dict[str, str]) -> str:
+def _key_of(
+    node: ast.Call, constants: dict[str, str], where: tuple[int | None, str | None] = (0, None)
+) -> str:
     """The setting name a call reads: a literal, or a module constant holding one."""
-    first = node.args[0]
+    first = _arg(node, where)
     if isinstance(first, ast.Constant) and isinstance(first.value, str):
         return first.value
     if isinstance(first, ast.Name):
@@ -155,9 +226,108 @@ def _key_of(node: ast.Call, constants: dict[str, str]) -> str:
     return ""
 
 
-def scan() -> dict[str, dict]:
-    """Every environment variable the backend reads, with where and how."""
-    found: dict[str, dict] = {}
+def _module_name(path: pathlib.Path) -> str:
+    """``backend/identity/tokens.py`` -> ``identity.tokens``, as the backend imports it."""
+    parts = list(path.relative_to(REPO_ROOT / "backend").with_suffix("").parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+    return ".".join(parts)
+
+
+class _Module(NamedTuple):
+    """One parsed backend module and what its names refer to."""
+
+    name: str
+    rel: str
+    tree: ast.Module
+    constants: dict[str, str]
+    #: local name -> (module, attribute): top-level definitions, `from X import f [as g]`, and
+    #: module-level re-bindings such as `app._truthy_env = core.truthy_env`.
+    names: dict[str, tuple[str, str]]
+    #: local spelling -> module, for `import X [as y]` so `y.f(...)` resolves.
+    modules: dict[str, str]
+
+
+def _index_module(path: pathlib.Path, tree: ast.Module) -> _Module:
+    name = _module_name(path)
+    package = name if path.name == "__init__.py" else name.rpartition(".")[0]
+    names: dict[str, tuple[str, str]] = {}
+    modules: dict[str, str] = {}
+
+    def bind_import(node: ast.Import | ast.ImportFrom, *, override: bool) -> None:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                modules.setdefault(alias.asname or alias.name, alias.name)
+            return
+        source = node.module or ""
+        if node.level:
+            base = package.split(".") if package else []
+            base = base[: len(base) - (node.level - 1)] if node.level > 1 else base
+            source = ".".join([*base, source] if source else base)
+        for alias in node.names:
+            local = alias.asname or alias.name
+            if override or local not in names:
+                names[local] = (source, alias.name)
+
+    # Top level in source order, so a later definition or re-binding wins as it does at runtime.
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names[node.name] = (name, node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            bind_import(node, override=True)
+        elif (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+        ):
+            bound = _resolve_expr(node.value, names, modules)
+            if bound is not None:
+                names[node.targets[0].id] = bound
+    # Imports deferred into function bodies (to dodge import cycles) only fill gaps: they must not
+    # shadow a module-level name of the same spelling.
+    top = set(map(id, tree.body))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and id(node) not in top:
+            bind_import(node, override=False)
+    return _Module(
+        name, str(path.relative_to(REPO_ROOT)), tree, _module_constants(tree), names, modules
+    )
+
+
+def _resolve_expr(
+    func: ast.expr, names: dict[str, tuple[str, str]], modules: dict[str, str]
+) -> tuple[str, str] | None:
+    if isinstance(func, ast.Name):
+        return names.get(func.id)
+    if isinstance(func, ast.Attribute):
+        target = modules.get(ast.unparse(func.value))
+        if target is not None:
+            return target, func.attr
+    return None
+
+
+def _resolve(
+    node: ast.Call,
+    module: _Module,
+    index: dict[str, _Module],
+    readers: dict[tuple[str, str], _Reader] = _PARAM_READERS,
+) -> tuple[str, str] | None:
+    """The (module, function) a call lands on, following imports and re-bindings to the definition."""
+    where = _resolve_expr(node.func, module.names, module.modules)
+    for _ in range(8):  # a re-export chain longer than this is not a pattern this codebase has
+        if where is None or where in readers:
+            return where
+        owner = index.get(where[0])
+        nxt = owner.names.get(where[1]) if owner is not None else None
+        if nxt is None or nxt == where:
+            return where
+        where = nxt
+    return where
+
+
+def _modules() -> dict[str, _Module]:
+    """Every backend module outside `tests/`, parsed once."""
+    out: dict[str, _Module] = {}
     for path in sorted((REPO_ROOT / "backend").rglob("*.py")):
         if "tests" in path.parts or "__pycache__" in path.parts:
             continue
@@ -165,15 +335,36 @@ def scan() -> dict[str, dict]:
             tree = ast.parse(path.read_text(errors="replace"))
         except SyntaxError:
             continue
-        rel = str(path.relative_to(REPO_ROOT))
-        constants = _module_constants(tree)
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not node.args:
-                continue
-            kind = _is_env_read(node)
-            if kind is None:
-                continue
-            name = _key_of(node, constants)
+        module = _index_module(path, tree)
+        out[module.name] = module
+    return out
+
+
+def _reads(
+    module: _Module,
+    index: dict[str, _Module],
+    readers: dict[tuple[str, str], _Reader] = _PARAM_READERS,
+):
+    """Each environment read in a module: ``(call, kind, key position, default position)``."""
+    for node in ast.walk(module.tree):
+        if not isinstance(node, ast.Call):
+            continue
+        kind = _is_env_read(node)
+        if kind is not None:
+            yield node, kind, (0, None), (1, None)
+            continue
+        reader = readers.get(_resolve(node, module, index, readers) or ("", ""))
+        if reader is not None:
+            yield node, reader.kind, reader.key, reader.default
+
+
+def scan() -> dict[str, dict]:
+    """Every environment variable the backend reads, with where and how."""
+    found: dict[str, dict] = {}
+    index = _modules()
+    for module in index.values():
+        for node, kind, key_at, default_at in _reads(module, index):
+            name = _key_of(node, module.constants, key_at)
             if not name:
                 continue
             if not re.fullmatch(r"[A-Z][A-Z0-9_]*", name) or _NOT_A_SETTING.match(name):
@@ -181,11 +372,88 @@ def scan() -> dict[str, dict]:
             entry = found.setdefault(
                 name, {"name": name, "modules": set(), "ladder": False, "raw": False, "default": ""}
             )
-            entry["modules"].add(rel)
+            entry["modules"].add(module.rel)
             entry[kind if kind == "ladder" else "raw"] = True
             if not entry["default"]:
-                entry["default"] = _literal_default(node)
+                entry["default"] = _literal_default(node, default_at)
     return found
+
+
+def _parameterised_readers(index: dict[str, _Module]) -> dict[tuple[str, str], str]:
+    """Every function that hands one of its own parameters to an environment read, with the kind
+    of read it hands it to (``ladder`` if any path does).
+
+    This is how the scan stays complete without anyone remembering to extend it: a new
+    `def _env(name)` in some module is found here whether or not anything calls it yet. Iterated to
+    a fixed point, each find standing in as a reader for the next round, so a wrapper over a new
+    reader (`_env_float` over `_env`) is reported together with it rather than one build later.
+    """
+    out: dict[tuple[str, str], str] = {}
+    readers = dict(_PARAM_READERS)
+    while True:
+        found = False
+        for module in index.values():
+            reads = list(_reads(module, index, readers))
+            for fn in ast.walk(module.tree):
+                if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                a = fn.args
+                params = [p.arg for p in [*a.posonlyargs, *a.args]]
+                kwonly = {p.arg for p in a.kwonlyargs}
+                end = fn.end_lineno or fn.lineno
+                for node, kind, key_at, _ in reads:
+                    key = _arg(node, key_at)
+                    if not (isinstance(key, ast.Name) and (key.id in params or key.id in kwonly)):
+                        continue
+                    if not fn.lineno <= node.lineno <= end:
+                        continue
+                    where = (module.name, fn.name)
+                    if out.get(where) == "ladder" or out.get(where) == kind:
+                        continue
+                    out[where] = kind
+                    found = True
+                    if where not in _PARAM_READERS:
+                        position = params.index(key.id) if key.id in params else None
+                        readers[where] = _Reader(kind, (position, key.id), None)
+        if not found:
+            return out
+
+
+def _unclassified_readers(index: dict[str, _Module] | None = None) -> list[str]:
+    """Problems that would make the scan silently incomplete or wrong, one sentence each.
+
+    * a function forwards a parameter into an environment read but is in neither
+      `_PARAM_READERS` nor `_NOT_SETTING_READERS` -- its callers' settings are invisible;
+    * one recognised only by a generic helper name (`_env_int`, ...) reads a different way than
+      that name promises;
+    * a `_PARAM_READERS` entry names a function that no longer exists -- renamed, so its callers
+      have quietly dropped out of the document.
+    """
+    index = index if index is not None else _modules()
+    problems: list[str] = []
+    # Only one direction of the kind check is meaningful: `_eget` and `_job_env_int` *are* the
+    # ladder, and their own bottom rung is an `os.environ` read, so a ladder name with a raw body
+    # is expected. A raw name whose body reaches the ladder is the mistake worth catching.
+    generic = _RAW_HELPERS | _LADDER_HELPERS | {"_eget", "_eget_int"}
+    for (mod, fn), kind in sorted(_parameterised_readers(index).items()):
+        if (mod, fn) in _PARAM_READERS or (mod, fn) in _NOT_SETTING_READERS:
+            continue
+        if fn in generic:
+            if fn in _RAW_HELPERS and kind == "ladder":
+                problems.append(
+                    f"{mod}.{fn} is recognised by name as a raw read, but its body goes through "
+                    "the ladder; add it to _PARAM_READERS as a ladder reader"
+                )
+            continue
+        problems.append(
+            f"{mod}.{fn} reads the environment by a parameter; classify it in _PARAM_READERS "
+            "(or _NOT_SETTING_READERS) so the settings its callers read are documented"
+        )
+    for mod, fn in sorted(set(_PARAM_READERS) | _NOT_SETTING_READERS):
+        owner = index.get(mod)
+        if owner is None or owner.names.get(fn) != (mod, fn):
+            problems.append(f"{mod}.{fn} is classified but no longer defined; update the table")
+    return problems
 
 
 def registry_metadata() -> dict[str, dict]:
@@ -433,6 +701,12 @@ def main() -> int:
         help="exit non-zero if the tracked document differs from what the source would produce",
     )
     args = parser.parse_args()
+
+    problems = _unclassified_readers()
+    if problems:
+        for problem in problems:
+            print(f"unclassified: {problem}")
+        return 1
 
     rendered = build()
     if args.check:
