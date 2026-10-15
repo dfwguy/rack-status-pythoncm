@@ -11,7 +11,7 @@ Every environment variable the backend reads, found by scanning the source rathe
 importing it — a variable read inside a function body is never reached by an import, so only
 the source knows the whole set.
 
-**444 settings.** 19 are *declared* in
+**445 settings.** 19 are *declared* in
 `backend/config_registry.py`, which is the set `rackstatus.toml` can carry, the required-
 setting preflight can demand, and `rackstatus.toml.example` lists. 210 are named in
 `docs/ENVIRONMENT.md` — named, which is a weaker claim than explained: the check is
@@ -112,6 +112,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-gunicorn-threads"></a>`GUNICORN_THREADS` | environment |  | Threads per worker. Default 24. | `backend/cli.py` |
 | <a id="s-gunicorn-timeout"></a>`GUNICORN_TIMEOUT` | environment |  | Seconds before a worker is considered hung. Default 600, because a fleet scan legitimately takes minutes. | `backend/cli.py` |
 | <a id="s-gunicorn-workers"></a>`GUNICORN_WORKERS` | environment |  | Worker count. Must be 1 — SRP login state is in-process, so a second worker splits it and login succeeds about half the time. The startup gate refuses more. | `backend/startup_gate.py` |
+| <a id="s-llmb-image-root"></a>`LLMB_IMAGE_ROOT` | ladder |  | Where LLMB keeps its own container images on the launch host (default `/cluster/llmb/images`). The GPT-OSS CPU preset stages its catalog image from this store rather than the shared container directory. | `backend/validation_presets.py` |
 | <a id="s-nemo-sqsh-src"></a>`NEMO_SQSH_SRC` | ladder |  | Squashed NeMo container image used by the NeMo validation launchers. | `backend/api/dashboard.py`, `backend/api/tools.py` |
 | <a id="s-nemo-target-steps"></a>`NEMO_TARGET_STEPS` | environment | `0` | See `docs/ENVIRONMENT.md` | `backend/universal_parser.py` |
 | <a id="s-ngc-api-key"></a>`NGC_API_KEY` | ladder |  | NGC API key used to pull tool containers. The download-containers action refuses without it. | `backend/api/tools.py` |
