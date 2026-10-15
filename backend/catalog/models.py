@@ -1266,8 +1266,9 @@ class ClusterConnection:
     workspace_dir: str = ""
     #: Where this cluster keeps its shared container images, as the launch host sees the mount.
     #: A mount point is a site fact (Nscale mounts ``/cluster/containers``; other sites differ),
-    #: so it lives on the cluster rather than in a script. Only the directory is configurable --
-    #: preset image basenames and digests stay code-owned. Blank falls back to the
+    #: so it lives on the cluster rather than in a script. Which file in it a launch stages, and
+    #: that file's size and SHA256, are the cluster's image catalog (``P2pCatalogImage.required_by``,
+    #: ``validation_presets.launch_image``). Blank falls back to the
     #: ``RACK_VALIDATION_CONTAINER_ROOT`` setting and then its default.
     shared_container_dir: str = ""
     #: Where each compute node keeps its local copy of those images (the node cache that staging

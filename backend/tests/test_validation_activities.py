@@ -379,3 +379,24 @@ class TestMultirackJobsShim:
 
         va.record_job("llmb", ["p5-r03"], "/logs")
         assert len(va.list_jobs(log_dir="/logs")) == 1  # single-rack llmb excluded
+
+
+class TestAMultirackRunStatesItsSpan:
+    """The activities table tags a run from its ``stage``; "other" is no stage at all.
+
+    The preset path recorded ``stage="other"`` for every launch, so a two-rack NeMo preset run
+    sat untagged beside Multirack NEMO runs on the same racks (NC, 2026-10-14, U23+U24).
+    """
+
+    @pytest.mark.parametrize("stage", ["other", ""])
+    def test_an_unstaged_multirack_run_is_tagged_multirack(self, stage):
+        aid = va.record_activity("nemo-xrack", stage=stage, scope="multirack", racks=["U23", "U24"])
+        assert va.get_activity(aid)["stage"] == "multirack"
+
+    def test_a_real_stage_is_kept_on_a_multirack_run(self):
+        aid = va.record_activity("llmb-nccl", stage="stage1", scope="multirack", racks=["U20", "U23"])
+        assert va.get_activity(aid)["stage"] == "stage1"
+
+    def test_an_unstaged_single_rack_run_stays_other(self):
+        aid = va.record_activity("nemo-xrack", stage="other", scope="rack", racks=["U23"])
+        assert va.get_activity(aid)["stage"] == "other"

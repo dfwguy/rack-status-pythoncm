@@ -46,6 +46,41 @@ nvis_catalog_image() {
                         END {exit !found}' "$tsv"
 }
 
+# nvis_launch_image <consumer> — the image a launch stages, as the cluster's image catalog states it.
+# Sets NVIS_IMAGE_FILE (bare *.sqsh name), NVIS_IMAGE_BYTES and NVIS_IMAGE_SHA256; non-zero, with the
+# fix on stderr, when there is none.
+#
+# Rack Status resolves the catalog entry whose Required by names <consumer> (a preset or tool id) and
+# hands it over as NVIS_LAUNCH_IMAGE / _BYTES / _SHA256, bound to the reviewed plan. A manual run may
+# set NVIS_LAUNCH_IMAGE alone; its size and digest then come from the published catalog. There is no
+# built-in image: the filename and digest used to be literals in each launcher, and went stale the day
+# a site re-imported the image -- every gate then failed a healthy file.
+nvis_launch_image() {
+  local consumer="$1" entry
+  NVIS_IMAGE_FILE="${NVIS_LAUNCH_IMAGE:-}"
+  NVIS_IMAGE_BYTES="${NVIS_LAUNCH_IMAGE_BYTES:-}"
+  NVIS_IMAGE_SHA256="${NVIS_LAUNCH_IMAGE_SHA256:-}"
+  if [[ -z "$NVIS_IMAGE_FILE" ]]; then
+    echo "ERROR: no image for ${consumer}: add ${consumer} to the Required by of its image in Rack Status (Artifact Distribution -> Catalog), or set NVIS_LAUNCH_IMAGE" >&2
+    return 1
+  fi
+  if [[ ! "$NVIS_IMAGE_FILE" =~ ^[A-Za-z0-9][A-Za-z0-9._+-]*\.sqsh$ ]]; then
+    echo "ERROR: NVIS_LAUNCH_IMAGE must be a bare *.sqsh name, not: ${NVIS_IMAGE_FILE}" >&2
+    return 1
+  fi
+  if [[ -z "$NVIS_IMAGE_BYTES" || -z "$NVIS_IMAGE_SHA256" ]]; then
+    if ! entry="$(nvis_catalog_image "$NVIS_IMAGE_FILE")"; then
+      echo "ERROR: ${NVIS_IMAGE_FILE} is not pinned in the image catalog ($(nvis_node_config_file image-catalog.tsv || true)); set its bytes and sha256 in Rack Status (Artifact Distribution -> Catalog)" >&2
+      return 1
+    fi
+    read -r NVIS_IMAGE_BYTES NVIS_IMAGE_SHA256 <<<"$entry"
+  fi
+  if [[ ! "$NVIS_IMAGE_BYTES" =~ ^[1-9][0-9]*$ || ! "$NVIS_IMAGE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "ERROR: ${NVIS_IMAGE_FILE}: image size must be a positive byte count and sha256 64 hex digits (got '${NVIS_IMAGE_BYTES}' / '${NVIS_IMAGE_SHA256}')" >&2
+    return 1
+  fi
+}
+
 # nvis_stage_node_image <tag> <host,csv> <source .sqsh>
 #
 # Make <source> present on every listed node at $(nvis_node_container_dir)/<basename>, then export

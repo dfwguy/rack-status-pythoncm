@@ -108,12 +108,14 @@ class TestPresetsFollowTheCluster:
         with pytest.raises(ValueError, match="/opt/containers"):
             validation_presets.check_local_container_dir("/tmp/containers")
 
-    def test_normalized_options_and_catalogue_carry_the_cluster_cache(self, nc):
+    def test_normalized_options_and_catalogue_carry_the_cluster_cache(self, nc, preset_image_catalog):
         preset = validation_presets.resolve_preset("nemo-26.04.01")
         opts = validation_presets.normalize_options({"scope": "rack"}, preset)
         assert opts["local_container_dir"] == "/opt/containers"
-        assert opts["local_image"] == "/opt/containers/nvidia+nemo+26.04.01-arm.sqsh"
-        assert preset.public()["defaults"]["local_container_dir"] == "/opt/containers"
+        public = preset.public()
+        assert public["defaults"]["local_container_dir"] == "/opt/containers"
+        # The catalog names the file; the cluster's node cache is where it lives.
+        assert public["image"]["path"] == "/opt/containers/nvidia+nemo+26.04.01-arm.sqsh"
 
 
 def _p2p_cluster(**connection):

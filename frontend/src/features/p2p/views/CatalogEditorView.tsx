@@ -16,13 +16,14 @@
 // edit of images.json by hand.
 import { useCallback, useEffect, useState } from "react";
 import Box from "@mui/material/Box";
-import { Banner, Button, Card, Flex, FormField, Text, TextInput } from "@nvidia/foundations-react-core";
+import { Banner, Button, Card, Combobox, Flex, FormField, Text, TextInput } from "@nvidia/foundations-react-core";
 import { PageHeader } from "../../../components/layout/PageHeader";
 import { CONTENT_MAX_WIDTH } from "../../../components/layout/contentWidth";
 import { useActiveCluster } from "../../../context/ActiveClusterContext";
 import { ApiError } from "../lib/apiFetch";
+import { requiredByItems } from "../lib/requiredBy";
 import { getCatalog, publishCatalogToScripts, saveCatalog, startOperation } from "../services/fleetService";
-import type { CatalogImageEdit, ScriptsCatalogPublish } from "../services/fleetService";
+import type { CatalogImageEdit, ImageConsumer, ScriptsCatalogPublish } from "../services/fleetService";
 
 /** How the launchers' copy of the catalog fared, as one sentence for the status banner. */
 function describeScriptsPublish(published: ScriptsCatalogPublish | undefined): string {
@@ -38,6 +39,7 @@ export default function CatalogEditorView() {
   const { activeCluster, version } = useActiveCluster();
   const [images, setImages] = useState<CatalogImageEdit[] | null>(null);
   const [authored, setAuthored] = useState(false);
+  const [consumers, setConsumers] = useState<ImageConsumer[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -52,6 +54,7 @@ export default function CatalogEditorView() {
       const doc = await getCatalog();
       setImages(doc.images.map((i) => ({ ...i, required_by: i.required_by ?? [] })));
       setAuthored(doc.authored);
+      setConsumers(doc.consumers ?? []);
     } catch (reason) {
       if (reason instanceof ApiError && reason.status === 404) {
         setError("P2P is not enabled for this cluster. Enable it in Projects & Clusters first.");
@@ -172,7 +175,20 @@ export default function CatalogEditorView() {
                 {text("sha256", img.sha256, (v) => update(idx, { sha256: v.trim().toLowerCase() }), "64-hex content pin; blank if not yet imported")}
                 {text("Bytes", String(img.bytes || ""), (v) => update(idx, { bytes: Number.parseInt(v, 10) || 0 }), "Exact byte count")}
                 {text("Order", String(img.order || ""), (v) => update(idx, { order: Number.parseInt(v, 10) || 0 }))}
-                {text("Required by", (img.required_by ?? []).join(", "), (v) => update(idx, { required_by: v.split(",").map((s) => s.trim()).filter(Boolean) }), "Comma-separated validation names")}
+                <FormField
+                  slotLabel="Required by"
+                  slotHelp="The launches that run this image. A launch with no image here is refused with this fix."
+                >
+                  <Combobox
+                    aria-label={`Required by for ${img.filename || `image ${idx + 1}`}`}
+                    multiple
+                    size="medium"
+                    items={requiredByItems(consumers, img.required_by ?? [])}
+                    value={img.required_by ?? []}
+                    onValueChange={(v: string[]) => update(idx, { required_by: v })}
+                    placeholder="Select the launches that run this image"
+                  />
+                </FormField>
               </div>
             </Card>
           ))}

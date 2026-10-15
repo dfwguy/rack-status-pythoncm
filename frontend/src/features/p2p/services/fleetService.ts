@@ -42,9 +42,14 @@ export type CatalogDoc = {
   /** false when the images are seeded from the current manifest rather than an authored document. */
   authored: boolean;
   images: CatalogImageEdit[];
+  /** The names an image's Required by may carry: every launch that stages the catalog image naming it. */
+  consumers?: ImageConsumer[];
   /** On save: the copy published to the config/ of the scripts the cluster runs for launchers to check node images by. */
   scripts_catalog?: ScriptsCatalogPublish;
 };
+
+/** A launch that runs the catalog image whose Required by lists its ``id`` (a preset or tool). */
+export type ImageConsumer = { id: string; label: string };
 
 /** Result of publishing the catalog into the scripts' shared config directory. */
 export type ScriptsCatalogPublish = { ok: boolean; dest?: string; images?: number; error?: string };

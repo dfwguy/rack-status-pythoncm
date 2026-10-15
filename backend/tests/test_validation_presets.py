@@ -48,6 +48,14 @@ def _bash4() -> str:
     pytest.skip("needs bash 4+ for declare -A / mapfile (macOS /bin/bash is 3.2; brew install bash)")
 
 
+#: What the backend hands the dispatcher for the image (validation_presets.LaunchImage.env).
+_LAUNCH_IMAGE_ENV = {
+    "NVIS_LAUNCH_IMAGE": "mnubergemm-26.03-v1.17-arm.sqsh",
+    "NVIS_LAUNCH_IMAGE_BYTES": "13949554688",
+    "NVIS_LAUNCH_IMAGE_SHA256": "c3" * 32,
+}
+
+
 def test_live_eligibility_resolves_sinfo_through_platform(monkeypatch):
     node = "ink50-dh01-j21-11"
     captured = {}
@@ -94,7 +102,7 @@ def test_catalogue_is_honest_and_version_pins_are_immutable():
         )
 
 
-def test_prepare_resolves_exact_nodes_for_gpt_fanout(monkeypatch, tmp_path):
+def test_prepare_resolves_exact_nodes_for_gpt_fanout(monkeypatch, tmp_path, preset_image_catalog):
     nodes = ["ink50-dh01-d01-11", "ink50-dh01-d01-12"]
     monkeypatch.setattr(validation_launch, "_resolve_log_dir", lambda _raw=None: tmp_path)
     monkeypatch.setattr(validation_launch, "_script_exists", lambda _path: True)
@@ -113,7 +121,7 @@ def test_prepare_resolves_exact_nodes_for_gpt_fanout(monkeypatch, tmp_path):
     assert plan["env_updates"]["NVIS_PREPARED_NODE_COUNT"] == "2"
 
 
-def test_llama_prepare_is_exact_1024_gpu_contract(monkeypatch, tmp_path):
+def test_llama_prepare_is_exact_1024_gpu_contract(monkeypatch, tmp_path, preset_image_catalog):
     nodes = [f"ink50-dh01-d{i // 16 + 1:02d}-{i % 16 + 1}" for i in range(256)]
     monkeypatch.setattr(validation_launch, "_resolve_log_dir", lambda _raw=None: tmp_path)
     monkeypatch.setattr(validation_launch, "_script_exists", lambda _path: True)
@@ -129,12 +137,18 @@ def test_llama_prepare_is_exact_1024_gpu_contract(monkeypatch, tmp_path):
     assert plan["node_count"] == 256
     assert plan["max_steps"] == 50
     assert plan["nccl_version"] == "2.30.7"
-    assert plan["artifact"]["sha256"] == "0829d0c77f38db54848afd095862093a7c62e98778b0b8664b8edff69e273747"
-    assert plan["env_updates"] == {"NVIS_PREPARED_NODE_COUNT": "256", "NVIS_PRESET_SCOPE_MULTIRACK": "1"}
+    # The image is the catalog's (conftest.PRESET_IMAGES), never a literal in the preset.
+    assert plan["artifact"]["sha256"] == "b2" * 32
+    assert plan["artifact"]["filename"] == "nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh"
+    assert plan["env_updates"] == {
+        "NVIS_PREPARED_NODE_COUNT": "256", "NVIS_PRESET_SCOPE_MULTIRACK": "1",
+        "NVIS_LAUNCH_IMAGE": "nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh",
+        "NVIS_LAUNCH_IMAGE_BYTES": "42488647680", "NVIS_LAUNCH_IMAGE_SHA256": "b2" * 32,
+    }
     assert len(plan["plan_hash"]) == 64
 
 
-def test_backend_routes_publish_prepare_contract(monkeypatch, tmp_path):
+def test_backend_routes_publish_prepare_contract(monkeypatch, tmp_path, preset_image_catalog):
     node = "ink50-dh01-d01-11"
     monkeypatch.setattr(validation_launch, "_resolve_log_dir", lambda _raw=None: tmp_path)
     monkeypatch.setattr(validation_launch, "_script_exists", lambda _path: True)
@@ -236,7 +250,7 @@ def test_legacy_prepare_and_launch_share_catalog_mapping(monkeypatch, kind, endp
         assert response.get_json()["tool_id"] == "missing-review-tool"
 
 
-def test_mnubergemm_multirack_plan_is_exact_and_time_capped(monkeypatch, tmp_path):
+def test_mnubergemm_multirack_plan_is_exact_and_time_capped(monkeypatch, tmp_path, preset_image_catalog):
     nodes = ["ink50-dh01-d01-11", "ink50-dh01-d02-11"]
     rack_nodes = {
         "ink50-dh01-d01": [nodes[0]],
@@ -293,6 +307,7 @@ def test_mnubergemm_dispatcher_dry_run_prints_bounded_slurm_command(tmp_path):
         **os.environ,
         "NVIS_PREPARED_NODE_COUNT": "2",
         "NVIS_PRESET_SCOPE_MULTIRACK": "1",
+        **_LAUNCH_IMAGE_ENV,
     }
     proc = subprocess.run(
         [

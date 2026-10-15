@@ -152,42 +152,34 @@ def test_a_negative_nodes_per_rack_is_invalid(nodes_per_rack):
 
 
 class TestSharedImagesAreRerootedPerSite:
-    """A mount point is a site fact; an image digest is a reviewed artifact.
+    """A mount point is a site fact; which image is in it is the cluster's image catalog.
 
     `/cluster/containers` was hard-coded into five image paths on both sides of the launch,
-    so a preset was unrunnable anywhere but Nscale. Only the directory moves.
+    so a preset was unrunnable anywhere but Nscale. The catalog names the file; the site's
+    root says where it lives.
     """
 
-    def test_the_default_is_unchanged_when_no_root_is_set(self, monkeypatch):
+    def test_the_default_root_holds_the_catalog_file(self, monkeypatch, preset_image_catalog):
         import validation_presets
 
         monkeypatch.setattr(validation_presets, "shared_container_root", lambda: "/cluster/containers")
-        path = "/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh"
-        assert validation_presets.resolve_shared_image(path) == path
+        image = validation_presets.launch_image("nemo-26.04.01")
+        assert image.source == "/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh"
 
-    def test_a_site_root_moves_only_the_directory(self, monkeypatch):
-        import validation_presets
-
-        monkeypatch.setattr(validation_presets, "shared_container_root", lambda: "/raid/images")
-        resolved = validation_presets.resolve_shared_image(
-            "/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh"
-        )
-        # The basename is the artifact the digest gate was written against.
-        assert resolved == "/raid/images/nvidia+nemo+26.04.01-arm.sqsh"
-
-    def test_a_trailing_slash_does_not_double_up(self, monkeypatch):
+    def test_a_site_root_moves_only_the_directory(self, monkeypatch, preset_image_catalog):
         import validation_presets
 
         monkeypatch.setattr(validation_presets, "shared_container_root", lambda: "/raid/images/")
-        assert validation_presets.resolve_shared_image("/cluster/containers/x.sqsh") == (
-            "/raid/images/x.sqsh"
-        )
+        image = validation_presets.launch_image("nemo-26.04.01")
+        # A trailing slash on the root does not double up.
+        assert image.source == "/raid/images/nvidia+nemo+26.04.01-arm.sqsh"
 
-    def test_a_preset_with_no_shared_image_is_untouched(self, monkeypatch):
+    def test_llmb_presets_read_their_own_store(self, monkeypatch, preset_image_catalog):
         import validation_presets
 
-        monkeypatch.setattr(validation_presets, "shared_container_root", lambda: "/raid/images")
-        assert validation_presets.resolve_shared_image(None) is None
+        monkeypatch.setattr(validation_presets, "llmb_image_root", lambda: "/site/llmb/images")
+        image = validation_presets.launch_image("gpt-oss-cpu", "llmb")
+        assert image.source == "/site/llmb/images/tensorrt-llm+release+1.1.0rc5.sqsh"
 
     def test_no_preset_still_hard_codes_a_site_path(self):
         # The regression this closes: five absolute `/cluster/...` paths that only existed on

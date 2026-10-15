@@ -27,6 +27,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import app as app_module
 import validation_launch
 
+# The presets prepared here stage an image, which the cluster's catalog names (conftest).
+pytestmark = pytest.mark.usefixtures("preset_image_catalog")
+
 # Two racks, because `multirack` legitimately refuses a single one -- the scope means
 # "spans NVLink domains", and one rack is the `rack` scope.
 _RACKS = ["ink50-dh01-h18", "ink50-dh01-h19"]

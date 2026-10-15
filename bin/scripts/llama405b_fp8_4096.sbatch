@@ -30,8 +30,10 @@ set -euo pipefail
 : "${NVIS_LLAMA_EXPECTED_NODE_SHA256:?}"
 : "${NVIS_LLAMA_LOG_DIR:?}"
 : "${NVIS_LLAMA_SCRIPTS_DIR:?}"
-readonly IMAGE_BYTES=42477232128
-readonly IMAGE_SHA256=0829d0c77f38db54848afd095862093a7c62e98778b0b8664b8edff69e273747
+# The image's size and digest are the cluster's image catalog entry (Required by: llama31-405b-fp8),
+# resolved by run-validation-preset.sh -- never literals here, which go stale on a re-import.
+readonly IMAGE_BYTES="${NVIS_LAUNCH_IMAGE_BYTES:?image byte size from the image catalog (NVIS_LAUNCH_IMAGE_BYTES)}"
+readonly IMAGE_SHA256="${NVIS_LAUNCH_IMAGE_SHA256:?image sha256 from the image catalog (NVIS_LAUNCH_IMAGE_SHA256)}"
 # The LLMB install under the cluster's workspace (project setting connection.workspace_dir ->
 # NVIS_WORKSPACE_DIR, carried here by --export=ALL); lib/llmb_paths.inc.sh derives LLMB_INSTALL.
 # shellcheck source=lib/llmb_paths.inc.sh

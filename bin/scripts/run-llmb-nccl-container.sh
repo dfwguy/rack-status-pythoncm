@@ -44,11 +44,16 @@ local_dir="$_configured_local_dir"
 [[ "${NVIS_NODE_IMAGES_P2P:-0}" != 1 || "$rsync_enabled" == 0 ]] || { echo "ERROR: --rsync is off on this cluster: NVIS-P2P distributes its images; run a P2P campaign instead" >&2; exit 2; }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source_image="${RACK_VALIDATION_CONTAINER_ROOT:-/cluster/containers}"; source_image="${source_image%/}/nvidia+nemo+26.04.01-arm.sqsh"
-local_image="${local_dir}/nvidia+nemo+26.04.01-arm.sqsh"
+# The image is the cluster's catalog entry whose Required by names llmb-nccl-container: its file,
+# byte size and SHA256 arrive from Rack Status (NVIS_LAUNCH_IMAGE*), never as literals here.
+# shellcheck source=lib/node_images.inc.sh
+source "${script_dir}/lib/node_images.inc.sh"
+nvis_launch_image llmb-nccl-container || exit 2
+source_image="${RACK_VALIDATION_CONTAINER_ROOT:-/cluster/containers}"; source_image="${source_image%/}/${NVIS_IMAGE_FILE}"
+local_image="${local_dir}/${NVIS_IMAGE_FILE}"
 run_image="$source_image"; [[ "$storage" == local ]] && run_image="$local_image"
-expected_size=42245001216
-expected_sha=55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc
+expected_size="$NVIS_IMAGE_BYTES"
+expected_sha="$NVIS_IMAGE_SHA256"
 expected_nccl=22903
 expected_cuda=13.1
 

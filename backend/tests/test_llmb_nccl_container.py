@@ -20,7 +20,7 @@ REPO = Path(__file__).resolve().parents[2]
 SCRIPTS = REPO / "bin" / "scripts"
 
 
-def test_container_workflow_prepares_exact_nodes(monkeypatch, tmp_path):
+def test_container_workflow_prepares_exact_nodes(monkeypatch, tmp_path, preset_image_catalog):
     nodes = ["ink50-dh01-d01-11", "ink50-dh01-d01-12"]
     monkeypatch.setattr(validation_runs, "_resolve_log_dir", lambda _raw=None: tmp_path)
     monkeypatch.setattr(validation_runs, "_script_exists", lambda _path: True)
@@ -46,8 +46,12 @@ def test_container_workflow_prepares_exact_nodes(monkeypatch, tmp_path):
     assert prep["rsync_to_local"] is True
     assert prep["container_runtime"] == {"nccl": "2.29.3", "cuda": "13.1"}
     assert prep["recipe_contract"].startswith("job147392-shape")
+    # The catalog entry whose Required by names llmb-nccl-container (conftest.PRESET_IMAGES).
     assert prep["image_provenance"]["size"] == 42245001216
-    assert prep["image_provenance"]["sha256"].startswith("55130500")
+    assert prep["image_provenance"]["sha256"] == "a1" * 32
+    assert prep["image_provenance"]["required_by"] == "llmb-nccl-container"
+    assert prep["env_updates"]["NVIS_LAUNCH_IMAGE_SHA256"] == "a1" * 32
+    assert prep["image"].endswith("/nvidia+nemo+26.04.01-arm.sqsh@sha256:" + "a1" * 32)
     assert "differs" in prep["image_provenance"]["status"]
     assert "not a proven result claim" in prep["pmix_gds"]["status"]
     assert "run-llmb-nccl-container.sh" in prep["display_cmd"]
@@ -55,7 +59,7 @@ def test_container_workflow_prepares_exact_nodes(monkeypatch, tmp_path):
     assert prep["env_updates"]["NVIS_PREPARED_NODE_COUNT"] == "2"
 
 
-def test_container_workflow_rejects_non_idle_exact_target(monkeypatch, tmp_path):
+def test_container_workflow_rejects_non_idle_exact_target(monkeypatch, tmp_path, preset_image_catalog):
     node = "ink50-dh01-d01-11"
     monkeypatch.setattr(validation_runs, "_resolve_log_dir", lambda _raw=None: tmp_path)
     monkeypatch.setattr(validation_runs, "_script_exists", lambda _path: True)
@@ -81,6 +85,9 @@ def test_container_dispatcher_dry_run_is_offline_and_non_mutating(tmp_path):
         **os.environ,
         "NVIS_PREPARED_NODE_COUNT": "2",
         "RACK_STATUS_LOG_DIR": str(log_dir),
+        "NVIS_LAUNCH_IMAGE": "nvidia+nemo+26.04.01-arm.sqsh",
+        "NVIS_LAUNCH_IMAGE_BYTES": "42245001216",
+        "NVIS_LAUNCH_IMAGE_SHA256": "a1" * 32,
     }
     proc = subprocess.run(
         [
@@ -97,6 +104,8 @@ def test_container_dispatcher_dry_run_is_offline_and_non_mutating(tmp_path):
     assert not log_dir.exists()
     assert "validation_container_stage.sbatch" in proc.stdout
     assert "NVIS_STAGE_EXPECTED_GPUS=4" in proc.stdout
+    assert f"NVIS_STAGE_EXPECTED_SHA256={'a1' * 32}" in proc.stdout
+    assert "NVIS_STAGE_EXPECTED_SIZE=42245001216" in proc.stdout
     assert "NVIS_STAGE_EXPECTED_NCCL=22903" in proc.stdout
     assert "NVIS_STAGE_EXPECTED_CUDA=13.1" in proc.stdout
     assert "PMIX_MCA_gds=hash" in proc.stdout
@@ -174,10 +183,10 @@ def test_scripts_pin_image_and_truthful_lifecycle():
     dispatcher = (SCRIPTS / "run-llmb-nccl-container.sh").read_text(encoding="utf-8")
     stage = (SCRIPTS / "validation_container_stage.sbatch").read_text(encoding="utf-8")
     shim = (SCRIPTS / "lib/sbatch_pin.inc.sh").read_text(encoding="utf-8")
-    assert "42245001216" in dispatcher
-    assert "55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc" in dispatcher
-    # The basename is pinned; the directory is the cluster's node image cache.
-    assert 'local_image="${local_dir}/nvidia+nemo+26.04.01-arm.sqsh"' in dispatcher
+    # The image is the catalog's, handed over by Rack Status; the directory is the node cache.
+    assert "nvis_launch_image llmb-nccl-container" in dispatcher
+    assert 'local_image="${local_dir}/${NVIS_IMAGE_FILE}"' in dispatcher
+    assert 'expected_sha="$NVIS_IMAGE_SHA256"' in dispatcher
     assert dispatcher.count("--wait") >= 2
     assert "LLMB_NCCL_CONTAINER_PASS" in dispatcher
     assert "NVIS_FABRIC_SKIP=1" in dispatcher

@@ -42,6 +42,7 @@ import p2p_rosters
 import p2p_snapshot
 import paths
 import throttle
+import validation_presets
 import workflow_engine
 from audit.actions import action
 from catalog import context as catalog_context
@@ -259,7 +260,9 @@ def p2p_catalog_get():
         keep = ("order", "name", "filename", "bytes", "sha256", "required_by")
         images = [{k: img.get(k) for k in keep} for img in loaded["images"]]
         authored = False
-    return jsonify({"ok": True, "cluster_id": cluster.id, "authored": authored, "images": images})
+    # The names an image's Required by may carry: each is a launch that stages the image naming it.
+    return jsonify({"ok": True, "cluster_id": cluster.id, "authored": authored, "images": images,
+                    "consumers": validation_presets.image_consumers()})
 
 
 @bp.route("/catalog", methods=["PUT"])

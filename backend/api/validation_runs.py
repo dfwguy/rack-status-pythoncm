@@ -1532,6 +1532,11 @@ def _prepare_run_llmb_nccl_container(body: dict) -> tuple[dict | None, tuple[obj
         unknown = [node for node in nodes if node.casefold() not in known]
         if unknown:
             return None, (jsonify({"ok": False, "error": f"nodes not in current Slurm inventory: {', '.join(unknown)}"}), 409)
+    # Its image is the catalog entry whose Required by names this workflow; see launch_image.
+    try:
+        image = validation_presets.launch_image(validation_presets.LLMB_NCCL_CONTAINER)
+    except validation_presets.LaunchImageError as exc:
+        return None, (jsonify({"ok": False, "error": str(exc), "reason": "missing_preset_image"}), 409)
     try:
         states, ineligible = _validation_node_eligibility(nodes)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
@@ -1555,10 +1560,10 @@ def _prepare_run_llmb_nccl_container(body: dict) -> tuple[dict | None, tuple[obj
         "storage": storage, "rsync_to_local": rsync, "cmd": cmd,
         "container_runtime": {"nccl": "2.29.3", "cuda": "13.1"},
         "recipe_contract": "job147392-shape (24 tests, 4 ranks/GPUs per node, PMIx)",
+        # The legacy launch digest covers "image": a catalog edit between review and launch is refused.
+        "image": f"{image.source}@sha256:{image.sha256}",
         "image_provenance": {
-            "source": "/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh",
-            "size": 42245001216,
-            "sha256": "55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc",
+            **image.artifact(storage),
             "status": (
                 "fleet-staged squashfs differs from the original job 147392 image digest; "
                 "embedded NCCL 2.29.3 matches the proven runtime"
@@ -1571,6 +1576,7 @@ def _prepare_run_llmb_nccl_container(body: dict) -> tuple[dict | None, tuple[obj
         "env_updates": {
             **_launch_env_from_body(body, scope=nccl_env_scope(len(racks), len(nodes))),
             "NVIS_PREPARED_NODE_COUNT": str(len(nodes)),
+            **image.env(),
         },
         "campaign": campaign_id,
     }, None)

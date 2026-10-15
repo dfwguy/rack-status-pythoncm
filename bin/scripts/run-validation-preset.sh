@@ -9,7 +9,9 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 # Audited dispatcher for Rack Status validation presets.  The browser chooses only
-# a preset and exact targets; commands/images/version gates stay code-owned here.
+# a preset and exact targets; commands and version gates stay code-owned here. Which
+# image a preset stages -- file, byte size, SHA256 -- is the cluster's image catalog
+# entry whose Required by names the preset (nvis_launch_image, lib/node_images.inc.sh).
 # Author: Rafael M. Koike & Cursor Agent ("Ada")
 set -euo pipefail
 
@@ -35,10 +37,8 @@ EOF
 preset=""; nodelist=""; storage="nfs"; rsync_enabled=0
 local_container_dir="${NVIS_NODE_CONTAINER_DIR:-/tmp/containers}"; local_container_dir="${local_container_dir%/}"; log_dir="${RACK_STATUS_LOG_DIR:-$PWD}"; dry_run=0
 # Where this site mounts shared container images. A mount point is a site fact, and it was
-# hard-coded into five image paths here, so a preset could not run anywhere but Nscale. Only
-# the directory is configurable: the basenames below are the reviewed artifacts and the
-# size/SHA256 gates in stage_image still have to pass, so a site may point at its own mirror
-# and cannot substitute a different image.
+# hard-coded into five image paths here, so a preset could not run anywhere but Nscale. The
+# file in it is the catalog's (preset_image below), and stage_image gates on its size/SHA256.
 container_root="${RACK_VALIDATION_CONTAINER_ROOT:-/cluster/containers}"; container_root="${container_root%/}"
 group_nodelists=()
 while (($#)); do
@@ -84,6 +84,8 @@ local_container_dir="$_configured_local_dir"
 export RACK_JOB_LOG_DIR="$log_dir"
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/node_images.inc.sh
+source "${script_dir}/lib/node_images.inc.sh"
 if (( dry_run )); then
   node_count="${NVIS_PREPARED_NODE_COUNT:?NVIS_PREPARED_NODE_COUNT is required for offline dry-run}"
   IFS=, read -r -a nodes <<<"$nodelist"
@@ -181,6 +183,16 @@ stage_image() {
   fi
 }
 
+# preset_image <store root> — the image this preset stages, from the catalog entry whose Required
+# by names the preset: sets source_image (in the store), local_image (node cache) and image (the one
+# the job runs, by --storage), with NVIS_IMAGE_BYTES / NVIS_IMAGE_SHA256 for stage_image's gates.
+preset_image() {
+  nvis_launch_image "$preset" || exit 2
+  source_image="${1%/}/${NVIS_IMAGE_FILE}"
+  local_image="${local_container_dir}/${NVIS_IMAGE_FILE}"
+  if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi
+}
+
 # LLMB's own image store, separate from the container mount above and parameterised for the
 # same reason: its install paths already were, and leaving only the image absolute meant the
 # one hard-coded path left in this preset.
@@ -211,13 +223,11 @@ case "$preset" in
 
   llama31-405b-fp8)
     (( node_count == 256 )) || { echo "ERROR: Llama 3.1 405B preset requires exactly 256 nodes/1024 GPUs; got ${node_count}" >&2; exit 2; }
-    source_image="${container_root}/nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh"
-    local_image="${local_container_dir}/nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh"
-    if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi
+    preset_image "$container_root"
     node_sha="$(printf '%s\n' "${nodes[@]}" | sort | sha256sum | awk '{print $1}')"
     llama_batch="${script_dir}/llama405b_fp8_1024.sbatch"
     [[ -r "$llama_batch" ]] || { echo "ERROR: 1024-GPU Llama batch missing: $llama_batch" >&2; exit 2; }
-    export_set="ALL,NVIS_LLAMA_SOURCE_IMAGE=${source_image},NVIS_LLAMA_RUN_IMAGE=${image},NVIS_LLAMA_STORAGE=${storage},NVIS_LLAMA_RSYNC=${rsync_enabled},NVIS_LLAMA_EXPECTED_NODE_SHA256=${node_sha},NVIS_LLAMA_SCRIPTS_DIR=${script_dir},NVIS_LLAMA_LOG_DIR=${log_dir}"
+    export_set="ALL,NVIS_LLAMA_SOURCE_IMAGE=${source_image},NVIS_LLAMA_RUN_IMAGE=${image},NVIS_LLAMA_STORAGE=${storage},NVIS_LLAMA_RSYNC=${rsync_enabled},NVIS_LLAMA_EXPECTED_NODE_SHA256=${node_sha},NVIS_LLAMA_SCRIPTS_DIR=${script_dir},NVIS_LLAMA_LOG_DIR=${log_dir},NVIS_LAUNCH_IMAGE_BYTES=${NVIS_IMAGE_BYTES},NVIS_LAUNCH_IMAGE_SHA256=${NVIS_IMAGE_SHA256}"
     run_cmd sbatch --wait --no-requeue --nodes=256 --nodelist="$nodelist" --ntasks-per-node=4 --gpus-per-node=4 \
       --output="${log_dir%/}/llama405b-fp8-1024-%j.out" --export="$export_set" "$llama_batch"
     ;;
@@ -225,10 +235,8 @@ case "$preset" in
   gpt-oss-cpu)
     _llmb_paths
     (( node_count >= 1 && node_count <= 256 )) || { echo "ERROR: GPT-OSS CPU fan-out requires 1-256 exact nodes; got ${node_count}" >&2; exit 2; }
-    source_image="${llmb_image_root}/tensorrt-llm+release+1.1.0rc5.sqsh"
-    local_image="${local_container_dir}/tensorrt-llm+release+1.1.0rc5.sqsh"
-    if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi
-    stage_image "$source_image" "$local_image" 30284881920 80de1820829418a3789a4ff5ce0c661f669ffb07c013552ac648822b9c1f9e72 0
+    preset_image "$llmb_image_root"
+    stage_image "$source_image" "$local_image" "$NVIS_IMAGE_BYTES" "$NVIS_IMAGE_SHA256" 0
     cpu_launch="${llmb_repo}/microbenchmarks/cpu_overhead/launch.sh"
     [[ -r "$cpu_launch" || "$dry_run" == 1 ]] || { echo "ERROR: GPT-OSS CPU launch script missing: $cpu_launch" >&2; exit 2; }
     model="${llmb_install}/workloads/microbenchmark_cpu_overhead/gpt-oss-120b/metal/model.bin"
@@ -279,20 +287,16 @@ case "$preset" in
     (( dry_run )) || git -C "$llmb_repo" diff --quiet v26.06.01 -- microbenchmarks/system_info || {
       echo "ERROR: installed system_info recipe differs from NVIDIA v26.06.01" >&2; exit 2;
     }
-    source_image="${container_root}/nvidia+nemo+26.04.01-arm.sqsh"
-    local_image="${local_container_dir}/nvidia+nemo+26.04.01-arm.sqsh"
-    if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi
-    stage_image "$source_image" "$local_image" 42245001216 55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc 1
+    preset_image "$container_root"
+    stage_image "$source_image" "$local_image" "$NVIS_IMAGE_BYTES" "$NVIS_IMAGE_SHA256" 1
     sysinfo_runner="${script_dir}/run-exemplar-system-info.sh"
     run_cmd bash "$sysinfo_runner" --nodelist "$nodelist" --image "$image" --log-dir "$log_dir" \
       "${STAGE_DEPENDENCY[@]}"
     ;;
 
   nemo-26.04.01)
-    source_image="${container_root}/nvidia+nemo+26.04.01-arm.sqsh"
-    local_image="${local_container_dir}/nvidia+nemo+26.04.01-arm.sqsh"
-    if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi
-    stage_image "$source_image" "$local_image" 42245001216 55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc 1
+    preset_image "$container_root"
+    stage_image "$source_image" "$local_image" "$NVIS_IMAGE_BYTES" "$NVIS_IMAGE_SHA256" 1
     nemo_xrack="${NVIS_PRESET_SCOPE_MULTIRACK:-0}"
     export_set="ALL,NVIS_NEMO_CONT=${image},NVIS_SCRIPTS_DIR=${script_dir},NVIS_VAR_DIR=${NVIS_VAR_DIR:-},NVIS_NEMO_XRACK=${nemo_xrack},NVIS_NEMO_MAX_STEPS=50"
     run_cmd sbatch --wait --no-requeue "${STAGE_DEPENDENCY[@]}" --nodes="$node_count" --nodelist="$nodelist" --ntasks-per-node=4 --gpus-per-node=4 --cpus-per-task=36 \
@@ -308,10 +312,8 @@ case "$preset" in
     # deterministically turn an otherwise healthy run into TIMEOUT.
     mnubergemm_runtime_seconds=3300
     mnubergemm_slurm_time_limit=01:00:00
-    source_image="${container_root}/mnubergemm-26.03-v1.17-arm.sqsh"
-    local_image="${local_container_dir}/mnubergemm-26.03-v1.17-arm.sqsh"
-    if [[ "$storage" == local ]]; then image="$local_image"; else image="$source_image"; fi
-    stage_image "$source_image" "$local_image" 13949554688 9832dda6e80c8719e74f81ce617cac3abb77399e48d5385a38e86a040cad93e6 0
+    preset_image "$container_root"
+    stage_image "$source_image" "$local_image" "$NVIS_IMAGE_BYTES" "$NVIS_IMAGE_SHA256" 0
     export_set="ALL,NVIS_MNUBERGEMM_CONT=${image},NVIS_BIN_SCRIPTS=${script_dir},MNUBERGEMM_TIME_TO_RUN=${mnubergemm_runtime_seconds}"
     if (( ${#group_nodelists[@]} == 0 )); then
       group_nodelists=("$nodelist")

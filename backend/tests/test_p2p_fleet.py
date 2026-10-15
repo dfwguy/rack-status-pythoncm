@@ -530,6 +530,12 @@ class TestP2pCatalogApi:
         body = client.get("/api/p2p/catalog").get_json()
         assert body["ok"] and body["authored"] is False and body["images"]
 
+    def test_get_names_every_launch_an_image_can_be_required_by(self, client):
+        # The editor picks Required by from these, so a typo cannot leave a launch with no image.
+        _set_active_p2p(True)
+        ids = {c["id"] for c in client.get("/api/p2p/catalog").get_json()["consumers"]}
+        assert {"nemo-26.04.01", "nemo-xrack", "llmb-nccl-container"} <= ids
+
     def test_put_then_get_and_status_reflect_it(self, client):
         _set_active_p2p(True)
         imgs = [{"order": 1, "name": "Only", "filename": "only.sqsh", "bytes": 5, "sha256": "b" * 64}]

@@ -935,10 +935,18 @@ def _upgrade_legacy_record(rec: dict[str, Any], *, activity_id: str) -> dict[str
     tool = _normalize_tool(tool_raw)
     racks = _sanitize_racks(rec.get("racks") or [])
     rack = str(rec.get("rack") or (racks[0] if racks else ""))
-    scope = str(rec.get("scope") or ("multirack" if len(racks) > 1 else "rack"))
-    if tool == "nemo-xrack":
-        scope = "multirack"
-    stage = str(rec.get("stage") or ("multirack" if scope == "multirack" else "other"))
+    # A legacy row with no scope was a Multirack NEMO job (that is what multirack_jobs.json held);
+    # a row that states its scope keeps it -- the NeMo preset records tool nemo-xrack at rack scope
+    # too, and forcing it to multirack would tag a one-rack run as a multi-rack one.
+    scope = str(rec.get("scope") or "").strip()
+    if not scope:
+        scope = "multirack" if tool == "nemo-xrack" or len(racks) > 1 else "rack"
+    # "other" is "no particular stage", not a stage: a multirack run states its span either way.
+    # The preset path recorded "other" for every launch, so a multi-rack NeMo preset run showed
+    # no multirack tag beside the Multirack NEMO runs on the same racks.
+    stage = str(rec.get("stage") or "").strip()
+    if not stage or stage == "other":
+        stage = "multirack" if scope == "multirack" else "other"
     out = {
         "activity_id": activity_id,
         "job_id": activity_id,

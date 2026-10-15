@@ -210,6 +210,32 @@ order	name	filename	bytes	sha256
 `NVIS_CATALOG_PATH` (e.g. `/cluster/containers/.nvis-p2p/catalog/`) and are served by the origin at
 `http://<appserver>:12130/.nvis-p2p/catalog/images.tsv`.
 
+### Required by — which launch runs which image
+
+`required_by` names the launches that run an image. Every launch that stages a container finds its
+image here, and nowhere else: the filename, the byte size and the SHA256 that the stage gates check
+are this entry's. No launcher carries an image name or digest of its own.
+
+| Required by | Launch |
+|---|---|
+| `nemo-26.04.01` | NeMo 26.04.01 validation preset (rack and multi-rack) |
+| `exemplar-system-info` | DGXC Exemplar system_info preset |
+| `llama31-405b-fp8` | Llama 3.1 405B FP8 preset |
+| `gpt-oss-cpu` | GPT-OSS CPU microbenchmark preset (from the LLMB image store) |
+| `mnubergemm-26.03-v1.17` | MNUberGEMM preset |
+| `nemo-xrack` | Multirack NEMO |
+| `validation-singlerack` | NeMo single-rack validation |
+| `llmb-nccl-container` | LLMB NCCL container sweep (24 tests) |
+
+The Catalog Editor offers exactly these names (`GET /api/p2p/catalog` returns them as `consumers`).
+A launch is refused before it reaches Slurm when no image names it, when two images name it, or when
+the image it names has no bytes or SHA256 — the message says which, and what to set. The resolved
+image is part of the reviewed plan, so editing the catalog between review and launch changes the
+plan hash and the launch must be reviewed again. The launcher receives it as `NVIS_LAUNCH_IMAGE`,
+`NVIS_LAUNCH_IMAGE_BYTES` and `NVIS_LAUNCH_IMAGE_SHA256`. A manual run may set `NVIS_LAUNCH_IMAGE`
+alone; the size and digest then come from the catalog published beside the scripts
+(`config/image-catalog.tsv`).
+
 ## Script inventory
 
 Server-side (`$NVIS_P2P_ROOT/current/scripts/`):

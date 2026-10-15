@@ -33,6 +33,18 @@ setting must move everything; a new deployment must never need a script edit.
 Scripts, logs and workspace are the three roots agreed 2026-10-08, to be consolidated under one
 cluster home (`docs/explanation/the-cluster-home-directory.md`).
 
+## Not only paths: every setting an action uses
+
+The same rule holds for every value a launch or action depends on, not just locations: if it can
+differ between sites or change over time, it comes from the Project/Cluster record or the tool's
+settings — and if no setting holds it yet, add one there, never a literal. Container images are the
+worked example: which image a launch stages, its byte size and its SHA256 are the cluster's **image
+catalog** entry whose `required_by` names the launch (`validation_presets.launch_image`, served to
+scripts as `NVIS_LAUNCH_IMAGE*`, read by `lib/node_images.inc.sh:nvis_launch_image`). The presets once
+hard-coded a digest that NC's catalog had already corrected, and every multi-rack preset launch failed
+its stage gate on a healthy image (2026-10-14). CI guard:
+`backend/tests/test_preset_image_from_catalog.py::test_no_launch_source_carries_an_image_digest`.
+
 ## Never
 
 - a `/home/<user>/...` literal or a `/home/*/` glob in script code (CI guard:

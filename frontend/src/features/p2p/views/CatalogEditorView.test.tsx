@@ -81,3 +81,27 @@ describe("CatalogEditorView — the launchers' copy", () => {
     expect(m.publishCatalogToScripts).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("CatalogEditorView — Required by", () => {
+  it("picks the launches from the names the backend reports and saves them unchanged", async () => {
+    const named = { ...image, required_by: ["nemo-26.04.01", "nemo-xrack"] };
+    m.getCatalog.mockResolvedValue({
+      ok: true, cluster_id: "default", authored: true, images: [named],
+      consumers: [
+        { id: "nemo-26.04.01", label: "NeMo 26.04.01" },
+        { id: "nemo-xrack", label: "Multirack NEMO" },
+      ],
+    });
+    m.saveCatalog.mockResolvedValue({ ok: true, cluster_id: "default", authored: true, images: [named] });
+    render(<CatalogEditorView />);
+    // A picker, not a free-text field: a typo there leaves a launch with no image.
+    await screen.findByText("Required by");
+    // The selected launches show as the picker's tags (its options are requiredByItems, tested in
+    // lib/requiredBy.test.ts -- the KUI listbox does not render under jsdom).
+    const tags = screen.getAllByRole("option", { hidden: true }).map((o) => o.textContent);
+    expect(tags).toEqual(["nemo-26.04.01", "nemo-xrack"]);
+    expect(screen.queryByPlaceholderText(/Comma-separated/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(m.saveCatalog).toHaveBeenCalledWith([named]));
+  });
+});

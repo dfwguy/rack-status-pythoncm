@@ -291,6 +291,48 @@ def catalog_from_fixture(tmp_path, monkeypatch):
     catalog_store._bump_generation()
 
 
+#: One pinned image per launch that stages one, keyed by the id its catalog ``required_by`` names.
+#: Deliberately NOT the shipped digests: a launch path that still carried a literal would pass a
+#: test that used the real value, so these are fakes only the catalog can supply.
+PRESET_IMAGES = {
+    "nemo-26.04.01": ("nvidia+nemo+26.04.01-arm.sqsh", 42245001216, "a1" * 32),
+    "exemplar-system-info": ("nvidia+nemo+26.04.01-arm.sqsh", 42245001216, "a1" * 32),
+    "llmb-nccl-container": ("nvidia+nemo+26.04.01-arm.sqsh", 42245001216, "a1" * 32),
+    "llama31-405b-fp8": ("nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh", 42488647680, "b2" * 32),
+    "mnubergemm-26.03-v1.17": ("mnubergemm-26.03-v1.17-arm.sqsh", 13949554688, "c3" * 32),
+    "gpt-oss-cpu": ("tensorrt-llm+release+1.1.0rc5.sqsh", 30284881920, "d4" * 32),
+}
+
+
+@pytest.fixture
+def preset_image_catalog(monkeypatch):
+    """Give the active cluster an image catalog that names an image for every staging launch.
+
+    A preset's image is the catalog entry whose ``required_by`` names it (``validation_presets
+    .launch_image``), so a test that prepares one needs a catalog, exactly as a cluster does.
+    Installs the full catalog and returns ``use``: ``use()`` re-installs a fresh full catalog and
+    returns it, ``use(catalog)`` installs a test's own.
+    """
+    import p2p_catalog
+    from catalog import models
+
+    def full() -> models.P2pCatalog:
+        by_file: dict[str, models.P2pCatalogImage] = {}
+        for consumer, (filename, size, sha) in PRESET_IMAGES.items():
+            image = by_file.setdefault(filename, models.P2pCatalogImage(
+                order=len(by_file) + 1, name=filename, filename=filename, bytes=size, sha256=sha))
+            image.required_by.append(consumer)
+        return models.P2pCatalog(cluster_id="default", images=list(by_file.values()))
+
+    def use(catalog: models.P2pCatalog | None = None) -> models.P2pCatalog:
+        installed = catalog if catalog is not None else full()
+        monkeypatch.setattr(p2p_catalog, "get_catalog", lambda _cid, _repo=None: installed)
+        return installed
+
+    use()
+    return use
+
+
 @pytest.fixture(autouse=True)
 def _restore_the_authorization_engine():
     """Put a known engine back after every test.

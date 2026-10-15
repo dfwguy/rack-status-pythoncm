@@ -861,6 +861,15 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         return None, (jsonify({"ok": False, "error": f"{preset.id} supports at most {preset.max_nodes} node(s); resolved {len(nodes)}"}), 400)
     if preset.exact_nodes is not None and len(nodes) != preset.exact_nodes:
         return None, (jsonify({"ok": False, "error": f"{preset.id} requires exactly {preset.exact_nodes} nodes/1024 GPUs; resolved {len(nodes)}"}), 409)
+    # The image is the cluster's catalog entry that names this preset in Required by -- a
+    # configuration fact, refused here before anything is asked of the scheduler.
+    image = None
+    if preset.image_store:
+        try:
+            image = validation_presets.launch_image(preset.id, preset.image_store)
+        except validation_presets.LaunchImageError as exc:
+            return None, (jsonify({"ok": False, "error": str(exc), "reason": "missing_preset_image",
+                                   "preset_id": preset.id}), 409)
     try:
         node_states, ineligible = _validation_node_eligibility(nodes)
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
@@ -883,15 +892,9 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         for group in rack_node_groups:
             cmd += ["--group-nodelist", ",".join(str(node) for node in group["nodes"])]
     display_cmd = " ".join(shlex.quote(part) for part in cmd)
-    # Re-rooted at this site's container mount. Only the directory moves -- the basename is
-    # the reviewed artifact, and the size and SHA256 gates below still have to pass, so a
-    # site can point at its own mirror and cannot substitute a different image.
-    shared_image = validation_presets.resolve_shared_image(preset.shared_image)
-    local_image = validation_presets.resolve_local_image(preset.local_image)
-    image_path = local_image if options["storage"] == "local" else shared_image
     checks = ["exact Slurm node identity", "scheduler eligibility at allocation time"]
-    if preset.shared_image:
-        checks += ["allowlisted image byte size", "allowlisted image SHA256"]
+    if image is not None:
+        checks += ["image catalog byte size", "image catalog SHA256"]
     if preset.requires_infiniband:
         checks += ["/dev/infiniband and /sys/class/infiniband visibility"]
     if preset.id == "nccl-2.31.2":
@@ -909,6 +912,8 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
                    "NVIS_PRESET_SCOPE_MULTIRACK": "1" if scope == "multirack" else "0"}
     if workspace:
         env_updates["NVIS_WORKSPACE_DIR"] = workspace
+    if image is not None:
+        env_updates.update(image.env())
     plan = {
         "preset_id": preset.id,
         "validation": preset.kind,
@@ -929,10 +934,9 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         "max_steps": options["max_steps"],
         "max_runtime_minutes": options["max_runtime_minutes"],
         "requires_infiniband": options["requires_infiniband"],
-        # `source` is the resolved path so the reviewed plan shows the operator the file that
-        # will actually be staged, not the shipped default they may not be using.
-        "artifact": ({"path": image_path, "source": shared_image, "size": preset.image_size,
-                      "sha256": preset.image_sha256} if preset.shared_image else None),
+        # The catalog's image, resolved for this cluster. It is in the plan digest below, so a
+        # catalog edit between review and launch changes the hash and the launch is refused.
+        "artifact": image.artifact(str(options["storage"])) if image is not None else None,
         "checks": checks,
         "node_states": node_states,
         "command_display": display_cmd,

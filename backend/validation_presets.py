@@ -12,6 +12,12 @@
 The catalogue is intentionally code-owned rather than accepting arbitrary commands,
 images, versions, or paths from the browser.  Flask supplies the resolved exact node
 list; this module turns the remaining operator choices into a stable launch plan.
+
+Which container image a preset runs is NOT code-owned: it is the cluster's image catalog entry
+whose ``required_by`` names the preset (:func:`launch_image`). The filename, byte size and SHA256
+used to live here as literals, and went stale the moment a site re-imported an image -- NC's
+catalog was corrected to the real digest while these literals kept the old one, so every NeMo
+preset launch failed its stage gate on a healthy image.
 """
 from __future__ import annotations
 
@@ -21,8 +27,7 @@ from typing import Any
 
 #: Default node-local image cache. Like the shared root below it is a site fact, configured per
 #: cluster (``connection.node_container_dir`` -> ``NVIS_NODE_CONTAINER_DIR``); see
-#: :func:`node_container_dir`. The preset ``local_image`` paths are spelled against this default
-#: and re-rooted per call by :func:`resolve_local_image`.
+#: :func:`node_container_dir`.
 LOCAL_CONTAINER_DIR = "/tmp/containers"
 CUDA_REQUIRED = "13.0+"
 NCCL_REQUIRED = "2.30.7"
@@ -40,10 +45,10 @@ DEFAULT_LLMB_IMAGE_ROOT = "/cluster/llmb/images"
 def shared_container_root() -> str:
     """The site's shared image directory.
 
-    Configurable because it is a **mount point**, which is a site fact. The image *filename
-    and digest* stay code-owned in the presets below, and that division is the security
-    boundary: a site may point at its own mirror of a reviewed image, and cannot substitute
-    a different image, because the size and SHA256 gates still have to pass.
+    Configurable because it is a **mount point**, which is a site fact. Which file in it a
+    preset runs -- and the size and SHA256 that file must have -- is the cluster's image
+    catalog (:func:`launch_image`), an authored record behind its own permissions; a launch
+    body can choose neither.
     """
     from config_env import _eget
 
@@ -52,19 +57,11 @@ def shared_container_root() -> str:
     )
 
 
-def resolve_shared_image(path: str | None) -> str | None:
-    """Re-root a preset's shared image at this site's container directory.
+def llmb_image_root() -> str:
+    """LLMB's own image store on the launch host (``LLMB_IMAGE_ROOT``), a mount point like the above."""
+    from config_env import _eget
 
-    Only the directory moves; the basename is the reviewed artifact and is preserved
-    exactly. Resolved per call rather than baked at import, so a cluster overlay switching
-    sites takes effect without a restart.
-    """
-    if not path:
-        return path
-    root = shared_container_root().rstrip("/")
-    if root == DEFAULT_SHARED_CONTAINER_ROOT:
-        return path
-    return f"{root}/{path.rsplit('/', 1)[-1]}"
+    return (_eget("LLMB_IMAGE_ROOT", "") or "").strip() or DEFAULT_LLMB_IMAGE_ROOT
 
 
 def node_container_dir() -> str:
@@ -106,6 +103,85 @@ def check_local_container_dir(supplied: object) -> str:
     return configured
 
 
+#: Where a launcher finds the image it stages: the cluster's shared container mount, or LLMB's own
+#: store. Code owns only this choice of mount; the file and its digest are the catalog's.
+IMAGE_STORES = ("shared", "llmb")
+
+
+def image_store_root(store: str) -> str:
+    """The launch host's directory for *store*, resolved per call like the roots it names."""
+    if store == "llmb":
+        return llmb_image_root()
+    if store == "shared":
+        return shared_container_root()
+    raise ValueError(f"unknown image store {store!r}; expected one of {', '.join(IMAGE_STORES)}")
+
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+class LaunchImageError(ValueError):
+    """The cluster's catalog does not (unambiguously, with a pin) name the image a launch needs."""
+
+
+@dataclass(frozen=True)
+class LaunchImage:
+    """The container image a launch stages, as the cluster's image catalog states it."""
+
+    consumer: str
+    filename: str
+    bytes: int
+    sha256: str
+    source: str  # the file in the shared store, as the launch host sees it
+    local: str  # the same basename in this cluster's node cache
+
+    def artifact(self, storage: str) -> dict[str, Any]:
+        """The reviewed-plan view: what is staged, from where, and the gates it must pass."""
+        return {"path": self.local if storage == "local" else self.source, "source": self.source,
+                "filename": self.filename, "size": self.bytes, "sha256": self.sha256,
+                "required_by": self.consumer}
+
+    def env(self) -> dict[str, str]:
+        """The launcher's input (``lib/node_images.inc.sh:nvis_launch_image``)."""
+        return {"NVIS_LAUNCH_IMAGE": self.filename, "NVIS_LAUNCH_IMAGE_BYTES": str(self.bytes),
+                "NVIS_LAUNCH_IMAGE_SHA256": self.sha256}
+
+
+def launch_image(consumer: str, store: str = "shared") -> LaunchImage:
+    """The image *consumer* (a preset or tool id) runs, from the active cluster's image catalog.
+
+    The catalog entry whose ``required_by`` lists *consumer* is the answer -- the same rule
+    ``p2p_catalog.image_for_tool`` applies to the legacy NeMo launchers, so one edit in the Catalog
+    Editor moves every launch path. An entry must carry its byte size and SHA256: those are the
+    stage gates, and an unpinned image is refused rather than staged unchecked. Raises
+    :class:`LaunchImageError` with the fix in the message.
+    """
+    import p2p_catalog
+    from catalog import context as catalog_context
+
+    _project, cluster, _platform = catalog_context.resolve()
+    where = "Artifact Distribution -> Catalog"
+    if cluster is None:
+        raise LaunchImageError(f"{consumer}: no active cluster, so no image catalog to resolve its image from")
+    try:
+        image = p2p_catalog.image_for_tool(cluster.id, consumer)
+    except ValueError as exc:
+        raise LaunchImageError(f"image catalog: {exc}") from None
+    if image is None:
+        raise LaunchImageError(
+            f"no image in this cluster's catalog is required by {consumer!r}: add {consumer} to the "
+            f"Required by of its image in {where}"
+        )
+    if image.bytes <= 0 or not _SHA256_RE.match(image.sha256):
+        raise LaunchImageError(
+            f"{image.filename} (required by {consumer}) is not pinned in the image catalog: set its "
+            f"bytes and sha256 in {where}"
+        )
+    root = image_store_root(store).rstrip("/")
+    return LaunchImage(consumer=consumer, filename=image.filename, bytes=image.bytes, sha256=image.sha256,
+                       source=f"{root}/{image.filename}", local=str(resolve_local_image(image.filename)))
+
+
 @dataclass(frozen=True)
 class Preset:
     id: str
@@ -114,10 +190,9 @@ class Preset:
     kind: str
     scopes: tuple[str, ...]
     container_profile: str | None = None
-    shared_image: str | None = None
-    local_image: str | None = None
-    image_size: int | None = None
-    image_sha256: str | None = None
+    #: The store this preset stages its image from (one of :data:`IMAGE_STORES`), or ``None`` for
+    #: a preset with no container. Which image is the catalog's: its ``required_by`` names this id.
+    image_store: str | None = None
     cuda_version: str | None = None
     nccl_version: str | None = None
     max_steps: int | None = None
@@ -129,8 +204,8 @@ class Preset:
     def public(self) -> dict[str, Any]:
         row = asdict(self)
         row["defaults"] = {
-            "storage": "local" if self.local_image else "nfs",
-            "rsync": bool(self.local_image) and not node_images_p2p_managed(),
+            "storage": "local" if self.image_store else "nfs",
+            "rsync": bool(self.image_store) and not node_images_p2p_managed(),
             "local_container_dir": node_container_dir(),
             "p2p_managed": node_images_p2p_managed(),
             "container_profile": self.container_profile,
@@ -147,8 +222,16 @@ class Preset:
             "max_nodes": self.max_nodes,
             "exemplar_tag": EXEMPLAR_TAG if self.id == "exemplar-system-info" else None,
         }
+        # The image as this cluster's catalog states it, or why it cannot -- so the picker says
+        # "add nemo-26.04.01 to Required by" before the operator prepares a launch, not after.
+        row["image"] = None
+        if self.image_store:
+            try:
+                row["image"] = launch_image(self.id, self.image_store).artifact(row["defaults"]["storage"])
+            except LaunchImageError as exc:
+                row["image"] = {"error": str(exc)}
         for key in (
-            "scopes", "shared_image", "local_image", "image_size", "image_sha256", "cuda_version", "nccl_version",
+            "scopes", "image_store", "cuda_version", "nccl_version",
             "max_steps", "max_runtime_minutes", "requires_infiniband", "max_nodes", "exact_nodes", "container_profile",
         ):
             row.pop(key, None)
@@ -173,10 +256,7 @@ PRESETS: tuple[Preset, ...] = (
         "llama405b",
         ("multirack",),
         container_profile="nemo-26.04.01-nccl2.30.7",
-        shared_image=f"{DEFAULT_SHARED_CONTAINER_ROOT}/nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh",
-        local_image=f"{LOCAL_CONTAINER_DIR}/nvidia+nemo+26.04.01-arm-nccl2.30.7.sqsh",
-        image_size=42477232128,
-        image_sha256="0829d0c77f38db54848afd095862093a7c62e98778b0b8664b8edff69e273747",
+        image_store="shared",
         nccl_version="2.30.7",
         max_steps=50,
         requires_infiniband=True,
@@ -189,10 +269,7 @@ PRESETS: tuple[Preset, ...] = (
         "gpt_oss",
         ("node", "rack", "multirack"),
         container_profile="tensorrt-llm-1.1.0rc5",
-        shared_image=f"{DEFAULT_LLMB_IMAGE_ROOT}/tensorrt-llm+release+1.1.0rc5.sqsh",
-        local_image=f"{LOCAL_CONTAINER_DIR}/tensorrt-llm+release+1.1.0rc5.sqsh",
-        image_size=30284881920,
-        image_sha256="80de1820829418a3789a4ff5ce0c661f669ffb07c013552ac648822b9c1f9e72",
+        image_store="llmb",
         max_nodes=256,
     ),
     Preset(
@@ -202,10 +279,7 @@ PRESETS: tuple[Preset, ...] = (
         "exemplar_sysinfo",
         ("node", "rack", "multirack"),
         container_profile="nemo-26.04.01",
-        shared_image=f"{DEFAULT_SHARED_CONTAINER_ROOT}/nvidia+nemo+26.04.01-arm.sqsh",
-        local_image=f"{LOCAL_CONTAINER_DIR}/nvidia+nemo+26.04.01-arm.sqsh",
-        image_size=42245001216,
-        image_sha256="55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc",
+        image_store="shared",
         requires_infiniband=True,
     ),
     Preset(
@@ -215,10 +289,7 @@ PRESETS: tuple[Preset, ...] = (
         "nemo",
         ("rack", "multirack"),
         container_profile="nemo-26.04.01",
-        shared_image=f"{DEFAULT_SHARED_CONTAINER_ROOT}/nvidia+nemo+26.04.01-arm.sqsh",
-        local_image=f"{LOCAL_CONTAINER_DIR}/nvidia+nemo+26.04.01-arm.sqsh",
-        image_size=42245001216,
-        image_sha256="55130500d8b9cdb0b2be21f859c2ee6a10040d236e5173a11d94e51b3f9892cc",
+        image_store="shared",
         max_steps=50,
         requires_infiniband=True,
     ),
@@ -229,10 +300,7 @@ PRESETS: tuple[Preset, ...] = (
         "mnubergemm",
         ("node", "rack", "multirack"),
         container_profile="mnubergemm-26.03-v1.17-arm",
-        shared_image=f"{DEFAULT_SHARED_CONTAINER_ROOT}/mnubergemm-26.03-v1.17-arm.sqsh",
-        local_image=f"{LOCAL_CONTAINER_DIR}/mnubergemm-26.03-v1.17-arm.sqsh",
-        image_size=13949554688,
-        image_sha256="9832dda6e80c8719e74f81ce617cac3abb77399e48d5385a38e86a040cad93e6",
+        image_store="shared",
         max_runtime_minutes=60,
         requires_infiniband=False,
     ),
@@ -254,6 +322,28 @@ _ALIASES = {
 
 def catalogue() -> list[dict[str, Any]]:
     return [preset.public() for preset in PRESETS]
+
+
+#: The Required by name of the containerized LLMB NCCL 24-test workflow's image.
+LLMB_NCCL_CONTAINER = "llmb-nccl-container"
+
+#: Launches outside this catalogue that also run the catalog image naming them. The NeMo pair is
+#: ``api.validation_runs._TOOL_IMAGE_ENV``; a test keeps the two lists from drifting apart.
+OTHER_IMAGE_CONSUMERS: tuple[tuple[str, str], ...] = (
+    ("nemo-xrack", "Multirack NEMO"),
+    ("validation-singlerack", "NeMo single-rack validation"),
+    (LLMB_NCCL_CONTAINER, "LLMB NCCL container (24 tests)"),
+)
+
+
+def image_consumers() -> list[dict[str, str]]:
+    """Every name a catalog image's Required by can carry, for the Catalog Editor to offer.
+
+    A typo there is silent until launch -- the launch finds no image -- so the editor picks from
+    these rather than taking free text.
+    """
+    rows = [{"id": p.id, "label": p.label} for p in PRESETS if p.image_store]
+    return rows + [{"id": cid, "label": label} for cid, label in OTHER_IMAGE_CONSUMERS]
 
 
 def resolve_preset(value: object) -> Preset:
@@ -278,11 +368,11 @@ def normalize_options(body: dict[str, Any], preset: Preset) -> dict[str, Any]:
     if scope not in preset.scopes:
         raise ValueError(f"{preset.id} supports scope(s) {', '.join(preset.scopes)}, not {scope!r}")
 
-    storage = str(body.get("storage") or ("local" if preset.local_image else "nfs")).strip().lower()
+    storage = str(body.get("storage") or ("local" if preset.image_store else "nfs")).strip().lower()
     if storage not in ("nfs", "local"):
         raise ValueError("storage must be nfs or local")
     p2p_managed = node_images_p2p_managed()
-    rsync_default = storage == "local" and bool(preset.local_image) and not p2p_managed
+    rsync_default = storage == "local" and bool(preset.image_store) and not p2p_managed
     rsync = body.get("rsync_to_local", body.get("rsync", rsync_default)) is True
     if rsync and p2p_managed:
         raise ValueError(
@@ -343,6 +433,4 @@ def normalize_options(body: dict[str, Any], preset: Preset) -> dict[str, Any]:
         "max_steps": preset.max_steps,
         "max_runtime_minutes": preset.max_runtime_minutes,
         "requires_infiniband": preset.requires_infiniband,
-        "shared_image": preset.shared_image,
-        "local_image": resolve_local_image(preset.local_image),
     }
