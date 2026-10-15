@@ -15,9 +15,8 @@ Most platform differences do not need a separate file, and duplicating a script 
 lines is how the copies drift apart. Two cheaper mechanisms already exist:
 
 - **A platform parameter.** `tool_param_defaults` on the Platform record reaches the script as
-  an environment variable. `CORE_TO_HCA_SCRIPT` works this way: one script name per platform,
-  selected at run time by `clusterkit.sbatch`, with every variant living side by side in the
-  default set. Nothing had to move.
+  an environment variable. `CUDA_MAJ` works this way: one CUDA major per platform, read at
+  run time to pick the workspace toolkit, with one script serving them all. Nothing had to move.
 - **A capability test in the script.** `lib/fabric.inc.sh` and friends already branch on what
   the node reports rather than on which platform it is supposed to be, which keeps working when
   a site turns out not to match its own SKU sheet.

@@ -338,10 +338,12 @@ class TestTheClustersEnvironment:
         assert self._forwarded("GOOD $(id) 1BAD") == " -x GOOD"
         assert self._forwarded("") == ""
 
-    def test_both_fabric_branches_carry_the_forwarding(self):
+    def test_every_rail_carries_the_forwarding(self):
+        # IB and RoCE rows share one launch line now (both come from the rail map), so one mpi_opt
+        # serves both fabrics -- and it must still forward the cluster's variables.
         sbatch = (SCRIPTS / "clusterkit.sbatch").read_text()
         mpi_opts = [ln for ln in sbatch.splitlines() if ln.strip().startswith("mpi_opt=")]
-        assert len(mpi_opts) == 2 and all(ln.rstrip().endswith('${_ck_extra_x}"') for ln in mpi_opts)
+        assert len(mpi_opts) == 1 and mpi_opts[0].rstrip().endswith('${_ck_extra_x}"')
 
 
 # --- pairs ------------------------------------------------------------------------------------------

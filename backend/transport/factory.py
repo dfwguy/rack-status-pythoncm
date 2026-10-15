@@ -71,7 +71,6 @@ FORWARD_ENV_NAMES = (
     "CUDA_MAJ",
     "GPU_MODEL_FLAG",
     "MNNVL_TOPOLOGY",
-    "CORE_TO_HCA_SCRIPT",
     # Fabric wireup overrides (lib/fabric.inc.sh) — forwarded so a Settings/platform
     # override of the auto-detected plane reaches remote jobs.
     "GPUS_PER_NODE",

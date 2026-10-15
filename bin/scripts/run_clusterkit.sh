@@ -22,11 +22,10 @@
 #   RACK_CLUSTERKIT_RACK — canonical rack id for logs/paths (dashboard sets this for NVIS/CBR names).
 #     If unset: Bright pNN-rMM-ct[…] → pNN-rMM; else trailing […] tray range is stripped from target.
 #   NVIS_SLURM_HOSTLIST — comma-separated Slurm NodeNames for ``sbatch -w`` (bypasses scontrol expansion; last resort).
-#   RACK_CLUSTER_PRODUCT_LINE / RACK_PRODUCT_LINE — selects core_to_hca_dgxgb200 vs dgxgb300 (see clusterkit.sbatch).
-#   NVIS_CLUSTERKIT_MAPPER — full path to mapper script (overrides product line).
+#   NVIS_CLUSTERKIT_MAPPER — full path to a mapper script (default core_to_hca_rail_map.sh, both fabrics).
 #   NVIS_FABRIC_NETWORK — the cluster's fabric protocol, IB|RoCE (also auto|mlx|spectrumx|spx); used when RACK_CLUSTERKIT_LINK_TECH is unset (see clusterkit.sbatch).
 #   RACK_CLUSTERKIT_LINK_TECH — per-ClusterKit override of the fabric network (see clusterkit.sbatch).
-#   RACK_CLUSTERKIT_HCA_PROFILE — preset HCA table (gb300_mlx4, gb300_roce_spx_quad, …; see clusterkit.sbatch).
+#   RACK_CLUSTERKIT_HCA_PROFILE — detect (default: this node's rails) or a preset (gb300_mlx4, gb300_roce_spx_quad, …; see clusterkit.sbatch).
 #   RACK_CLUSTERKIT_UCX_TLS — optional UCX_TLS for RoCE branch (default rc,cuda).
 #   RACK_CLUSTERKIT_PARTITION — if set, passed as sbatch -p …
 #   RACK_CLUSTERKIT_EXTRA_OPTS — optional extra flags for clusterkit.sh (word-split; see clusterkit.sbatch)

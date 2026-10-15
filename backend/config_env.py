@@ -576,7 +576,7 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "label": "ClusterKit interconnect mode",
         "description": (
             "Same values as NVIS_FABRIC_NETWORK; overrides the cluster's fabric network for singlerack ClusterKit only. "
-            "Use roce or spx on Spectrum-X; use mlx or ib for classic IB mlx5 local_cpulist mapping."
+            "Use roce or spx on Spectrum-X; use mlx or ib on InfiniBand."
         ),
     },
     {
@@ -584,9 +584,11 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
         "key": "RACK_CLUSTERKIT_HCA_PROFILE",
         "label": "ClusterKit HCA preset profile",
         "description": (
-            "Rail table: mlx — gb300_mlx4 (default), b300_mlx8; roce — detect (default: the node's own compute "
-            "rails, kept to the cluster's fabric.compute_hca, each paired with its own GPU), gb300_roce_spx_quad, "
-            "gb300_roce_spx_rail, b300_roce_dual_8. Must match RACK_CLUSTERKIT_LINK_TECH / NVIS_FABRIC_NETWORK family."
+            "Rails to sweep. Blank = detect, on InfiniBand and RoCE alike: the node's own compute rails, kept "
+            "to the cluster's fabric.compute_hca, each paired with its own GPU, core and NUMA node; none found "
+            "stops the job and names the setting. Presets: mlx — gb300_mlx4, b300_mlx8 (device names; GPU, core "
+            "and NUMA still from the node); roce — gb300_roce_spx_quad, gb300_roce_spx_rail, b300_roce_dual_8. "
+            "A preset must match RACK_CLUSTERKIT_LINK_TECH / NVIS_FABRIC_NETWORK family."
         ),
     },
     {

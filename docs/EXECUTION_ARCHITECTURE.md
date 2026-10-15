@@ -42,7 +42,7 @@ for anything that touches the cluster. The layer has two responsibilities:
 # backend/transport/factory.py  (moved from host_exec.py so transport is self-contained)
 FORWARD_ENV_PREFIXES = ("RACK_", "NEMO_", "VALIDATION_", "SQUEUE_", "NVIS_", "PDSH_", "NGC_", "LLMB_")
 FORWARD_ENV_NAMES = (
-    "CUDA_MAJ", "GPU_MODEL_FLAG", "MNNVL_TOPOLOGY", "CORE_TO_HCA_SCRIPT",
+    "CUDA_MAJ", "GPU_MODEL_FLAG", "MNNVL_TOPOLOGY",
     # Fabric wireup overrides (lib/fabric.inc.sh)
     "GPUS_PER_NODE", "NCCL_IB_HCA", "NCCL_SOCKET_IFNAME", "UCX_NET_DEVICES", "UCX_TLS",
     "OMPI_MCA_coll_ucc_enable", "OMPI_MCA_btl_tcp_if_include", "OMPI_MCA_oob_tcp_if_include",

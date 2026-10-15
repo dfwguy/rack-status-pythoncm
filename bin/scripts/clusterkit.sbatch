@@ -13,16 +13,18 @@
 # HPC-X is sourced from WORKSPACE_DIR via workspace-dir-common + workspace-cuda-major-common (not hardcoded paths).
 #
 # Expects: NVIS_BIN_SCRIPTS, RACK_CLUSTERKIT_RACK, SLURM_SUBMIT_DIR=log_dir.
-# Optional: RACK_CLUSTER_PRODUCT_LINE / RACK_PRODUCT_LINE (mlx/IB: selects core_to_hca_dgxgb200 vs dgxgb300),
-#            NVIS_CLUSTERKIT_MAPPER (full path override for --mapper),
+# Optional: NVIS_CLUSTERKIT_MAPPER (full path override for --mapper; default core_to_hca_rail_map.sh on
+#              both fabrics, which binds each rail to the device/GPU/core/NUMA the rail map gave it),
 #            NVIS_FABRIC_NETWORK — the cluster's fabric protocol, used when RACK_CLUSTERKIT_LINK_TECH is unset (IB | RoCE | auto | mlx | spectrumx | spx).
 #            RACK_CLUSTERKIT_LINK_TECH — same values; overrides NVIS_FABRIC_NETWORK for this job.
 #              auto: mlx when /sys/class/infiniband/mlx5_*/device/local_cpulist is readable; else RoCE / Spectrum-X.
-#            RACK_CLUSTERKIT_HCA_PROFILE — preset rail/device table (default empty = built-in default per link family):
-#              mlx: gb300_mlx4 (4× mlx5_0..3), b300_mlx8 (8× mlx5_0,1,8..13).
-#              roce: detect (default: this node's rails from lib/fabric.inc.sh, kept to the cluster's
-#                    fabric.compute_hca, each with its own GPU/core/NUMA -- see nvis_fabric_rail_map),
-#                    gb300_roce_spx_quad (4 aggregated rails), gb300_roce_spx_rail (4 single-plane rails).
+#            RACK_CLUSTERKIT_HCA_PROFILE — which rails to sweep. Default on both fabrics: detect -- this
+#              node's compute rails from lib/fabric.inc.sh, kept to the cluster's fabric.compute_hca, each
+#              with its own GPU/core/NUMA (nvis_fabric_rail_map); none found stops the job and names the
+#              setting, never a fallback preset. Presets: mlx -- gb300_mlx4 (mlx5_0..3), b300_mlx8
+#              (mlx5_0,1,8..13), device names only, their GPU/core/NUMA from the rail map; roce --
+#              gb300_roce_spx_quad (4 aggregated rails), gb300_roce_spx_rail (4 single-plane rails),
+#              b300_roce_dual_8.
 #            RACK_CLUSTERKIT_UCX_TLS — optional; RoCE branch defaults to rc,cuda (mlx keeps UCX_TLS=^dc unless set).
 #            RACK_CLUSTERKIT_TESTS — ClusterKit test cases, space-separated (default "bw lat"); e.g.
 #              "gpu_gpu_bw gpu_gpu_lat" with RACK_CLUSTERKIT_EXTRA_OPTS=-G measures each rail from its own GPU.
@@ -107,31 +109,23 @@ if [[ ! -f "${CK_SH}" ]]; then
   exit 1
 fi
 
-chmod a+x "${NVIS_BIN_SCRIPTS}"/core_to_hca_dgxgb200.sh "${NVIS_BIN_SCRIPTS}"/core_to_hca_dgxgb300.sh \
-  "${NVIS_BIN_SCRIPTS}"/core_to_hca_clusterkit_roce_numactl.sh 2>/dev/null || true
+chmod a+x "${NVIS_BIN_SCRIPTS}"/core_to_hca_rail_map.sh 2>/dev/null || true
 
 # shellcheck disable=SC1091
 . "${NVIS_BIN_SCRIPTS}/clusterkit-hca-profiles.inc.sh"
 
 LINK_TECH=$(_ck_resolve_link_tech) || exit 1
 _ck_apply_hca_profile "${LINK_TECH}" || exit 1
+# Detected rails carry the node's own technology; the run follows them (see _ck_adopt_node_link_tech).
+LINK_TECH="${CK_LINK_TECH_DETECTED:-${LINK_TECH}}"
 
+# One mapper for both fabrics: every row carries its rail's device, core, NUMA node and GPU.
+CORE_TO_HCA="${NVIS_BIN_SCRIPTS}/core_to_hca_rail_map.sh"
 if [[ -n "${NVIS_CLUSTERKIT_MAPPER:-}" ]] && [[ -f "${NVIS_CLUSTERKIT_MAPPER}" ]]; then
   CORE_TO_HCA="${NVIS_CLUSTERKIT_MAPPER}"
-elif [[ "${LINK_TECH}" == "roce" ]]; then
-  CORE_TO_HCA="${NVIS_BIN_SCRIPTS}/core_to_hca_clusterkit_roce_numactl.sh"
-else
-  _pl_raw="${RACK_CLUSTER_PRODUCT_LINE:-${RACK_PRODUCT_LINE:-}}"
-  _pl=$(echo "${_pl_raw}" | tr '[:upper:]' '[:lower:]')
-  if [[ "${_pl}" == *gb300* ]] || [[ "${_pl}" == *dgxgb300* ]]; then
-    CORE_TO_HCA="${NVIS_BIN_SCRIPTS}/core_to_hca_dgxgb300.sh"
-  elif [[ "${_pl}" == *gb200* ]] || [[ "${_pl}" == *dgxgb200* ]]; then
-    CORE_TO_HCA="${NVIS_BIN_SCRIPTS}/core_to_hca_dgxgb200.sh"
-  else
-    echo "WARNING: RACK_CLUSTER_PRODUCT_LINE='${_pl_raw}' not recognized; defaulting to core_to_hca_dgxgb200.sh (set NVIS_CLUSTERKIT_MAPPER to override)." >&2
-    CORE_TO_HCA="${NVIS_BIN_SCRIPTS}/core_to_hca_dgxgb200.sh"
-  fi
 fi
+# The mapper looks up a routable GID only on RoCE.
+export CK_LINK_TECH="${LINK_TECH}"
 
 HOSTFILE="${PWD}/machinefile_${SLURM_JOB_ID}"
 scontrol show hostname "${SLURM_NODELIST}" >"${HOSTFILE}"
@@ -210,26 +204,17 @@ done
 
 for idx in "${!_CK_ROWS[@]}"; do
   row="${_CK_ROWS[$idx]}"
-  if [[ "${LINK_TECH}" == "roce" ]]; then
-    IFS=',' read -r _ck_dev _ck_core _ck_numa _ck_gpu <<< "${row}"
-    export CLUSTERKIT_HCA="${_ck_dev}"
-    export CORE="${_ck_core}"
-    export NUMA="${_ck_numa}"
-    export GPU="${_ck_gpu}"
-    _hca_tag=$(echo "${CLUSTERKIT_HCA}" | tr '+/' '__' | tr -cd '[:alnum:]._-')
-    export HCA_TAG="${_hca_tag}"
-    export CK_OUTPUT_SUBDIR="${PWD}/${DATE}_${SLURM_JOB_ID}_${HCA_TAG}"
-    # Match validation/clusterkit/clusterkit.sh: Slurm / Open MPI default binding can pin ranks to a
-    # single CPU so numactl -C <core> fails ("cpu argument N is out of range"). Clear binding for mapper.
-    mpi_opt="-x CK_OUTPUT_SUBDIR -x CLUSTERKIT_HCA -x CORE -x NUMA -x GPU -x CK_GPU_TESTS -x SLURM_CPU_BIND=none --bind-to none${_ck_extra_x}"
-  else
-    device="${row}"
-    export HCA_TAG="${device}"
-    export CLUSTERKIT_HCA="${idx}"
-    unset CORE NUMA GPU
-    export CK_OUTPUT_SUBDIR="${PWD}/${DATE}_${SLURM_JOB_ID}_${device}"
-    mpi_opt="-x CK_OUTPUT_SUBDIR -x CLUSTERKIT_HCA${_ck_extra_x}"
-  fi
+  IFS=',' read -r _ck_dev _ck_core _ck_numa _ck_gpu <<< "${row}"
+  export CLUSTERKIT_HCA="${_ck_dev}"
+  export CORE="${_ck_core}"
+  export NUMA="${_ck_numa}"
+  export GPU="${_ck_gpu}"
+  _hca_tag=$(echo "${CLUSTERKIT_HCA}" | tr '+/' '__' | tr -cd '[:alnum:]._-')
+  export HCA_TAG="${_hca_tag}"
+  export CK_OUTPUT_SUBDIR="${PWD}/${DATE}_${SLURM_JOB_ID}_${HCA_TAG}"
+  # Match validation/clusterkit/clusterkit.sh: Slurm / Open MPI default binding can pin ranks to a
+  # single CPU so numactl -C <core> fails ("cpu argument N is out of range"). Clear binding for mapper.
+  mpi_opt="-x CK_OUTPUT_SUBDIR -x CLUSTERKIT_HCA -x CORE -x NUMA -x GPU -x CK_GPU_TESTS -x CK_LINK_TECH -x SLURM_CPU_BIND=none --bind-to none${_ck_extra_x}"
   set -x
   # Optional: export RACK_CLUSTERKIT_EXTRA_OPTS="--foo ..." (space-separated clusterkit.sh flags).
   # shellcheck disable=SC2086

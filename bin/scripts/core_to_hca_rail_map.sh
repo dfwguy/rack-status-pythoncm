@@ -8,15 +8,18 @@
 # disclosure or distribution of this material and related documentation
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
-# ClusterKit mapper for Spectrum-X / RoCE-style ibdev names (no mlx5 sysfs local_cpulist).
-# Expects env from clusterkit.sbatch: CLUSTERKIT_HCA, CORE, NUMA, GPU (and UCX_TLS often rc,cuda).
+# ClusterKit mapper for one rail, on InfiniBand or RoCE: bind the rank to the rail's device, GPU,
+# core and NUMA node. clusterkit.sbatch hands it one row of nvis_fabric_rail_map (clusterkit-hca-
+# profiles.inc.sh) as CLUSTERKIT_HCA, CORE, NUMA, GPU, plus CK_LINK_TECH (mlx | roce). This replaced
+# core_to_hca_dgxgb200/300.sh, which held a fixed mlx5_N device and CPU range per local rank and so
+# described only the hardware they were written on.
 
 set -euo pipefail
 
 export CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}"
 
 if [[ "${OMPI_COMM_WORLD_LOCAL_SIZE:-1}" -ne 1 ]]; then
-  echo "ERROR: core_to_hca_clusterkit_roce_numactl.sh only supports one MPI rank per node (LOCAL_SIZE=${OMPI_COMM_WORLD_LOCAL_SIZE:-})." >&2
+  echo "ERROR: core_to_hca_rail_map.sh only supports one MPI rank per node (LOCAL_SIZE=${OMPI_COMM_WORLD_LOCAL_SIZE:-})." >&2
   exit 1
 fi
 
@@ -39,10 +42,11 @@ fi
 
 export CUDA_VISIBLE_DEVICES="${GPU}"
 
-# Reach the other rack through the rail's routable GID, looked up on this node (the index differs
-# per node). UCX's automatic pick can be a link-local RoCE v2 GID, and then MPI's own address
-# exchange times out before ClusterKit measures anything. A caller-set UCX_IB_GID_INDEX wins.
-if [[ -z "${UCX_IB_GID_INDEX:-}" ]]; then
+# RoCE only: reach the other rack through the rail's routable GID, looked up on this node (the index
+# differs per node). UCX's automatic pick can be a link-local RoCE v2 GID, and then MPI's own address
+# exchange times out before ClusterKit measures anything. InfiniBand addresses peers by LID and has
+# no routable GID to find. A caller-set UCX_IB_GID_INDEX wins.
+if [[ "${CK_LINK_TECH:-roce}" == roce && -z "${UCX_IB_GID_INDEX:-}" ]]; then
   _ck_lib="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/fabric.inc.sh"
   if [[ -f "${_ck_lib}" ]]; then
     # shellcheck disable=SC1090
@@ -76,6 +80,6 @@ if command -v numactl >/dev/null 2>&1; then
     exec numactl -C "+${CORE}" -m "${NUMA}" -- "$@"
   fi
   echo "WARNING: numactl -C ${CORE} -m ${NUMA} failed (cpuset or topology); running mapper without numactl bind." >&2
-  echo "WARNING: Ensure clusterkit.sbatch passes --bind-to none and -x SLURM_CPU_BIND=none, or fix CORE/NUMA in RACK_CLUSTERKIT_HCA_PROFILE." >&2
+  echo "WARNING: Ensure clusterkit.sbatch passes --bind-to none and -x SLURM_CPU_BIND=none, or check the rail map (fabric.compute_hca / RACK_CLUSTERKIT_HCA_PROFILE)." >&2
 fi
 exec "$@"

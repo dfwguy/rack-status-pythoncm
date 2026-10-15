@@ -156,32 +156,95 @@ class TestTheClustersComputePlane:
 
 
 class TestClusterKitRows:
-    """The detect profile turns the map into ClusterKit's RoCE rows: dev,core,numa,gpu."""
+    """Every ClusterKit row, IB or RoCE, comes from the rail map: dev,core,numa,gpu."""
 
-    def _apply(self, tmp_path, stub_map: str, **env) -> subprocess.CompletedProcess:
+    def _apply(self, tmp_path, stub_map: str, tech: str = "roce", **env) -> subprocess.CompletedProcess:
         script = (
             f". {PROFILES}; nvis_fabric_rail_map() {{ {stub_map}; }}; "
-            '_ck_apply_hca_profile roce && printf "%s|%s" "$CK_HCA_PROFILE_USED" "$CK_HCA_ROWS"'
+            f'_ck_apply_hca_profile {tech} && printf "%s|%s" "$CK_HCA_PROFILE_USED" "$CK_HCA_ROWS"'
         )
         return _bash(script, tmp_path, tmp_path, **env)
 
-    def test_roce_defaults_to_the_detected_rails(self, tmp_path):
-        r = self._apply(tmp_path, "printf 'roce_vf_r1 1 0 1 vpd\\nroce_vf_r2 0 0 2 vpd\\n'")
+    @pytest.mark.parametrize("tech", ["roce", "mlx"])
+    def test_both_fabrics_default_to_the_detected_rails(self, tmp_path, tech):
+        r = self._apply(tmp_path, "printf 'rail_a 1 0 1 vpd\\nrail_b 0 0 2 vpd\\n'", tech)
         assert r.returncode == 0, r.stderr
         used, rows = r.stdout.split("|")
         assert used == "detect"
-        assert rows.splitlines() == ["roce_vf_r1,1,0,1", "roce_vf_r2,2,0,0"]
+        assert rows.splitlines() == ["rail_a,1,0,1", "rail_b,2,0,0"]
 
-    def test_no_rails_falls_back_to_the_previous_preset_with_a_warning(self, tmp_path):
-        r = self._apply(tmp_path, "return 1")
+    @pytest.mark.parametrize("tech", ["roce", "mlx"])
+    def test_no_rails_stops_and_names_the_setting_instead_of_guessing(self, tmp_path, tech):
+        # The old RoCE fallback was gb300_roce_spx_quad -- roce_r0_p0.., devices NC does not have --
+        # and IB never detected at all: it measured mlx5_0..3 whatever the node held.
+        r = self._apply(tmp_path, "return 1", tech, NVIS_FABRIC_HCA="roce_vf_r")
+        assert r.returncode != 0
+        assert r.stdout == ""
+        assert f"no {tech} compute rails detected" in r.stderr
+        assert "fabric.compute_hca" in r.stderr and "NVIS_FABRIC_HCA='roce_vf_r'" in r.stderr
+        assert "RACK_CLUSTERKIT_HCA_PROFILE" in r.stderr
+        assert "roce_r0_p0" not in r.stderr and "mlx5_0" not in r.stderr
+
+    @pytest.mark.parametrize(("stated", "node", "adopted"), [
+        ("mlx", "roce", "roce"), ("roce", "ib", "mlx"), ("roce", "roce", ""), ("mlx", "ib", ""),
+    ])
+    def test_detected_rails_carry_the_nodes_own_technology(self, tmp_path, stated, node, adopted):
+        # IB stated on a Spectrum-X node would skip the RoCE GID and use IB transports on RoCE rails.
+        script = (
+            f". {PROFILES}; nvis_fabric_rail_map() {{ printf 'r1 0 0 1 vpd\\n'; }}; "
+            f"nvis_fabric_scan() {{ echo NVIS_FAB_LINK={node}; }}; "
+            f'_ck_apply_hca_profile {stated} && printf "%s" "${{CK_LINK_TECH_DETECTED:-}}"'
+        )
+        r = _bash(script, tmp_path, tmp_path, CK_LINK_TECH_DETECTED="stale")
+        assert r.returncode == 0, r.stderr
+        assert r.stdout == adopted
+        assert ("running as" in r.stderr) == bool(adopted)
+
+    def test_the_job_follows_the_adopted_technology(self):
+        sbatch = (SCRIPTS / "clusterkit.sbatch").read_text()
+        apply_at = sbatch.index('_ck_apply_hca_profile "${LINK_TECH}"')
+        assert sbatch.index('LINK_TECH="${CK_LINK_TECH_DETECTED:-${LINK_TECH}}"') > apply_at
+        assert sbatch.index('export CK_LINK_TECH="${LINK_TECH}"') > apply_at
+
+    # A rail map that echoes the devices it was asked for, GPU = position: the preset supplies only names.
+    ECHO_MAP = 'i=0; for d in "$@"; do printf "%s %s %s %s numa-guess\\n" "$d" "$i" "$((i / 2))" "$((i + 1))"; i=$((i + 1)); done'
+
+    @pytest.mark.parametrize(("preset", "devices"), [
+        ("gb300_mlx4", ["mlx5_0", "mlx5_1", "mlx5_2", "mlx5_3"]),
+        ("b300_mlx8", ["mlx5_0", "mlx5_1", "mlx5_8", "mlx5_9", "mlx5_10", "mlx5_11", "mlx5_12", "mlx5_13"]),
+    ])
+    def test_an_ib_preset_names_devices_and_the_node_supplies_gpu_core_and_numa(self, tmp_path, preset, devices):
+        for dev in devices:
+            (tmp_path / dev).mkdir()
+        r = self._apply(tmp_path, self.ECHO_MAP, "mlx", RACK_CLUSTERKIT_HCA_PROFILE=preset)
+        assert r.returncode == 0, r.stderr
         used, rows = r.stdout.split("|")
-        assert used == "gb300_roce_spx_quad"
-        assert rows.startswith("roce_r0_p0+")
-        assert "no RoCE compute rails detected" in r.stderr
+        assert used == preset
+        assert rows.splitlines() == [f"{d},{i + 1},{i // 2},{i}" for i, d in enumerate(devices)]
 
-    def test_a_named_preset_is_still_honoured(self, tmp_path):
+    def test_an_ib_preset_device_the_node_lacks_is_an_error(self, tmp_path):
+        for dev in ("mlx5_0", "mlx5_1", "mlx5_3"):
+            (tmp_path / dev).mkdir()
+        r = self._apply(tmp_path, self.ECHO_MAP, "mlx", RACK_CLUSTERKIT_HCA_PROFILE="gb300_mlx4")
+        assert r.returncode != 0
+        assert "does not have: mlx5_2" in r.stderr
+
+    def test_an_ib_preset_device_with_no_gpu_is_an_error_not_a_shorter_sweep(self, tmp_path):
+        for dev in ("mlx5_0", "mlx5_1", "mlx5_2", "mlx5_3"):
+            (tmp_path / dev).mkdir()
+        stub = 'for d in "$@"; do g=1; [[ $d == mlx5_2 ]] && g=-; printf "%s %s 0 1 vpd\\n" "$d" "$g"; done'
+        r = self._apply(tmp_path, stub, "mlx", RACK_CLUSTERKIT_HCA_PROFILE="gb300_mlx4")
+        assert r.returncode != 0
+        assert "not every device maps to a GPU" in r.stderr
+
+    def test_a_named_roce_preset_is_still_honoured(self, tmp_path):
         r = self._apply(tmp_path, "printf 'roce_vf_r1 1 0 1 vpd\\n'", RACK_CLUSTERKIT_HCA_PROFILE="gb300_roce_spx_rail")
         assert r.stdout.split("|")[0] == "gb300_roce_spx_rail"
+
+    def test_a_preset_for_the_other_fabric_is_refused(self, tmp_path):
+        r = self._apply(tmp_path, self.ECHO_MAP, "roce", RACK_CLUSTERKIT_HCA_PROFILE="gb300_mlx4")
+        assert r.returncode != 0
+        assert "is for mlx, but link technology is roce" in r.stderr
 
 
 class TestTheRoutableGid:
@@ -297,7 +360,7 @@ class TestClusterKitGpuMode:
         self._cuda(tmp_path, "cuda13", "libcudart.so.13")
         assert self._libdir(tmp_path, NVIS_CUDA_LIB="/opt/site/cuda/lib") == "/opt/site/cuda/lib"
 
-    def _mapper(self, tmp_path, gpu_tests: str) -> str:
+    def _mapper(self, tmp_path, gpu_tests: str, **extra: str) -> str:
         stub = tmp_path / "bin"
         stub.mkdir()
         (stub / "numactl").write_text('#!/bin/bash\nif [[ "$*" == *"/bin/true"* ]]; then exit 0; fi\necho "numactl $*"\n')
@@ -305,9 +368,9 @@ class TestClusterKitGpuMode:
         env = {
             "PATH": f"{stub}:{os.environ.get('PATH', '/usr/bin:/bin')}",
             "CLUSTERKIT_HCA": "roce_vf_r3", "CORE": "73", "NUMA": "1", "GPU": "3",
-            "UCX_IB_GID_INDEX": "5", "CK_GPU_TESTS": gpu_tests,
+            "UCX_IB_GID_INDEX": "5", "CK_GPU_TESTS": gpu_tests, **extra,
         }
-        r = subprocess.run(["bash", str(SCRIPTS / "core_to_hca_clusterkit_roce_numactl.sh"), "clusterkit"],
+        r = subprocess.run(["bash", str(SCRIPTS / "core_to_hca_rail_map.sh"), "clusterkit"],
                            env=env, capture_output=True, text=True, timeout=30, check=False)
         return r.stdout.strip()
 
@@ -316,6 +379,29 @@ class TestClusterKitGpuMode:
 
     def test_host_tests_keep_the_core_pin(self, tmp_path):
         assert self._mapper(tmp_path, "0") == "numactl -C 73 -m 1 -- clusterkit"
+
+    def test_on_infiniband_the_same_mapper_binds_the_rail_and_skips_the_roce_gid(self, tmp_path):
+        # IB addresses peers by LID: there is no routable GID to look up, and the old IB mappers
+        # (core_to_hca_dgxgb200/300.sh) bound a fixed mlx5_N and CPU range per local rank instead.
+        stub = tmp_path / "bin"
+        stub.mkdir()
+        (stub / "numactl").write_text('#!/bin/bash\nif [[ "$*" == *"/bin/true"* ]]; then exit 0; fi\n'
+                                      'echo "numactl $* UCX=$UCX_NET_DEVICES GPU=$CUDA_VISIBLE_DEVICES GID=${UCX_IB_GID_INDEX:-}"\n')
+        (stub / "numactl").chmod(0o755)
+        env = {"PATH": f"{stub}:{os.environ.get('PATH', '/usr/bin:/bin')}", "CLUSTERKIT_HCA": "mlx5_2",
+               "CORE": "73", "NUMA": "1", "GPU": "2", "CK_GPU_TESTS": "0", "CK_LINK_TECH": "mlx"}
+        r = subprocess.run(["bash", str(SCRIPTS / "core_to_hca_rail_map.sh"), "clusterkit"],
+                           env=env, capture_output=True, text=True, timeout=30, check=False)
+        assert r.stdout.strip() == "numactl -C 73 -m 1 -- clusterkit UCX=mlx5_2:1 GPU=2 GID="
+        assert "GID" not in r.stderr
+
+    def test_the_job_uses_one_rail_map_mapper_on_both_fabrics(self):
+        sbatch = (SCRIPTS / "clusterkit.sbatch").read_text()
+        assert 'CORE_TO_HCA="${NVIS_BIN_SCRIPTS}/core_to_hca_rail_map.sh"' in sbatch
+        assert "-x CK_LINK_TECH" in sbatch
+        assert "PRODUCT_LINE" not in sbatch and "core_to_hca_dgxgb" not in sbatch
+        assert not (SCRIPTS / "core_to_hca_dgxgb200.sh").exists()
+        assert not (SCRIPTS / "core_to_hca_dgxgb300.sh").exists()
 
     def _gpu_flag(self, tests: str | None, extra: str | None = None) -> str:
         sbatch = (SCRIPTS / "clusterkit.sbatch").read_text()
@@ -341,3 +427,16 @@ class TestClusterKitGpuMode:
         sbatch = (SCRIPTS / "clusterkit.sbatch").read_text()
         assert 'compgen -G "${CK_OUTPUT_SUBDIR}/GPU_*.json"' in sbatch
         assert "-x CK_GPU_TESTS" in sbatch
+
+
+def test_no_script_binds_a_fixed_mlx5_device_per_rank():
+    """A device name and CPU range per local rank describes one machine; the rail map describes any."""
+    import re
+
+    offenders = [
+        f"{p.name}:{n}"
+        for p in sorted(SCRIPTS.glob("*.sh")) + sorted(SCRIPTS.glob("*.sbatch"))
+        for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+        if re.search(r"export\s+UCX_NET_DEVICES=mlx5_\d", line) and not line.lstrip().startswith("#")
+    ]
+    assert offenders == []

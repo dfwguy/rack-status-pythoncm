@@ -96,7 +96,6 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
             "GPU_MODEL_FLAG": "gb200",
             "MNNVL_TOPOLOGY": "gb200_nvl72r1_c2g4_topology",
             "RACK_CLUSTER_PRODUCT_LINE": "gb200",
-            "CORE_TO_HCA_SCRIPT": "core_to_hca_dgxgb200.sh",
             "CUDA_MAJ": "12",
         },
         "fabric": {
@@ -136,7 +135,6 @@ SEED_PLATFORMS: list[dict[str, Any]] = [
             "GPU_MODEL_FLAG": "gb300",
             "MNNVL_TOPOLOGY": "gb200_nvl72r1_c2g4_topology",
             "RACK_CLUSTER_PRODUCT_LINE": "gb300",
-            "CORE_TO_HCA_SCRIPT": "core_to_hca_dgxgb300.sh",
             "CUDA_MAJ": "12",
         },
         "fabric": {

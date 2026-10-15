@@ -43,8 +43,10 @@ and so on, named after the catalog Platform id. The whole file is replaced for t
 reach for this only when the *script* differs — a different scheduler invocation, a different
 tool, a different sequence. When a threshold, an image tag or a binary name differs, a
 `tool_param_defaults` entry on the Platform record reaches the script as an environment variable
-and keeps one file. `CORE_TO_HCA_SCRIPT` works that way: one name per platform, selected at run
-time, every variant living side by side in the default set.
+and keeps one file. `CUDA_MAJ` works that way: one CUDA major per platform, read at run time
+to pick the workspace toolkit, with one script serving them all. Better still is no per-platform value at all:
+ClusterKit used to pick a fixed per-platform CPU/HCA mapper (`core_to_hca_dgxgb200.sh`/`300.sh`)
+and now reads each rail's GPU, core and NUMA node from the node itself (`nvis_fabric_rail_map`).
 
 **A script you wrote for this deployment → `custom/`.** Shared across every project on the
 server, and never touched by a deploy or by bootstrapping a project.
