@@ -438,6 +438,16 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     },
     {
         "section": "jobs_cluster",
+        "key": "RACK_NODE_STAGE1_BRINGUP_JOBS",
+        "label": "Node Stage 1 bring-up jobs",
+        "description": (
+            "Bring-up jobs whose pass also counts as a node's Stage 1 (single-node NCCL), comma-"
+            "separated. Default allreduce; none counts only Rack Status's own Stage 1 runs. A node "
+            "passes when either passed; the rack page and node page show which."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
         "key": "RACK_NODE_STAGE2_BRINGUP_JOB",
         "label": "Node Stage 2 bring-up job",
         "description": (

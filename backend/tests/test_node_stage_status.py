@@ -212,7 +212,7 @@ def test_node_stages_joins_logs_activities_and_bringup(monkeypatch):
     out = node_stages.node_stages([(HOST, "V20"), (other, "Q24")], logs)
     rows = {r["node"]: r for r in out["nodes"]}
     assert rows[HOST]["stage1"]["state"] == "done" and rows[HOST]["stage2"]["state"] == "done"
-    assert rows[other]["stage1"] == {"state": "ongoing", "job_id": "125281"}
+    assert rows[other]["stage1"] == {"state": "ongoing", "job_id": "125281", "source": "rack-status"}
     assert rows[other]["stage2"] == {"state": "fail", "status": "FAIL", "reason": "loss diverged"}
     assert out["stage2_source"] == "bringup:llm-pretrain-solo" and out["stage2_loading"] is False
 
@@ -240,24 +240,27 @@ def _fresh_verdicts(monkeypatch, *, fail=False):
     return node_stages._BringupVerdicts(), calls
 
 
-def test_the_refresh_asks_the_bringup_report_for_the_stage2_job_only(monkeypatch):
+def test_the_refresh_asks_the_bringup_report_for_the_stage_jobs_only(monkeypatch):
+    # Stage 2's job, then Stage 1's bring-up evidence -- never the full report.
     monkeypatch.delenv("RACK_NODE_STAGE2_BRINGUP_JOB", raising=False)
+    monkeypatch.delenv("RACK_NODE_STAGE1_BRINGUP_JOBS", raising=False)
     verdicts, calls = _fresh_verdicts(monkeypatch)
     out = verdicts.get(wait=True)
-    assert calls == [["llm-pretrain-solo"]]
+    assert calls == [["llm-pretrain-solo", "allreduce"]]
     assert out[HOST]["llm-pretrain-solo"]["status"] == "DONE"
     verdicts.get(wait=True)
     assert len(calls) == 1  # fresh: served from the cache
 
 
-def test_a_changed_stage2_job_expires_the_cached_verdicts(monkeypatch):
+def test_a_changed_stage_job_expires_the_cached_verdicts(monkeypatch):
     """The cache holds one job's column; another job's answer must not be read from it."""
     monkeypatch.delenv("RACK_NODE_STAGE2_BRINGUP_JOB", raising=False)
+    monkeypatch.delenv("RACK_NODE_STAGE1_BRINGUP_JOBS", raising=False)
     verdicts, calls = _fresh_verdicts(monkeypatch)
     verdicts.get(wait=True)
     monkeypatch.setenv("RACK_NODE_STAGE2_BRINGUP_JOB", "llm-pretrain")
     out = verdicts.get(wait=True)
-    assert calls == [["llm-pretrain-solo"], ["llm-pretrain"]]
+    assert calls == [["llm-pretrain-solo", "allreduce"], ["llm-pretrain", "allreduce"]]
     assert "llm-pretrain" in out[HOST]
 
 
@@ -340,7 +343,7 @@ def test_a_node_run_submitted_as_another_user_still_reads_as_running(monkeypatch
     _live("node", [HOST], ref="125824")
     out = node_stages.node_stages([(HOST, "V20")], {})
     assert asked == ["125824"]
-    assert out["nodes"][0]["stage1"] == {"state": "ongoing", "job_id": "125824"}
+    assert out["nodes"][0]["stage1"] == {"state": "ongoing", "job_id": "125824", "source": "rack-status"}
 
 
 def test_the_snapshot_carries_each_nodes_evidence_and_status_does_not_serve_it(monkeypatch):
@@ -496,3 +499,63 @@ def test_logs_scanned_before_failure_lines_counted_are_read_once_more(monkeypatc
     st2 = native_status.NativeRackTableState("k", PurePosixPath("/logs"))
     st2._worker_logs(lambda _p: pytest.fail("the probe itself is still cached"))
     assert st2.by_node_stage_log[FABRIC_HOST]["nccl"]["fail_reason"].startswith("NVLink fabric")
+
+
+# --- Stage 1 from bring-up as well as from Rack Status ----------------------------------------------
+# gpu63-su20 (2026-10-16): Rack Status Stage 1 passed (Slurm 207363) while bring-up's allreduce read
+# FAIL, and the operator asked that either source's pass count.
+
+_DONE = {"status": "DONE"}
+_FAIL = {"status": "FAIL", "reason": "run error"}
+
+
+@pytest.mark.parametrize(("own", "bringup", "state", "source"), [
+    ({"state": "done", "job_id": "207363"}, {"allreduce": _FAIL}, "done", "rack-status"),
+    ({"state": "fail", "job_id": "9"}, {"allreduce": _DONE}, "done", "bringup:allreduce"),
+    ({"state": "pending"}, {"allreduce": _DONE}, "done", "bringup:allreduce"),
+    ({"state": "fail", "job_id": "9", "reason": "wrong results"}, {"allreduce": _FAIL}, "fail", "rack-status"),
+    ({"state": "pending"}, {"allreduce": _FAIL}, "fail", "bringup:allreduce"),
+    ({"state": "pending"}, {}, "pending", "rack-status"),
+    ({"state": "pending"}, None, "pending", "rack-status"),
+    # A Rack Status run in Slurm is the newest evidence, whatever bring-up said earlier.
+    ({"state": "ongoing", "job_id": "5"}, {"allreduce": _DONE}, "ongoing", "rack-status"),
+])
+def test_either_pass_is_a_stage1_pass(own, bringup, state, source):
+    got = node_stages.combine_stage1(own, bringup, ("allreduce",))
+    assert (got["state"], got["source"]) == (state, source)
+
+
+def test_a_rack_status_failure_keeps_its_own_reason():
+    got = node_stages.combine_stage1({"state": "fail", "job_id": "9", "reason": "wrong results"},
+                                     {"allreduce": _FAIL}, ("allreduce",))
+    assert got["reason"] == "wrong results" and got["job_id"] == "9"
+
+
+@pytest.mark.parametrize(("raw", "jobs"), [
+    (None, ("allreduce",)),
+    ("", ("allreduce",)),
+    ("none", ()),
+    ("NONE", ()),
+    ("allreduce, allreduce-nonvlink,allreduce", ("allreduce", "allreduce-nonvlink")),
+])
+def test_the_stage1_bringup_jobs_are_a_setting(monkeypatch, raw, jobs):
+    if raw is None:
+        monkeypatch.delenv("RACK_NODE_STAGE1_BRINGUP_JOBS", raising=False)
+    else:
+        monkeypatch.setenv("RACK_NODE_STAGE1_BRINGUP_JOBS", raw)
+    assert node_stages.stage1_bringup_jobs() == jobs
+
+
+def test_with_bringup_off_only_rack_status_decides(monkeypatch):
+    monkeypatch.setenv("RACK_NODE_STAGE1_BRINGUP_JOBS", "none")
+    got = node_stages.combine_stage1({"state": "fail", "job_id": "9"}, {"allreduce": _DONE},
+                                     node_stages.stage1_bringup_jobs())
+    assert (got["state"], got["source"]) == ("fail", "rack-status")
+
+
+def test_the_setting_is_editable_on_the_settings_page():
+    # Feature = API + UI: the Settings page renders JOB_ENV_UI_DEFINITIONS.
+    import config_env
+
+    entry = next(e for e in config_env.JOB_ENV_UI_DEFINITIONS if e["key"] == "RACK_NODE_STAGE1_BRINGUP_JOBS")
+    assert entry["section"] == "jobs_cluster" and "allreduce" in entry["description"]

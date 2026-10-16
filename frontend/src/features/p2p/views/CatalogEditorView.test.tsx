@@ -56,7 +56,9 @@ describe("CatalogEditorView — the launchers' copy", () => {
       scripts_catalog: { ok: true, dest: DEST, images: 1 },
     });
     render(<CatalogEditorView />);
-    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+    // Save is rendered before the catalog loads and does nothing until it has; wait for the image.
+    await screen.findByText(image.name);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText(new RegExp(`Launchers now check node images against it \\(${DEST}\\)`))).toBeInTheDocument();
   });
 
@@ -66,7 +68,9 @@ describe("CatalogEditorView — the launchers' copy", () => {
       scripts_catalog: { ok: false, error: "OSError: no route" },
     });
     render(<CatalogEditorView />);
-    fireEvent.click(await screen.findByRole("button", { name: "Save" }));
+    // Save is rendered before the catalog loads and does nothing until it has; wait for the image.
+    await screen.findByText(image.name);
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText(/launchers' copy was NOT updated \(OSError: no route\)/)).toBeInTheDocument();
   });
 

@@ -91,6 +91,14 @@ const STAGE_STATE_LABEL: Record<StageState, string> = {
   pending: "not started",
 };
 
+/** A Stage 1 ``source`` in words: ``rack-status`` or ``bringup:<job>``. */
+export function stageSourceLabel(source?: string): string {
+  if (!source) return "";
+  if (source === "rack-status") return "Rack Status run";
+  if (source.startsWith("bringup:")) return `bring-up ${source.slice("bringup:".length)}`;
+  return source;
+}
+
 export function stageStateLabel(state: StageState): string {
   return STAGE_STATE_LABEL[state] ?? state;
 }

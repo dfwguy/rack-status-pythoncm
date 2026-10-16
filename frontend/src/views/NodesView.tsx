@@ -42,6 +42,7 @@ import { NetworkingTab } from "../components/rack/NetworkingTab";
 import { ServicesTab } from "../components/rack/ServicesTab";
 import { ParserResultsDialog } from "../components/ParserResultsDialog";
 import { BringupResultsPanel } from "../components/bringup/BringupResultsPanel";
+import { NodeValidationStages } from "../components/rack/NodeValidationStages";
 import WebTerminalDialog from "../components/rack/WebTerminalDialog";
 import { RackCommandProvider } from "../context/RackCommandProvider";
 import { useActiveCluster } from "../context/ActiveClusterContext";
@@ -508,6 +509,7 @@ export function NodesView({ data, logDir }: NodesViewProps) {
               </Text>
             </Box>
 
+            <NodeValidationStages node={selectedNode.id} logDir={logDir} />
             <BringupResultsPanel node={selectedNode.id} logDir={logDir} />
 
             <RackCommandProvider rack={selectedNode.rack ?? selectedNode.id} logDir={logDir} jobId={selectedNode.lastJob}>

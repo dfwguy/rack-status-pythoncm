@@ -26,6 +26,11 @@ export interface NodeStageInfo {
   status?: string;
   /** Why it failed: the bring-up's reason (Stage 2), or what the result log says stopped it (Stage 1). */
   reason?: string;
+  /**
+   * Stage 1 only: what decided it -- ``rack-status`` (Rack Status's own single-node NCCL run) or
+   * ``bringup:<job>`` (the bring-up framework's run of the same check; either pass counts).
+   */
+  source?: string;
 }
 
 /** Stage 1 (single-node NCCL) and Stage 2 (single-node LLM) for one node. */
@@ -41,6 +46,8 @@ export interface NodeStagesResponse {
   nodes: NodeStagesRow[];
   /** Where a node's Stage 2 comes from, e.g. ``bringup:llm-pretrain-solo``. */
   stage2_source: string;
+  /** What may decide Stage 1, e.g. ``["rack-status", "bringup:allreduce"]``. */
+  stage1_sources?: string[];
   stage2_loading: boolean;
   stage2_error?: string;
   error?: string;

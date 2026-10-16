@@ -24,7 +24,7 @@ import Tooltip from "@mui/material/Tooltip";
 import { Tag, Text, Button } from "@nvidia/foundations-react-core";
 import { Terminal, TrendingUp } from "lucide-react";
 import type { NodeIssueRollup, NodeStageInfo, NodeStagesRow } from "../../types/api";
-import { stageStateColor, stageStateLabel } from "../../lib/validationStages";
+import { stageSourceLabel, stageStateColor, stageStateLabel } from "../../lib/validationStages";
 
 /** Build https URL for BMC / RedFish UI; bracket bare IPv6 literals only. */
 function redfishHttpsHref(host: string): string | null {
@@ -72,7 +72,7 @@ export function NodeStageTags({ stages, stage2Source }: { stages?: NodeStagesRow
       label: "Stage 1 — single-node NCCL",
       info: stages?.stage1,
       detail: (i) => {
-        const parts = [i.job_id ? `job ${i.job_id}` : "", i.reason ?? ""].filter(Boolean);
+        const parts = [stageSourceLabel(i.source), i.job_id ? `job ${i.job_id}` : "", i.reason ?? ""].filter(Boolean);
         return parts.length ? ` (${parts.join(": ")})` : "";
       },
     },

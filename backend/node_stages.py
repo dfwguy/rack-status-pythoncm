@@ -17,7 +17,12 @@ stages, and the rack page shows them per host.
   (``native_status._is_partial_rack_log``), and, while the job is still in Slurm, the open
   ``scope="node"`` activity that launched it. A failed Stage 1 carries ``reason`` when the log says
   why (``native_status.stage_failure_reason``); a job that never started still leaves a log saying so
-  (``collect_llmb_nccl_log.sh``), so a launched node is never left "pending".
+  (``collect_llmb_nccl_log.sh``), so a launched node is never left "pending". The bring-up
+  framework runs the same single-node NCCL check as its own job, and its pass counts too: a node
+  is Stage 1 ``done`` when either Rack Status's run or a bring-up job named by
+  ``RACK_NODE_STAGE1_BRINGUP_JOBS`` (default ``allreduce``; ``none`` turns it off) passed, and the
+  answer says which (``source``). A Rack Status run still in Slurm reads ``ongoing`` whatever
+  bring-up said, because it is the newer evidence.
 - **Stage 2** is a single-node LLM training run. The NeMo Stage-2 recipe does not fit one node
   (the 56B GB300 config runs out of memory on 4 GPUs, and no smaller GB300 config ships in the
   container), so the node's Stage 2 is the bring-up framework's single-node LLM job, read with that
@@ -39,6 +44,10 @@ from config_env import _eget, _env_int
 _logger = logging.getLogger(__name__)
 
 DEFAULT_STAGE2_BRINGUP_JOB = "llm-pretrain-solo"
+DEFAULT_STAGE1_BRINGUP_JOBS = ("allreduce",)
+
+#: ``source`` of a Stage 1 decided by Rack Status's own single-node NCCL run.
+STAGE1_SOURCE_RACK_STATUS = "rack-status"
 
 # Bring-up verdict word -> stage state. RETRY and INCOMPLETE mean the framework will run it again.
 _BRINGUP_STATE = {
@@ -53,6 +62,39 @@ _BRINGUP_STATE = {
 
 def stage2_bringup_job() -> str:
     return (_eget("RACK_NODE_STAGE2_BRINGUP_JOB") or "").strip() or DEFAULT_STAGE2_BRINGUP_JOB
+
+
+def stage1_bringup_jobs() -> tuple[str, ...]:
+    """Bring-up jobs whose pass also counts as a node's Stage 1; empty when set to ``none``."""
+    raw = (_eget("RACK_NODE_STAGE1_BRINGUP_JOBS") or "").strip()
+    if not raw:
+        return DEFAULT_STAGE1_BRINGUP_JOBS
+    if raw.lower() == "none":
+        return ()
+    return tuple(dict.fromkeys(j.strip() for j in raw.split(",") if j.strip()))
+
+
+def combine_stage1(own: dict[str, Any], bringup: dict[str, dict[str, str]] | None,
+                   jobs: tuple[str, ...]) -> dict[str, Any]:
+    """Stage 1 from Rack Status's run (*own*, from :func:`stage1_state`) and the bring-up verdicts.
+
+    Either pass is a pass. A Rack Status run in Slurm stays ``ongoing`` (it is newer than any
+    bring-up verdict). Otherwise Rack Status's own answer stands, unless it has none: then a failed
+    bring-up job is the node's Stage 1, so a node bring-up already tested is not shown as untested.
+    """
+    if own.get("state") in ("done", "ongoing"):
+        return {**own, "source": STAGE1_SOURCE_RACK_STATUS}
+    verdicts = {job: (bringup or {}).get(job) for job in jobs}
+    for job, v in verdicts.items():
+        if v and str(v.get("status") or "").upper() == "DONE":
+            return {"state": "done", "status": "DONE", "source": f"bringup:{job}"}
+    if own.get("state") == "fail":
+        return {**own, "source": STAGE1_SOURCE_RACK_STATUS}
+    for job, v in verdicts.items():
+        state = stage2_state(v).get("state") if v else None
+        if state in ("fail", "ongoing"):
+            return {**stage2_state(v), "source": f"bringup:{job}"}
+    return {**own, "source": STAGE1_SOURCE_RACK_STATUS}
 
 
 def stage1_state(probe: dict[str, Any] | None, live_jid: str, running: set[str]) -> dict[str, Any]:
@@ -128,7 +170,7 @@ class _BringupVerdicts:
         self._lock = threading.Lock()
         self._data: dict[str, dict[str, dict[str, str]]] | None = None
         self._at = 0.0
-        self._job = ""
+        self._jobs: tuple[str, ...] = ()
         self._refreshing = False
         self.error = ""
 
@@ -143,7 +185,7 @@ class _BringupVerdicts:
             age = time.monotonic() - self._at
             stale = (
                 self._at == 0.0
-                or self._job != stage2_bringup_job()
+                or self._jobs != _bringup_jobs()
                 or age >= self._ttl()
                 or (self.error != "" and age >= min(self._ttl(), _RETRY_AFTER_ERROR_SEC))
             )
@@ -159,26 +201,31 @@ class _BringupVerdicts:
             return self._data
 
     def _refresh(self) -> None:
-        job = stage2_bringup_job()
+        jobs = _bringup_jobs()
         try:
             import bringup
 
             if not bringup.is_enabled():
                 data: dict[str, dict[str, dict[str, str]]] = {}
             else:
-                # Only the Stage 2 column: the full report builds every bring-up column (and
+                # Only the stage columns: the full report builds every bring-up column (and
                 # burn-in hours) for the fleet, which a cold /api/node-stages?wait=1 waited on.
-                data = bringup.parse_status_check_fleet(bringup.run_status_check_all(tests=[job]))
+                data = bringup.parse_status_check_fleet(bringup.run_status_check_all(tests=list(jobs)))
             with self._lock:
-                self._data, self._at, self._job, self.error = data, time.monotonic(), job, ""
+                self._data, self._at, self._jobs, self.error = data, time.monotonic(), jobs, ""
         except Exception as exc:  # noqa: BLE001 - keep the last answer; Stage 1 still renders
             _logger.warning("node stages: bring-up verdicts unavailable: %s", exc)
             with self._lock:
                 self.error = str(exc)
-                self._at, self._job = time.monotonic(), job
+                self._at, self._jobs = time.monotonic(), jobs
         finally:
             with self._lock:
                 self._refreshing = False
+
+
+def _bringup_jobs() -> tuple[str, ...]:
+    """Every bring-up job a node stage reads: Stage 2's, then Stage 1's."""
+    return tuple(dict.fromkeys((stage2_bringup_job(), *stage1_bringup_jobs())))
 
 
 _bringup = _BringupVerdicts()
@@ -210,14 +257,17 @@ def node_stages(
     want |= {str(((node_logs.get(h) or {}).get("nccl") or {}).get("jid") or "") for h in hosts}
     native_status.augment_running_set_for_job_ids(running, times, sorted(j for j in want if j))
     job = stage2_bringup_job()
+    s1_jobs = stage1_bringup_jobs()
     verdicts = _bringup.get(wait=wait_for_bringup)
     rows = []
     for host, rack in nodes:
         logs = node_logs.get(host) or {}
+        own = stage1_state(logs.get("nccl"), str((live.get(host) or {}).get("nccl") or ""), running)
         rows.append({
             "node": host,
             "rack": rack,
-            "stage1": stage1_state(logs.get("nccl"), str((live.get(host) or {}).get("nccl") or ""), running),
+            # Until the bring-up verdicts land, Stage 1 is Rack Status's alone.
+            "stage1": combine_stage1(own, (verdicts or {}).get(host), s1_jobs),
             "stage2": stage2_state(
                 ((verdicts or {}).get(host) or {}).get(job),
                 node_busy=None if busy_hosts is None else host in busy_hosts,
@@ -227,6 +277,7 @@ def node_stages(
     return {
         "nodes": rows,
         "stage2_source": f"bringup:{job}",
+        "stage1_sources": [STAGE1_SOURCE_RACK_STATUS, *(f"bringup:{j}" for j in s1_jobs)],
         "stage2_loading": verdicts is None,
         **({"stage2_error": _bringup.error} if _bringup.error else {}),
     }
