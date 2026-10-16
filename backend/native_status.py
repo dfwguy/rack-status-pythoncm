@@ -69,7 +69,7 @@ _NATIVE_LOG_JSON = _REPO_ROOT / "var" / "cache" / "native_log_analysis.json"
 # Deliberately shared by BOTH the single-rack and multirack caches below: they are produced by the
 # same probe path, so a logic change invalidates both. Giving them separate counters would let one
 # keep serving verdicts from superseded parse logic.
-_NATIVE_LOG_CACHE_VERSION = 4  # 4: an NCCL log with wrong results, a failed or an unfinished test is not a pass
+_NATIVE_LOG_CACHE_VERSION = 5  # 5: a NeMo log is judged on training completion (llm), not its NCCL preflight
 # 3: NCCL busbw counts only completed, unfailed nccl-tests tests
 
 
@@ -2883,7 +2883,10 @@ class MultirackTableState:
                 want.add(lj)
         augment_running_set_for_job_ids(running, job_times, want)
         rows: list[dict[str, str]] = []
-        for p, _mtime_ns, _size in paths:
+        # Newest first. The SPA pages this table ten rows at a time in the order given, and name
+        # order put days-old debug sweeps (nccl-mpi_*) ahead of every NeMo run: a two-rack run
+        # that had just passed (U2+U8, Slurm 207346) sat on page 6 and looked missing.
+        for p, _mtime_ns, _size in sorted(paths, key=lambda t: t[1], reverse=True):
             bn = p.name
             keyp = str(p)
             probe = probe_map.get(keyp, {})

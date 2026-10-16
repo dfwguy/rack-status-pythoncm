@@ -553,6 +553,25 @@ def _register_rack_status_log_dir(log_dir: Path) -> str:
     return key
 
 
+_NEMO_LOG_RE = re.compile(r"(^|[-_])NEMO-", re.IGNORECASE)
+
+
+def nemo_log_suite(basename: str, suite: str) -> str:
+    """The VALIDATION_TEST *suite* a log is judged by, with ``llm`` required for a NeMo log.
+
+    A NeMo run's verdict is whether training reached the step count it declared; the NCCL
+    lines in its log are only the preflight that opens the job. The multirack default suite
+    (RACK_MULTIRACK_VALIDATION_TEST, ``nccl_all_reduce``) is written for NCCL logs, and applied
+    to a NeMo log it passed a run on its preflight alone: U23+U24 (Slurm 206757) was cut off at
+    step 890 of 2010 when SU19 went down and still read ``done``. A site may widen the suite but
+    cannot drop the training check from a NeMo log.
+    """
+    parts = [s.strip() for s in (suite or "").split(",") if s.strip()]
+    if _NEMO_LOG_RE.search(basename) and "llm" not in parts:
+        parts.append("llm")
+    return ",".join(parts)
+
+
 def _probe_log_json_via_rack_status(abs_path: Path) -> dict[str, object] | None:
     """Run ``rack_status.sh --probe-json`` for one log file (same nemo/nccl/squeue heuristics as the table)."""
     script = _rack_status_script_path()
@@ -569,7 +588,8 @@ def _probe_log_json_via_rack_status(abs_path: Path) -> dict[str, object] | None:
     # (all_reduce + alltoall + allgather + llm) applied to whichever single log is newest,
     # so racks that passed every stage still render red. Forward the acceptance knobs
     # explicitly; env_extra bypasses the FORWARD_ENV_PREFIXES allowlist.
-    env_extra = {"NO_COLOR": "1", "VALIDATION_TEST": env.get("VALIDATION_TEST", vt_if_unset)}
+    env_extra = {"NO_COLOR": "1",
+                 "VALIDATION_TEST": nemo_log_suite(ap.name, env.get("VALIDATION_TEST", vt_if_unset))}
     for _k in ("NEMO_TARGET_STEPS", "RACK_VALIDATION_CT_RANGE", "NVIS_RACK_ID"):
         _v = (env.get(_k) or "").strip()
         if _v:
