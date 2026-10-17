@@ -555,7 +555,9 @@ SEED_TOOLS: list[dict[str, Any]] = [
         "nccl-fullrack-rounds", "NCCL Benchmark (Stage-1)", "validation",
         "nccl_fullrack_rounds.sh", "RACK_NCCL_FULLRACK_SCRIPT", ["rackDetail.validation"], "async", "rack",
         capabilities=["nvlink"],
-        subtitle="5 rounds all_reduce, 1K–16G",
+        # Seed default only: list_tools derives the live card from RACK_NCCL_FULLRACK_LAUNCHER
+        # (nccl_stage1.apply_card), so it always describes the launcher that actually runs.
+        subtitle="LLMB NCCL test set (llmb-run)",
         button_label="Run NCCL",
         icon="Activity",
         order=20,
@@ -568,12 +570,17 @@ SEED_TOOLS: list[dict[str, Any]] = [
             # container launch would show a selector that does nothing.
             "body": {"show_nccl_version": True, "show_iters": True},
         },
-        description="Standalone Stage-1 NCCL acceptance: N rounds of all_reduce (1K..16G) via the working portable launcher.",
+        description=(
+            "Stage-1 NCCL acceptance. Default launcher llmb: llmb-run microbenchmark_nccl runs the LLMB "
+            "install's whole NCCL test set (stock: 24 tests over five collectives). Launcher mpi: "
+            "all_reduce via host mpirun, 5 rounds by default. Chosen by RACK_NCCL_FULLRACK_LAUNCHER."
+        ),
         ai_context=(
-            "nccl_fullrack_rounds runs the Stage-1 NCCL acceptance test (default 5 rounds of "
-            "all_reduce_perf, 1K..16G) on one rack using the bond0-pinned/portable launcher, and "
-            "drops an NCCL-1Rack-<rack> log into log_dir so the dashboard + parser pick it up. "
-            "Use this to validate NCCL alone, independent of the full NEMO training run."
+            "Rack/node Stage-1 NCCL acceptance. With RACK_NCCL_FULLRACK_LAUNCHER=llmb (default) it "
+            "runs llmb-run microbenchmark_nccl: the LLMB install's whole test set in one job (stock: "
+            "24 tests over all_reduce, all_gather, reduce_scatter, alltoall, sendrecv); rounds and "
+            "NCCL version do not apply. With mpi it runs host-mpirun all_reduce, 5 rounds by default. "
+            "Either way it drops an NCCL-1Rack-<rack> log into log_dir for the dashboard and parser."
         ),
     ),
     _tool(

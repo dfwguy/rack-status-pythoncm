@@ -333,7 +333,7 @@ this scan can see. `Default` is shown only where the call site supplies a litera
 | <a id="s-rack-native-squeue-timeout-sec"></a>`RACK_NATIVE_SQUEUE_TIMEOUT_SEC` | environment | `60` | See `docs/ENVIRONMENT.md` | `backend/native_status.py` |
 | <a id="s-rack-nccl-fullrack-disabled"></a>`RACK_NCCL_FULLRACK_DISABLED` | environment |  | Refuse full-rack NCCL launches. | `backend/agent/registrations.py`, `backend/api/validation_runs.py` |
 | <a id="s-rack-nccl-fullrack-end"></a>`RACK_NCCL_FULLRACK_END` | ladder |  | End size for the full-rack NCCL sweep. Default 16G. | `backend/api/validation_runs.py` |
-| <a id="s-rack-nccl-fullrack-launcher"></a>`RACK_NCCL_FULLRACK_LAUNCHER` | ladder |  | Which launcher the full-rack NCCL run uses. Default `llmb`. | `backend/api/validation_runs.py` |
+| <a id="s-rack-nccl-fullrack-launcher"></a>`RACK_NCCL_FULLRACK_LAUNCHER` | ladder |  | Which launcher the full-rack NCCL run uses. Default `llmb`. | `backend/nccl_stage1.py` |
 | <a id="s-rack-nccl-fullrack-script"></a>`RACK_NCCL_FULLRACK_SCRIPT` | ladder |  | — | `backend/paths.py` |
 | <a id="s-rack-nccl-fullrack-timeout"></a>`RACK_NCCL_FULLRACK_TIMEOUT` | ladder | `7200` | — | `backend/api/validation_runs.py` |
 | <a id="s-rack-nccl-mpi-script"></a>`RACK_NCCL_MPI_SCRIPT` | ladder |  | — | `backend/paths.py` |

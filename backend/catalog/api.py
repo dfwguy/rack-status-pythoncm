@@ -239,6 +239,13 @@ def list_tools():
             subtitle = _preset_version_subtitle(str(launch.get("preset_id") or ""))
             if subtitle:
                 item["subtitle"] = subtitle
+        # The rack Stage-1 card describes the launcher RACK_NCCL_FULLRACK_LAUNCHER selects, derived
+        # on every read like the preset version above: a stored "5 rounds all_reduce" card while the
+        # llmb launcher ran its 24-test set is the drift this closes.
+        import nccl_stage1  # lazy: catalog registration must not load the launch stack
+
+        for item in items:
+            nccl_stage1.apply_card(item)
         return jsonify({"ok": True, "items": items})
     return _crud_list(TABLE_TOOLS, models.Tool)
 

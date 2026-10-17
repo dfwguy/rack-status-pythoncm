@@ -438,6 +438,17 @@ JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     },
     {
         "section": "jobs_cluster",
+        "key": "RACK_NCCL_FULLRACK_LAUNCHER",
+        "label": "Stage-1 NCCL launcher",
+        "description": (
+            "What rack/node Stage 1 (NCCL Benchmark (Stage-1)) runs. llmb (default): llmb-run "
+            "microbenchmark_nccl, the LLMB install's whole test set in one job (stock: 24 tests over "
+            "five collectives). mpi: host-mpirun all_reduce, 5 rounds by default. The Stage-1 card "
+            "follows this setting."
+        ),
+    },
+    {
+        "section": "jobs_cluster",
         "key": "RACK_NODE_STAGE1_BRINGUP_JOBS",
         "label": "Node Stage 1 bring-up jobs",
         "description": (

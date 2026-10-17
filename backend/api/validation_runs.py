@@ -56,6 +56,7 @@ from pathlib import Path
 
 import host_exec
 import native_status
+import nccl_stage1
 import p2p_catalog
 import script_tree
 import validation_presets
@@ -1091,8 +1092,7 @@ def _prepare_run_nccl_fullrack(body: dict) -> tuple[dict | None, tuple[object, i
     # per-collective knobs below (--size-max / --nccl-version / --rounds) do not apply --
     # the sweep is defined by llmb_repo/nccl/config/testset.toml and baked into launch.sh.
     # Set RACK_NCCL_FULLRACK_LAUNCHER=mpi to fall back to run_nccl_mpi.sh + nccl_allreduce.sbatch.
-    launcher = (_eget("RACK_NCCL_FULLRACK_LAUNCHER") or "llmb").strip().lower()
-    use_llmb = launcher not in ("mpi", "sbatch", "direct", "nccl_mpi")
+    use_llmb = nccl_stage1.launcher() == nccl_stage1.LLMB
     script = _run_llmb_nccl_script_path() if use_llmb else _run_nccl_mpi_script_path()
     if not _script_exists(script):
         return None, (jsonify({"ok": False, "error": f"NCCL launcher not found: {script}"}), 500)
@@ -1132,7 +1132,7 @@ def _prepare_run_nccl_fullrack(body: dict) -> tuple[dict | None, tuple[object, i
         cmd += vc
         nccl_version = vc[1] if vc else ""
         # Stage-1 acceptance runs the sweep 5× by default; the UI modal can override via ``iters``.
-        rounds = _nccl_rounds_from_body(body, 5) or 5
+        rounds = _nccl_rounds_from_body(body, nccl_stage1.DEFAULT_MPI_ROUNDS) or nccl_stage1.DEFAULT_MPI_ROUNDS
         cmd += ["--rounds", str(rounds)]
         if tgt_ov_s:
             cmd += ["--nodelist", target]
