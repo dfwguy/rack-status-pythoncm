@@ -11,6 +11,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 LIB = Path(__file__).resolve().parents[2] / "bin" / "scripts" / "lib" / "llmb_env.inc.sh"
 
 
@@ -76,8 +78,14 @@ def test_keep_ucx_env_keeps_host_pins_for_host_runs():
     assert out["UCX_TLS"] == "^tcp"
 
 
-def test_launcher_sources_the_lib():
-    text = (LIB.parent.parent / "run_llmb_nccl.sh").read_text()
+@pytest.mark.parametrize("launcher", ["run_llmb_nccl", "run_llmb_nemo"])
+def test_both_llmb_launchers_source_the_lib(launcher):
+    text = (LIB.parent.parent / f"{launcher}.sh").read_text()
     assert 'source "${_SCRIPT_DIR}/lib/llmb_env.inc.sh"' in text
-    assert "nvis_llmb_drop_host_ucx_pins" in text
-    assert "nvis_llmb_force_export_stated" in text
+    assert f"nvis_llmb_container_wiring {launcher}" in text
+
+
+def test_the_wiring_drops_host_pins_and_forces_the_stated_keys():
+    body = (LIB.read_text())
+    wiring = body[body.index("nvis_llmb_container_wiring() {"):]
+    assert "nvis_llmb_drop_host_ucx_pins" in wiring and "nvis_llmb_force_export_stated" in wiring

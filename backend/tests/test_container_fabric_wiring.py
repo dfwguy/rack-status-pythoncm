@@ -38,7 +38,8 @@ from tests.test_cluster_fabric import _nc_node
 SCRIPTS = Path(__file__).resolve().parents[2] / "bin" / "scripts"
 FABRIC = SCRIPTS / "lib" / "fabric.inc.sh"
 LLMB_ENV = SCRIPTS / "lib" / "llmb_env.inc.sh"
-LAUNCHER = SCRIPTS / "run_llmb_nccl.sh"
+LAUNCHERS = [SCRIPTS / "run_llmb_nccl.sh", SCRIPTS / "run_llmb_nemo.sh"]
+STATED = SCRIPTS / "lib" / "stated_env.inc.sh"
 SPCX = "/opt/hpcx/nccl_spectrum-x_plugin/lib/libnccl-net-spcx.so"
 
 
@@ -53,7 +54,7 @@ def _bash(body: str, root: Path | None = None, **env: str) -> dict[str, str]:
         **({"NVIS_FABRIC_SYSFS": str(root)} if root else {}),
         **env,
     }
-    script = f'source "{FABRIC}"\nsource "{LLMB_ENV}"\n{body}\n'
+    script = f'source "{FABRIC}"\nsource "{STATED}"\nsource "{LLMB_ENV}"\n{body}\n'
     r = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=full, timeout=30, check=False)
     assert r.returncode == 0, r.stderr
     return dict(line.split("=", 1) for line in r.stdout.splitlines() if "=" in line)
@@ -95,18 +96,11 @@ def test_without_a_scan_the_declared_protocol_decides(declared, devices):
     assert out["MVD"] == devices
 
 
-# ---------------------------------------------------------------- the launcher's block, as written
-
-
-def _launcher_block() -> str:
-    text = LAUNCHER.read_text(encoding="utf-8")
-    start = text.index("nvis_fabric_container_env\n")
-    end = text.index("export NVIS_FORCE_EXPORT_VARS", start) + len("export NVIS_FORCE_EXPORT_VARS")
-    return text[start:end]
+# ---------------------------------------------------------------- the launchers' wiring
 
 
 def _launch(root: Path, **env: str) -> dict[str, str]:
-    body = (f'eval "$(nvis_fabric_scan)"\n{_launcher_block()}\n'
+    body = ('nvis_stated_env_capture\neval "$(nvis_fabric_scan)"\nnvis_llmb_container_wiring test\n'
             'echo "FORCE=${NVIS_FORCE_EXPORT_VARS:-}"; echo "UCX_TLS=${UCX_TLS:-}"; '
             'echo "UCX_NET_DEVICES=${UCX_NET_DEVICES:-}"; ' + _SHOW)
     return _bash(body, root, **env)
@@ -125,7 +119,13 @@ def test_ucx_the_launch_stated_is_left_alone(tmp_path):
     _nc_node(tmp_path)
     out = _launch(tmp_path, UCX_TLS="rc", NVIS_EXTRA_ENV_KEYS="UCX_TLS")
     assert out["UCX_TLS"] == "rc"
-    assert "UCX_TLS" not in _bash("true") and "MELLANOX_VISIBLE_DEVICES" in out["FORCE"].split()
+    assert "MELLANOX_VISIBLE_DEVICES" in out["FORCE"].split()
+
+
+def test_a_host_ucx_pin_the_launch_did_not_state_is_dropped(tmp_path):
+    _nc_node(tmp_path)
+    out = _launch(tmp_path, UCX_TLS="^tcp")
+    assert out["UCX_TLS"] == "tcp"
 
 
 def test_keys_already_forced_are_not_listed_twice(tmp_path):
@@ -134,50 +134,15 @@ def test_keys_already_forced_are_not_listed_twice(tmp_path):
     assert out["FORCE"].split().count("MELLANOX_VISIBLE_DEVICES") == 1
 
 
-def test_the_launcher_reports_the_container_wiring():
-    assert re.search(r"run_llmb_nccl: container: MELLANOX_VISIBLE_DEVICES=", LAUNCHER.read_text(encoding="utf-8"))
-
-
-# ---------------------------------------------------------------- the NeMo job's block, as written
-#
-# NeMo 188619 (U22+U23, 2026-10-12) trained at 110 s/step against 4.1 s on one rack: its ranks named
-# the Spectrum-X plugin by a host path, fell back to NCCL's built-in transport on the multiplane RoCE
-# VFs, and its NCCL pre-flight alltoall took 595 ms for 4 MB. Both NeMo launch paths (Multirack NEMO
-# and the NeMo validation preset) submit this one batch script.
-
-NEMO_JOB = SCRIPTS / "nemo-nemotron5h_56b-mbridge-fp8.sh"
-
-
-def _nemo_plugin_block() -> str:
-    text = NEMO_JOB.read_text(encoding="utf-8")
-    start = text.index('export NCCL_IGNORE_COLLNET_MISMATCH=')
-    end = text.index("nvis_fabric_container_env\nfi\n", start) + len("nvis_fabric_container_env\nfi\n")
-    return text[start:end]
-
-
-def _nemo(root: Path, single_rack: int, **env: str) -> dict[str, str]:
-    body = f'eval "$(nvis_fabric_scan)"\nsingle_rack={single_rack}\n{_nemo_plugin_block()}\n{_SHOW}'
-    return _bash(body, root, **env)
-
-
-def test_a_cross_rack_nemo_job_loads_the_clusters_plugin_inside_the_image(tmp_path):
-    _nc_node(tmp_path)
-    assert _nemo(tmp_path, 0, NVIS_FABRIC_NET_PLUGIN=SPCX)["PLUGIN"] == SPCX
-
-
-def test_the_nemo_launch_override_still_wins(tmp_path):
-    _nc_node(tmp_path)
-    assert _nemo(tmp_path, 0, NVIS_FABRIC_NET_PLUGIN=SPCX, NVIS_NCCL_NET_PLUGIN="none")["PLUGIN"] == "none"
-
-
-def test_a_single_rack_nemo_job_stays_as_it_was(tmp_path):
-    _nc_node(tmp_path)
-    assert _nemo(tmp_path, 1, NVIS_FABRIC_NET_PLUGIN=SPCX)["PLUGIN"] == ""
-
-
-def test_the_nemo_job_sources_the_fabric_library_before_the_plugin_block():
-    text = NEMO_JOB.read_text(encoding="utf-8")
-    assert text.index('. "${_nvis_lib}"') < text.index(_nemo_plugin_block())
+@pytest.mark.parametrize("launcher", LAUNCHERS, ids=lambda p: p.stem)
+def test_both_llmb_launchers_wire_the_container_after_capturing_what_was_stated(launcher):
+    """The NeMo half ran its ranks with no RDMA device in the container until it shared this wiring."""
+    text = launcher.read_text(encoding="utf-8")
+    capture = text.index("\nnvis_stated_env_capture\n")
+    probe = text.index("nvis_fabric_export_from_node")
+    wiring = text.index(f"\nnvis_llmb_container_wiring {launcher.stem}\n")
+    assert capture < probe < wiring
+    assert re.search(rf"{launcher.stem}: container: MELLANOX_VISIBLE_DEVICES=", text)
 
 
 # ---------------------------------------------------------------- the cluster setting

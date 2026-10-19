@@ -24,6 +24,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 SCRIPTS = Path(__file__).resolve().parents[2] / "bin" / "scripts"
 LIB = SCRIPTS / "lib" / "stated_env.inc.sh"
 
@@ -139,10 +141,11 @@ class TestTheNcclLauncher:
         assert text.index("nvis_stated_env_restore nccl_allreduce") < text.index("EXTRA_X=()")
 
 
-class TestTheLlmbLauncher:
-    """run_llmb_nccl.sh: the in-container LLMB sweep."""
+class TestTheLlmbLaunchers:
+    """run_llmb_nccl.sh and run_llmb_nemo.sh: the in-container LLMB sweep and pretrain, one wiring."""
 
-    def test_a_stated_netdev_survives_the_container_transport_pick(self, tmp_path):
+    @pytest.mark.parametrize("launcher", ["run_llmb_nccl", "run_llmb_nemo"])
+    def test_a_stated_netdev_survives_the_container_transport_pick(self, tmp_path, launcher):
         # NC's rack list states UCX_NET_DEVICES but not UCX_TLS; the cross-rack transport pick used to
         # replace the netdev with the bootstrap one.
         lib = tmp_path / "lib"
@@ -155,12 +158,13 @@ class TestTheLlmbLauncher:
             'nvis_fabric_container_env() { NVIS_FABRIC_CONTAINER_EXPORTS="MELLANOX_VISIBLE_DEVICES"; }\n'
             'nvis_fabric_mpi_xrack_transport() { export UCX_TLS=tcp UCX_NET_DEVICES=bond0; }\n'
         )
-        text = (SCRIPTS / "run_llmb_nccl.sh").read_text()
-        snippet = _between(text, "# What this launch states", "nvis_stated_env_restore run_llmb_nccl")
+        text = (SCRIPTS / f"{launcher}.sh").read_text()
+        snippet = _between(text, "# What this launch states", f"nvis_llmb_container_wiring {launcher}")
         r = _bash(f'_SCRIPT_DIR="{tmp_path}"\n' + stubs + snippet
                   + 'echo "D=$UCX_NET_DEVICES"; echo "T=$UCX_TLS"; echo "F=$NVIS_FORCE_EXPORT_VARS"',
                   {"NVIS_EXTRA_ENV_KEYS": "UCX_NET_DEVICES", "UCX_NET_DEVICES": "enP22s22f0np0"})
         values = _values(r.stdout)
         assert values["D"] == "enP22s22f0np0", r.stderr
         assert values["T"] == "tcp"  # not stated: the fabric's pick stands
-        assert "UCX_NET_DEVICES" in values["F"].split()
+        assert {"UCX_NET_DEVICES", "MELLANOX_VISIBLE_DEVICES", "UCX_TLS"} <= set(values["F"].split())
+        assert f"{launcher}: UCX_NET_DEVICES=enP22s22f0np0 (stated for this launch" in r.stderr

@@ -144,6 +144,13 @@ fi
 [[ -f "${LLMB_VENV}/bin/activate" ]] && source "${LLMB_VENV}/bin/activate"
 export LLMB_INSTALL
 
+# What this launch states (the cluster's nccl_env for its span, the dialog's variables) is captured
+# before the fabric wiring below and restored after it, so a stated value wins over every pick the
+# probe and the container wiring make (lib/stated_env.inc.sh).
+# shellcheck source=lib/stated_env.inc.sh
+source "${_SCRIPT_DIR}/lib/stated_env.inc.sh"
+nvis_stated_env_capture
+
 # --- Fabric wireup --------------------------------------------------------------
 if [[ "${NVIS_FABRIC_SKIP:-0}" != "1" ]]; then
   _first_node="$(nvis_nodes_first)"
@@ -154,18 +161,16 @@ if [[ "${NVIS_FABRIC_SKIP:-0}" != "1" ]]; then
   fi
 fi
 
-# --- Container reality check: drop host-only UCX pins ---------------------------
-# Same rule as run_llmb_nccl.sh: the NeMo pyxis/enroot container exposes only
-# tcp/IPoIB netdevs, so UCX_TLS=^tcp leaves NO transport and every rank dies
-# ("Destination is unreachable"). Killed job 65827 on every tray.
-if [[ "${NVIS_LLMB_KEEP_UCX_ENV:-0}" != "1" ]]; then
-  for _v in UCX_TLS UCX_NET_DEVICES; do
-    if [[ -n "${!_v:-}" ]]; then
-      echo "run_llmb_nemo: unsetting ${_v}=${!_v} (host-only pin; fatal inside the llmb container)" >&2
-      unset "${_v}"
-    fi
-  done
-fi
+# --- Container reality check + wiring for this fabric ----------------------------
+# Same machinery as run_llmb_nccl.sh (lib/llmb_env.inc.sh): drop the probe's host-only UCX pins
+# (UCX_TLS=^tcp killed job 65827 on every tray), give the container the RDMA devices and the cluster's
+# NCCL net plugin, set MPI's own transport for the fabric, keep what this launch stated, and force it
+# all into the job's --export. Before this the NeMo half of the action ran its ranks with no RDMA device
+# in the container, so a multi-rack pretrain fell back to TCP sockets, as the NCCL sweep did (Slurm
+# 189003) before the wiring was given to it.
+# shellcheck source=lib/llmb_env.inc.sh
+source "${_SCRIPT_DIR}/lib/llmb_env.inc.sh"
+nvis_llmb_container_wiring run_llmb_nemo
 
 # --- Stage 1 of this action: the NCCL sweep, also via llmb-run --------------------
 # MUST run BEFORE nvis_sbatch_pin_install below. The shim works by prepending a fake
@@ -243,7 +248,8 @@ echo "run_llmb_nemo: workload=${LLMB_WORKLOAD} model_size=${LLMB_MODEL_SIZE} dty
 echo "run_llmb_nemo: rack=${RACK_ID:-<none>} nodelist=${NODELIST} time_limit=${TIME_LIMIT_VAL}"
 echo "run_llmb_nemo: LLMB_INSTALL=${LLMB_INSTALL} LLMB_RUN=${LLMB_RUN}${NVIS_SHIM_DIR:+ sbatch_shim=${NVIS_SHIM_DIR}/sbatch}"
 [[ -n "${SBATCH_OUTPUT}" ]] && echo "run_llmb_nemo: sbatch stdout -> ${SBATCH_OUTPUT}"
-echo "run_llmb_nemo: fabric: NCCL_IB_HCA=${NCCL_IB_HCA:-<auto>} NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-<auto>} UCX_TLS=${UCX_TLS:-<default>}"
+echo "run_llmb_nemo: fabric: NCCL_IB_HCA=${NCCL_IB_HCA:-<auto>} NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-<auto>} UCX_TLS=${UCX_TLS:-<default>} UCX_NET_DEVICES=${UCX_NET_DEVICES:-<auto>}"
+echo "run_llmb_nemo: container: MELLANOX_VISIBLE_DEVICES=${MELLANOX_VISIBLE_DEVICES:-<unset>} NCCL_NET_PLUGIN=${NCCL_NET_PLUGIN:-<NCCL default>} forced into job env: ${NVIS_FORCE_EXPORT_VARS:-<none>}"
 printf 'run_llmb_nemo: exec:'; printf ' %q' "${cmd[@]}"; echo
 
 cd "${LLMB_INSTALL}" || die "cannot cd to LLMB_INSTALL=${LLMB_INSTALL}"

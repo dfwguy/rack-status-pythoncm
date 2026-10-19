@@ -160,48 +160,16 @@ else
   echo "run_llmb_nccl: NVIS_FABRIC_SKIP=1 — using inherited/overridden fabric env" >&2
 fi
 
-# --- Container reality check: drop host-only UCX pins ---------------------------
-# llmb-run executes inside the NeMo pyxis/enroot container, which exposes the RDMA devices only when
-# the container wiring below asks for them -- and even then not the HOST's device names or
-# transports. The fabric probe above is written for the
-# HOST mpirun path; two of its exports are fatal in-container:
-#   UCX_TLS=^tcp        forbids the only transport the container actually has, so UCX
-#                       reports "no active messages transport" and every rank is Killed.
-#   UCX_NET_DEVICES=mlx5_*:1  names devices that do not exist inside the container.
-# Job 65827 died this way on EVERY tray, including 4-rail ones -- it is a transport
-# problem, not a rail-count problem. MPI is only the bootstrap here (NCCL does the
-# collectives over IB directly), so letting UCX use tcp costs nothing.
-# Set NVIS_LLMB_KEEP_UCX_ENV=1 to keep the host pins (host/non-container runs only).
-# A value the launch STATED (the cluster's nccl_env or the operator's dialog, listed in
-# NVIS_EXTRA_ENV_KEYS) is not a host pin: it stays, and is forced into the job's --export --
-# that is how a site pins MPI's own transport for this sweep (see lib/llmb_env.inc.sh).
+# --- Container reality check + wiring for this fabric ----------------------------
+# llmb-run executes inside the NeMo pyxis/enroot container. The fabric probe above is written for the
+# HOST mpirun path and two of its exports are fatal in-container (UCX_TLS=^tcp, host UCX_NET_DEVICES:
+# job 65827 died on every tray); the container exposes the RDMA devices only when asked, and the
+# cluster's NCCL net plugin only by its path inside the image. lib/llmb_env.inc.sh drops the host pins,
+# wires the container for the fabric, keeps what this launch stated, and forces all of it into the
+# job's --export. Set NVIS_LLMB_KEEP_UCX_ENV=1 to keep the host pins (host/non-container runs only).
 # shellcheck source=lib/llmb_env.inc.sh
 source "${_SCRIPT_DIR}/lib/llmb_env.inc.sh"
-nvis_llmb_drop_host_ucx_pins
-nvis_llmb_force_export_stated
-
-# --- Container wiring for this fabric --------------------------------------------
-# The ranks run in the image, so what NCCL can reach is what the container is given: the RDMA devices
-# (MELLANOX_VISIBLE_DEVICES, for the node's enroot 99-mellanox.sh hook) on IB or RoCE, and the
-# cluster's NCCL net plugin as a path inside the image (fabric.net_plugin -> NVIS_FABRIC_NET_PLUGIN).
-# Without the devices NCCL ran a 2-rack sweep on TCP sockets at 7 GB/s (Slurm 189003). Once the
-# devices are in the container MPI's UCX sees them too, and on a routed RoCE fabric it picks a
-# link-local GID that cannot leave the node's subnet (NeMo job 165605); so MPI's own transport is
-# set for the fabric (nvis_fabric_mpi_xrack_transport: TCP on the bootstrap netdev on RoCE, RC on
-# IB) unless the cluster or the operator stated UCX values for this launch. All of it is forced into
-# the job's --export, because llmb's job script is generated once at install and reads only the
-# environment it is submitted with.
-nvis_fabric_container_env
-if [[ " ${NVIS_FABRIC_CONTAINER_EXPORTS} " == *" MELLANOX_VISIBLE_DEVICES "* \
-      && " ${NVIS_EXTRA_ENV_KEYS:-} " != *" UCX_TLS "* ]]; then
-  nvis_fabric_mpi_xrack_transport
-  NVIS_FABRIC_CONTAINER_EXPORTS="${NVIS_FABRIC_CONTAINER_EXPORTS} UCX_TLS${UCX_NET_DEVICES:+ UCX_NET_DEVICES}"
-fi
-nvis_stated_env_restore run_llmb_nccl
-for _k in ${NVIS_FABRIC_CONTAINER_EXPORTS}; do
-  [[ " ${NVIS_FORCE_EXPORT_VARS:-} " == *" ${_k} "* ]] || NVIS_FORCE_EXPORT_VARS="${NVIS_FORCE_EXPORT_VARS:+${NVIS_FORCE_EXPORT_VARS} }${_k}"
-done
-export NVIS_FORCE_EXPORT_VARS
+nvis_llmb_container_wiring run_llmb_nccl
 
 # --- Apply the operator's NCCL debug level to the workload's testset config ------
 # THE JOB ENVIRONMENT DOES NOT REACH THE RANKS ON THIS PATH. The workload is NVIDIA
