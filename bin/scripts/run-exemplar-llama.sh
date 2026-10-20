@@ -134,6 +134,14 @@ llmb_run="${llmb_run:-${llmb_install}/llmb-run}"
 }
 export LLMB_INSTALL="$llmb_install"
 
+# Ranks rack by rack, and rank 0's host named, before the shim forces them into the job's --export:
+# Megatron groups consecutive ranks, and Slurm's own node order interleaves racks whose hostnames do
+# not group by rack (lib/rank_layout.inc.sh). Placement comes from Rack Status (NVIS_NODE_PLACEMENT).
+# shellcheck source=lib/rank_layout.inc.sh
+source "$script_dir/lib/rank_layout.inc.sh"
+nvis_rank_layout run-exemplar-llama "$nodelist" 4 "$job_log_dir" \
+  || echo "run-exemplar-llama: WARNING: no rank layout; ranks follow Slurm's node order" >&2
+
 # llmb-run owns the inner sbatch call. Reuse the production shim so the outer
 # Slurm stdout cannot fall back to the LLMB workspace during a manual launch.
 # shellcheck disable=SC1091

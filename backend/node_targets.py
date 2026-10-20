@@ -170,6 +170,46 @@ def nccl_env_scope_for_target(target: str) -> str:
     return nccl_env_scope(max(1, len(set(placed.values()))), len(hosts))
 
 
+#: The launch env key the rank-layout library reads (bin/scripts/lib/rank_layout.inc.sh).
+NODE_PLACEMENT_ENV = "NVIS_NODE_PLACEMENT"
+
+
+def placement_env(groups: dict[str, str]) -> dict[str, str]:
+    """``NVIS_NODE_PLACEMENT`` for ``rack -> hostlist`` (any Slurm hostlist), or ``{}`` for none.
+
+    The llmb launchers lay their ranks out rack by rack from it, because Slurm's own node order
+    interleaves racks whose hostnames do not group by rack and Megatron builds its tensor- and
+    expert-parallel groups from consecutive ranks (Nscale NC, Slurm 216666, 2026-10-20).
+    """
+    entries = [f"{rack}={hosts}" for rack, hosts in groups.items()
+               if rack and hosts and not set("=;") & set(rack + hosts)]
+    return {NODE_PLACEMENT_ENV: ";".join(entries)} if entries else {}
+
+
+def node_placement_env(target: str) -> dict[str, str]:
+    """The placement of a launch target's hosts, as :func:`placement_env`, from the node inventory.
+
+    Hosts the inventory has not placed are left out (the launcher keeps them last, in natural order);
+    a target that is not a plain hostlist -- a rack template the site resolves later -- has none.
+    """
+    from universal_parser import expand_nodelist
+
+    hosts = [h for h in expand_nodelist((target or "").strip()) if h]
+    if not hosts or any("[" in h or not is_valid_node_hostname(h) for h in hosts):
+        return {}
+    try:
+        import native_status
+
+        placed = native_status.placed_racks_of(hosts) or {}
+    except Exception:  # noqa: BLE001 - placement is a refinement; without it ranks keep Slurm's order
+        placed = {}
+    groups: dict[str, list[str]] = {}
+    for host in hosts:
+        if host in placed:
+            groups.setdefault(placed[host], []).append(host)
+    return placement_env({rack: ",".join(members) for rack, members in groups.items()})
+
+
 def validation_target_for_racks(racks: list[str], override: str | None) -> str:
     """The node target for a launch that spans *racks* (one rack: ``validation_target_for_rack``).
 

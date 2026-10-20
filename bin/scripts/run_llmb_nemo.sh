@@ -213,6 +213,15 @@ if [[ "${NVIS_LLMB_NEMO_WITH_NCCL:-1}" == "1" && "${DRY_RUN}" -eq 0 ]]; then
   fi
 fi
 
+# --- Rank layout: racks together, rank 0's host named ------------------------------
+# After the NCCL stage, which is its own launch, and before llmb submits: the job's srun reads
+# SLURM_HOSTFILE + SLURM_DISTRIBUTION=arbitrary, so tensor/expert groups of consecutive ranks stay
+# inside one NVLink domain, and MASTER_ADDR names the host rank 0 runs on (lib/rank_layout.inc.sh).
+# shellcheck source=lib/rank_layout.inc.sh
+source "${_SCRIPT_DIR}/lib/rank_layout.inc.sh"
+nvis_rank_layout run_llmb_nemo "${NODELIST}" "${GPUS_PER_NODE}" "${JOB_LOG_DIR:-.}" \
+  || echo "run_llmb_nemo: WARNING: no rank layout; ranks follow Slurm's node order" >&2
+
 # --- Pin llmb's own sbatch + name the log the way the dashboard expects ---------
 # parser.sh / rack_status.sh key on  <user>-NEMO-1Rack-<rack>-<N>N-<jobid>.txt.
 # The shim STRIPS llmb's own --output and forces ours, and Slurm expands %j, so the

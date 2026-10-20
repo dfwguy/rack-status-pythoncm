@@ -92,6 +92,8 @@ from node_targets import (
     launch_scope_for_target,
     nccl_env_scope,
     nccl_env_scope_for_target,
+    node_placement_env,
+    placement_env,
     validation_target_for_rack,
     validation_target_for_racks,
 )
@@ -403,6 +405,8 @@ def _prepare_run_validation(body: dict) -> tuple[dict | None, tuple[object, int]
                     for k in ("LLMB_INSTALL", "LLMB_REPO", "LLMB_VENV", "NVIS_WORKSPACE_DIR")
                     if (v := (_eget(k) or "").strip())
                 },
+                # Where each host sits, so an llmb launcher lays its ranks out rack by rack.
+                **node_placement_env(target),
                 # Launch-dialog vars win over the stored Settings values.
                 **_launch_env_from_body(body, scope=nccl_env_scope_for_target(target)),
             },
@@ -814,6 +818,8 @@ def _prepare_run_exemplar_llama(body: dict) -> tuple[dict | None, tuple[object, 
             "image_profile": image_profile,
             "tuning": tuning,
             "dry_run": dry_run,
+            # Each rack's hosts, so the wrapper lays the 512 ranks out rack by rack.
+            "env_updates": placement_env({rack: naming.ct_blob(rack, inner) for rack in sorted(racks)}),
         },
         None,
     )
@@ -869,7 +875,7 @@ def api_run_exemplar_llama_async():
             "command_display": display_cmd,
             "created_at": created,
         }
-    env_updates = {"NVIS_ACTIVITY_ID": job_id}
+    env_updates = {**prep.get("env_updates", {}), "NVIS_ACTIVITY_ID": job_id}
     threading.Thread(
         target=_stress_worker,
         args=(job_id, prep["cmd"], str(prep["cwd"]), int(prep["timeout"]), display_cmd),

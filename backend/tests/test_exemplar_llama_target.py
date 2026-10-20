@@ -72,6 +72,14 @@ def test_exact_eight_rack_target_is_512_gpu_subset(monkeypatch):
     assert "--tuning baseline" in prepared["display_cmd"]
 
 
+def test_each_racks_hosts_travel_with_the_launch_for_the_rank_layout(monkeypatch):
+    prepared, err = _prepare(monkeypatch, {"racks": RACKS, "dtype": "fp8"})
+    assert err is None and prepared is not None
+    placement = prepared["env_updates"]["NVIS_NODE_PLACEMENT"].split(";")
+    assert placement[0] == "ink50-dh01-d19=ink50-dh01-d19-[11-18,28-35]"
+    assert len(placement) == 8
+
+
 def test_fp8_stock_control_and_dry_run_are_explicit(monkeypatch):
     prepared, err = _prepare(
         monkeypatch,
