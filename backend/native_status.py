@@ -2998,58 +2998,77 @@ def _dashboard_node_inventory(log_dir: Path) -> list[dict[str, Any]] | None:
     return nodes if isinstance(nodes, list) else None
 
 
+def _placement_nodes() -> list[dict[str, Any]] | None:
+    """The node inventory placement is read from: this worker's own, else the canonical snapshot.
+
+    A worker's inventory lives in that one process and is empty until it has rendered the dashboard,
+    so right after a restart -- or in a worker that never served the dashboard -- every rack name
+    resolved to no node: a preset launched from the multi-rack view on Nscale NC refused every rack
+    ("no Slurm inventory nodes found for rack V19", 2026-10-20), and a Stage-1 launch fell back to the
+    single-rack NCCL list (Slurm 190374). The canonical snapshot is shared by every worker and
+    persisted, and carries the same placed nodes. ``None`` when neither has an inventory yet.
+    """
+    cluster = json.loads(native_state_key(Path("/")))[:-1]
+    with _states_lock:
+        states = list(_states.items())
+    for key, st in states:
+        try:
+            if json.loads(key)[:-1] != cluster:
+                continue
+        except (TypeError, ValueError):
+            continue
+        nodes = st.node_inventory_snapshot().get("nodes")
+        if isinstance(nodes, list):
+            return nodes
+    return _snapshot_placement_nodes()
+
+
+def _snapshot_placement_nodes() -> list[dict[str, Any]] | None:
+    """The canonical cluster snapshot's placed nodes, without waiting for a refresh."""
+    try:
+        import paths
+        import rack_status_engine  # imports this module, so it cannot be imported at the top
+
+        payload = rack_status_engine.get_cluster_snapshot(Path(str(paths._default_log_dir())), wait=False).payload
+    except Exception:  # noqa: BLE001 - placement is a refinement; without it the caller keeps its fallback
+        return None
+    nodes = (payload or {}).get("nodes")
+    return nodes if isinstance(nodes, list) else None
+
+
 def placed_rack_members(rack: str) -> list[str] | None:
-    """Hostnames the dashboard's node inventory placed in *rack*, in natural (install) order.
+    """Hostnames the node inventory placed in *rack*, in natural (install) order.
 
     The inventory already applied the rack-mapping mode and templates, so this is the one answer
     to "which nodes are in this rack" that holds where the hostname names no rack (Nscale NC's
-    U20 is sys1-gso1-p-phy-gpu19..36-su19). Scoped to the active cluster by the state key minus
-    its log root, so it does not depend on which log directory the caller has in hand. ``None``
-    when no inventory has been built for this cluster yet; ``[]`` when the rack holds no node.
+    U20 is sys1-gso1-p-phy-gpu19..36-su19). Scoped to the active cluster (:func:`_placement_nodes`).
+    ``None`` when no inventory has been built for this cluster yet; ``[]`` when the rack holds no node.
     """
     rid = (rack or "").strip().casefold()
     if not rid:
         return []
-    cluster = json.loads(native_state_key(Path("/")))[:-1]
-    with _states_lock:
-        states = list(_states.items())
-    for key, st in states:
-        try:
-            if json.loads(key)[:-1] != cluster:
-                continue
-        except (TypeError, ValueError):
-            continue
-        nodes = st.node_inventory_snapshot().get("nodes")
-        if isinstance(nodes, list):
-            members = [str(n["id"]) for n in nodes if str(n.get("rack") or "").casefold() == rid]
-            return sorted(members, key=_natural_key)
-    return None
+    nodes = _placement_nodes()
+    if nodes is None:
+        return None
+    members = [str(n["id"]) for n in nodes if str(n.get("rack") or "").casefold() == rid and n.get("id")]
+    return sorted(members, key=_natural_key)
 
 
 def placed_racks_of(hosts: list[str]) -> dict[str, str] | None:
-    """The rack the dashboard's node inventory placed each of *hosts* in: ``host -> rack``.
+    """The rack the node inventory placed each of *hosts* in: ``host -> rack``.
 
-    The reverse of :func:`placed_rack_members`, scoped the same way. A host the inventory did not
+    The reverse of :func:`placed_rack_members`, from the same inventory. A host the inventory did not
     place is left out. ``None`` when no inventory has been built for this cluster yet.
     """
     wanted = {h.casefold(): h for h in hosts if h}
-    cluster = json.loads(native_state_key(Path("/")))[:-1]
-    with _states_lock:
-        states = list(_states.items())
-    for key, st in states:
-        try:
-            if json.loads(key)[:-1] != cluster:
-                continue
-        except (TypeError, ValueError):
-            continue
-        nodes = st.node_inventory_snapshot().get("nodes")
-        if isinstance(nodes, list):
-            return {
-                wanted[str(n["id"]).casefold()]: str(n["rack"])
-                for n in nodes
-                if str(n.get("id") or "").casefold() in wanted and str(n.get("rack") or "")
-            }
-    return None
+    nodes = _placement_nodes()
+    if nodes is None:
+        return None
+    return {
+        wanted[str(n["id"]).casefold()]: str(n["rack"])
+        for n in nodes
+        if str(n.get("id") or "").casefold() in wanted and str(n.get("rack") or "")
+    }
 
 
 def build_multirack_status(

@@ -47,6 +47,7 @@ def placed(monkeypatch):
     st = SimpleNamespace(node_inventory_snapshot=lambda: {"nodes": _inventory()})
     monkeypatch.setattr(ns, "_states", {ns.native_state_key(Path("/home/cmods/nvis/logs")): st})
     monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+    monkeypatch.setattr(ns, "_snapshot_placement_nodes", lambda: None)  # no canonical snapshot either
     monkeypatch.setattr(slurm_query, "_all_slurm_nodenames",
                         lambda: pytest.fail("translate must not match racks by hostname prefix"))
 
@@ -65,6 +66,24 @@ class TestPlacedRackMembers:
             "other-cluster" if key == "NVIS_CLUSTER_ID" else default
         ))
         assert ns.placed_rack_members("Q5") is None
+
+
+class TestPlacementWithoutThisWorkersInventory:
+    """Right after a restart, or in a worker that never rendered the dashboard, there is no worker state:
+    placement comes from the canonical cluster snapshot that every worker shares (Nscale NC, 2026-10-20:
+    every rack name in a multi-rack preset launch resolved to no node)."""
+
+    def test_rack_members_and_host_racks_come_from_the_snapshot(self, placed, monkeypatch):
+        monkeypatch.setattr(ns, "_states", {})
+        monkeypatch.setattr(ns, "_snapshot_placement_nodes", _inventory)
+        assert ns.placed_rack_members("Q5") == [f"sys1-gso1-p-phy-gpu{n}-su5" for n in (1, 2, 10)]
+        assert ns.placed_racks_of([U20[0], Q5[0], "elsewhere"]) == {U20[0]: "U20", Q5[0]: "Q5"}
+        assert slurm_query._rack_node_hostnames_from_inventory("U20") == U20
+
+    def test_this_workers_own_inventory_still_wins(self, placed, monkeypatch):
+        monkeypatch.setattr(ns, "_snapshot_placement_nodes",
+                            lambda: pytest.fail("the snapshot is only the fallback"))
+        assert ns.placed_rack_members("U20") == U20
 
 
 class TestSharedResolver:
