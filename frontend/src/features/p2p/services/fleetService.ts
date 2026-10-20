@@ -124,6 +124,8 @@ export type CampaignEdit = {
   fill_wave_size: number;
   /** Seconds without download progress before a node is stopped and relaunched; 0 inherits. */
   stall_seconds: number;
+  /** Checksum-rate override (MB/s) for a fully written image's verify window; 0 inherits. */
+  verify_mb_per_second: number;
   /** Hard limit on one node's download (enforced on the node); 0 inherits. */
   download_timeout_seconds: number;
   /** Wave plan override; blank inherits the cluster's rollout strategy. */
@@ -154,7 +156,7 @@ export function saveCampaigns(campaigns: CampaignEdit[]): Promise<CampaignsDoc> 
 /** The campaign fields that override the cluster's rollout pacing. */
 const CAMPAIGN_PACING_KEYS = [
   "wave_size", "parallelism", "poll_seconds", "max_launches", "max_unreachable", "timeout_seconds",
-  "fill_wave_size", "stall_seconds", "download_timeout_seconds",
+  "fill_wave_size", "stall_seconds", "verify_mb_per_second", "download_timeout_seconds",
 ] as const;
 
 /**

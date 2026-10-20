@@ -65,8 +65,8 @@ def _ops_dir(cluster_id: str) -> pathlib.Path:
 
 #: The pacing keys an operation's ``rollout`` block carries, and the names a campaign override uses.
 _ROLLOUT_KEYS = ("wave_size", "parallelism", "poll_seconds", "max_launches", "max_unreachable",
-                 "timeout_seconds", "fill_wave_size", "stall_seconds", "download_timeout_seconds",
-                 "strategy", "stages")
+                 "timeout_seconds", "fill_wave_size", "stall_seconds", "verify_mb_per_second",
+                 "download_timeout_seconds", "strategy", "stages")
 #: The numeric ones; an override of these must be a positive int to apply.
 _ROLLOUT_INT_KEYS = frozenset(_ROLLOUT_KEYS) - {"strategy", "stages"}
 

@@ -1680,6 +1680,12 @@ class P2pSettings:
     #: (deferred once it has used ``rollout_max_launches``) instead of holding its wave open until
     #: the timeout. 0 disables the check.
     rollout_stall_seconds: int = 600
+    #: The slowest rate (MB/s) a node is expected to checksum a fully written image at. Once every byte
+    #: is written the download is verifying, which writes nothing, so its stall window becomes the larger
+    #: of twice ``rollout_stall_seconds`` and image size / this rate: a 36.8 GB NeMo image hashed on a
+    #: node under burn-in load outlasted the flat 2 x 60 s and was discarded (Nscale NC, 2026-10-20),
+    #: while small images keep exactly the window they had. 0 keeps the flat 2 x stall.
+    rollout_verify_mb_per_second: int = 100
     #: The hard limit on one node's download of one image. The node enforces it itself (dfget is
     #: killed when it passes), so a hung transfer ends even with no rollout watching; a launch also
     #: replaces a "running" download older than this rather than re-adopting it.
@@ -1734,6 +1740,8 @@ class P2pSettings:
             rollout_stages=_as_stages(d.get("rollout_stages")) or base.rollout_stages,
             rollout_fill_wave_size=_as_int(d.get("rollout_fill_wave_size"), base.rollout_fill_wave_size),
             rollout_stall_seconds=_as_int(d.get("rollout_stall_seconds"), base.rollout_stall_seconds),
+            rollout_verify_mb_per_second=_as_int(d.get("rollout_verify_mb_per_second"),
+                                                 base.rollout_verify_mb_per_second),
             rollout_download_timeout_seconds=_as_int(d.get("rollout_download_timeout_seconds"),
                                                      base.rollout_download_timeout_seconds),
             desired_dir=_as_str(d.get("desired_dir")),
@@ -1774,6 +1782,9 @@ class P2pSettings:
             problems.append(f"rollout_fill_wave_size must be 0 (same as the wave size) or more, got {self.rollout_fill_wave_size}")
         if self.rollout_stall_seconds < 0:
             problems.append(f"rollout_stall_seconds must be 0 (off) or more, got {self.rollout_stall_seconds}")
+        if self.rollout_verify_mb_per_second < 0:
+            problems.append("rollout_verify_mb_per_second must be 0 (flat 2 x stall) or more, "
+                            f"got {self.rollout_verify_mb_per_second}")
         if self.rollout_download_timeout_seconds < 60:
             problems.append("rollout_download_timeout_seconds must be at least 60, "
                             f"got {self.rollout_download_timeout_seconds}")
@@ -2050,6 +2061,7 @@ _CAMPAIGN_PACING_FIELDS = (
     "timeout_seconds",
     "fill_wave_size",
     "stall_seconds",
+    "verify_mb_per_second",
     "download_timeout_seconds",
 )
 
@@ -2078,6 +2090,8 @@ class P2pCampaign:
     fill_wave_size: int = 0
     #: Stall window override; 0 inherits (turning stall handling off is a cluster setting).
     stall_seconds: int = 0
+    #: Checksum-rate override (MB/s) for the verify window of a fully written image; 0 inherits.
+    verify_mb_per_second: int = 0
     download_timeout_seconds: int = 0
     #: Wave planning overrides; blank / empty inherits the cluster's ``rollout_strategy`` and
     #: ``rollout_stages``.
@@ -2100,6 +2114,7 @@ class P2pCampaign:
             timeout_seconds=_as_int(d.get("timeout_seconds"), 0),
             fill_wave_size=_as_int(d.get("fill_wave_size"), 0),
             stall_seconds=_as_int(d.get("stall_seconds"), 0),
+            verify_mb_per_second=_as_int(d.get("verify_mb_per_second"), 0),
             download_timeout_seconds=_as_int(d.get("download_timeout_seconds"), 0),
             strategy=_as_str(d.get("strategy")).lower(),
             stages=_as_stages(d.get("stages")),
@@ -2168,7 +2183,7 @@ class P2pCampaigns:
             if c.parallelism and not 1 <= c.parallelism <= 128:
                 problems.append(f"{where}: parallelism override must be between 1 and 128, got {c.parallelism}")
             for label in ("wave_size", "poll_seconds", "max_launches", "max_unreachable", "timeout_seconds",
-                          "fill_wave_size", "stall_seconds"):
+                          "fill_wave_size", "stall_seconds", "verify_mb_per_second"):
                 if getattr(c, label) < 0:
                     problems.append(f"{where}: {label} override must not be negative")
             if c.download_timeout_seconds and c.download_timeout_seconds < 60:

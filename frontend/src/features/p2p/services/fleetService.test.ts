@@ -45,6 +45,7 @@ const campaign = (patch: Partial<CampaignEdit> = {}): CampaignEdit => ({
   timeout_seconds: 0,
   fill_wave_size: 0,
   stall_seconds: 0,
+  verify_mb_per_second: 0,
   download_timeout_seconds: 0,
   strategy: "",
   stages: [],
@@ -101,6 +102,11 @@ describe("launchCampaign", () => {
   it("sends a shortened stall window and download limit as pacing overrides", async () => {
     await launchCampaign(campaign({ stall_seconds: 300, download_timeout_seconds: 1800 }));
     expect(lastCall().body?.pacing).toEqual({ stall_seconds: 300, download_timeout_seconds: 1800 });
+  });
+
+  it("sends a large-image verify rate as a pacing override", async () => {
+    await launchCampaign(campaign({ verify_mb_per_second: 50 }));
+    expect(lastCall().body?.pacing).toEqual({ verify_mb_per_second: 50 });
   });
 
   it("sends no pacing at all when every field inherits the cluster default", async () => {

@@ -13,6 +13,10 @@ timeout_seconds=${NVIS_P2P_ROLLOUT_TIMEOUT_SECONDS:-28800}
 # A download whose written bytes have not moved for this long is stopped and relaunched (or deferred
 # once it has used its launches), instead of holding the wave open until the timeout. 0 disables.
 stall_seconds=${NVIS_P2P_ROLLOUT_STALL_SECONDS:-600}
+# Once every byte is written the download is verifying its checksum, which writes nothing. That phase
+# gets the larger of twice the stall window and the image's size at this checksum rate (MB/s), so a large
+# image on a busy node is not stopped mid-verify while small images keep the window they had. 0 = 2x only.
+verify_mbps=${NVIS_P2P_ROLLOUT_VERIFY_MBPS:-100}
 # Each node's download enforces this limit itself (launch-catalog-image-node.sh passes it on).
 download_timeout=${NVIS_P2P_DOWNLOAD_TIMEOUT_SECONDS:-3600}
 
@@ -23,11 +27,18 @@ for value in "$poll_seconds" "$max_launches" "$max_unreachable" "$timeout_second
   [[ $value =~ ^[1-9][0-9]*$ ]] || { echo "ROLLOUT_BAD_LIMIT value=$value" >&2; exit 64; }
 done
 [[ $stall_seconds =~ ^[0-9]+$ ]] || { echo "ROLLOUT_BAD_LIMIT value=$stall_seconds" >&2; exit 64; }
+[[ $verify_mbps =~ ^[0-9]+$ ]] || { echo "ROLLOUT_BAD_LIMIT value=$verify_mbps" >&2; exit 64; }
 [[ -r $roster ]] || { echo "ROLLOUT_ROSTER_UNREADABLE roster=$roster" >&2; exit 66; }
 
 row=$(awk -F '\t' -v image="$filename" '$3 == image {print; exit}' "$root/catalog/images.tsv")
 [[ -n $row ]] || { echo "ROLLOUT_UNKNOWN filename=$filename" >&2; exit 64; }
 IFS=$'\t' read -r order display_name filename expected_bytes expected_sha <<< "$row"
+# The stall window for a fully written (verifying) download of THIS image.
+verify_stall=$(( 2 * stall_seconds ))
+if (( stall_seconds > 0 && verify_mbps > 0 )); then
+  by_size=$(( (expected_bytes + verify_mbps * 1000000 - 1) / (verify_mbps * 1000000) ))
+  (( by_size > verify_stall )) && verify_stall=$by_size
+fi
 
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
 run_dir=$root/state/rollout-$label-$filename-$stamp
@@ -49,7 +60,7 @@ printf 'node\twritten\tsince_epoch\n' > "$run_dir/progress.tsv"
 
 log=$run_dir/rollout.log
 exec > >(tee -a "$log") 2>&1
-echo "ROLLOUT_BEGIN label=$label filename=$filename nodes=$node_count run_dir=$run_dir"
+echo "ROLLOUT_BEGIN label=$label filename=$filename nodes=$node_count stall_seconds=$stall_seconds verify_stall_seconds=$verify_stall run_dir=$run_dir"
 "$root/scripts/preheat-catalog-image.sh" "$filename"
 start_epoch=$(date +%s)
 iteration=0
@@ -85,12 +96,12 @@ while :; do
 
   # Progress per ACTIVE download: when its written bytes last changed. A node is stalled once that is
   # stall_seconds ago, unless nothing can be measured yet (written=-1). A download with every byte
-  # written may be checksumming, which takes a few minutes on a large image, so it gets twice the
-  # window -- but not forever: on NC a dfget hung with its partial fully allocated for ten hours, and
-  # an unlimited exemption let it hold two waves to their timeouts.
+  # written may be checksumming, so it gets verify_stall (twice the window, or the image's size at the
+  # verify rate when that is longer) -- but not forever: on NC a dfget hung with its partial fully
+  # allocated for ten hours, and an unlimited exemption let it hold two waves to their timeouts.
   now_epoch=$(date +%s)
   : > "$run_dir/stalled.nodes"
-  awk -F '\t' -v OFS='\t' -v now="$now_epoch" -v stall="$stall_seconds" -v full="$expected_bytes" \
+  awk -F '\t' -v OFS='\t' -v now="$now_epoch" -v stall="$stall_seconds" -v vstall="$verify_stall" -v full="$expected_bytes" \
       -v stalled="$run_dir/stalled.nodes" \
     'BEGIN {print "node","written","since_epoch"}
      NR==FNR {if (FNR>1) {prev[$1]=$2; since[$1]=$3}; next}
@@ -98,8 +109,8 @@ while :; do
        w=-1; if (match($3, /written=-?[0-9]+/)) w=substr($3, RSTART+8, RLENGTH-8)+0
        s=(($1 in prev) && prev[$1]==w) ? since[$1] : now
        print $1, w, s
-       limit=(w>=full+0) ? 2*stall : stall
-       if (stall>0 && w>=0 && now-s>=limit) print $1 > stalled
+       limit=(w>=full+0) ? vstall : stall
+       if (stall>0 && w>=0 && now-s>=limit) print $1 "\t" limit > stalled
      }' "$run_dir/progress.tsv" "$run_dir/check-$iteration.tsv" > "$run_dir/progress.next"
   mv "$run_dir/progress.next" "$run_dir/progress.tsv"
 
@@ -116,12 +127,13 @@ while :; do
     case $state in
       READY) ;;
       ACTIVE)
-        if grep -Fqx "$node" "$run_dir/stalled.nodes"; then
+        limit=$(awk -F '\t' -v n="$node" '$1 == n {print $2; exit}' "$run_dir/stalled.nodes")
+        if [[ -n $limit ]]; then
           printf '%s\n' "$node" >> "$run_dir/stop.nodes"
           if (( launches < max_launches )); then
             printf '%s\n' "$node" >> "$run_dir/relaunch.nodes"
           else
-            printf '%s\t%s\t%s\n' "$node" "stalled_${stall_seconds}s_after_${launches}_launches" "$(date -u +%FT%TZ)" >> "$run_dir/deferred.tsv"
+            printf '%s\t%s\t%s\n' "$node" "stalled_${limit}s_after_${launches}_launches" "$(date -u +%FT%TZ)" >> "$run_dir/deferred.tsv"
           fi
         fi
         ;;

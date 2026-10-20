@@ -3575,7 +3575,7 @@
         "label": "Dragonfly Settings",
         "description": "Per-cluster NVIS-P2P instance configuration and provisioning."
       },
-      "aiContext": "Dragonfly Settings is the per-cluster NVIS-P2P instance configuration for the active cluster (backend P2pSettings). It edits the Manager/app-server addresses, the app-server SSH connection the reconcile runs over (the app server is its own host, not the cluster control node), the compute-peer inventory pattern and source path, install/storage paths, and the rollout defaults (rollout_wave_size, rollout_parallelism, rollout_poll_seconds, rollout_max_launches, rollout_max_unreachable, rollout_timeout_seconds, rollout_strategy sequential|rack-staged, rollout_stages ladder ending at 100%, rollout_fill_wave_size where 0 = the wave size, rollout_stall_seconds default 600 where 0 turns stall handling off, rollout_download_timeout_seconds default 3600 -- the hard limit each node enforces on one download). Secrets are generated on the app server, never stored. It names provisioning blockers and exposes a gated Provision action that starts a reconcile workflow run."
+      "aiContext": "Dragonfly Settings is the per-cluster NVIS-P2P instance configuration for the active cluster (backend P2pSettings). It edits the Manager/app-server addresses, the app-server SSH connection the reconcile runs over (the app server is its own host, not the cluster control node), the compute-peer inventory pattern and source path, install/storage paths, and the rollout defaults (rollout_wave_size, rollout_parallelism, rollout_poll_seconds, rollout_max_launches, rollout_max_unreachable, rollout_timeout_seconds, rollout_strategy sequential|rack-staged, rollout_stages ladder ending at 100%, rollout_fill_wave_size where 0 = the wave size, rollout_stall_seconds default 600 where 0 turns stall handling off, rollout_verify_mb_per_second default 100 -- a fully written image that is checksumming gets the larger of 2 x stall and its size at this rate, 0 keeps the flat 2 x stall, rollout_download_timeout_seconds default 3600 -- the hard limit each node enforces on one download). Secrets are generated on the app server, never stored. It names provisioning blockers and exposes a gated Provision action that starts a reconcile workflow run."
     },
     {
       "id": "p2pCatalog",
@@ -3699,7 +3699,8 @@
         "A launch is refused while another operation is running; wait for it to finish.",
         "Nodes deferred as unreachable in one run are picked up by launching the same campaign again.",
         "For big images, Rack-staged with a ladder like 1, 50%, 100% keeps most pulls inside racks; a finer ladder (1, 2, 4, 8, 100%) spreads the load further.",
-        "A download that stops writing is restarted after the stall window (Stall, default 10 minutes) rather than holding the whole wave until its timeout."
+        "A download that stops writing is restarted after the stall window (Stall, default 10 minutes) rather than holding the whole wave until its timeout.",
+        "A download that has every byte and is checksumming gets twice the stall window, or longer for a large image (its size at Verify rate, default 100 MB/s), so a busy node is not stopped mid-verify."
       ],
       "keywords": [
         "p2p",

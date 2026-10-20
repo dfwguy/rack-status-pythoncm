@@ -52,6 +52,9 @@ export interface P2pSettingsDoc {
   rollout_fill_wave_size: number;
   /** Seconds a download may go without writing a byte before it is stopped and relaunched; 0 = off. */
   rollout_stall_seconds: number;
+  /** Slowest checksum rate (MB/s) expected on a node: a fully written image's verify window is the larger
+   * of 2 x stall and its size at this rate; 0 = flat 2 x stall (default 100). */
+  rollout_verify_mb_per_second: number;
   /** Hard limit on one node's download of one image, enforced on the node (default 3600). */
   rollout_download_timeout_seconds: number;
   /** Pull rollouts: where Rack Status writes the agents' desired-state documents (its own view of the

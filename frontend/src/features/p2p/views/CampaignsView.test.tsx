@@ -59,6 +59,7 @@ const campaign: CampaignEdit = {
   timeout_seconds: 0,
   fill_wave_size: 0,
   stall_seconds: 0,
+  verify_mb_per_second: 0,
   download_timeout_seconds: 0,
   strategy: "",
   stages: [],
@@ -187,6 +188,15 @@ describe("CampaignsView", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(m.saveCampaigns).toHaveBeenCalledTimes(1));
     expect(m.saveCampaigns.mock.calls[0][0][0].strategy).toBe("");
+  });
+
+  it("saves a large-image verify rate override", async () => {
+    m.saveCampaigns.mockImplementation(async (campaigns: CampaignEdit[]) => ({ ok: true, cluster_id: "default", campaigns }));
+    await renderLoaded();
+    fireEvent.change(screen.getByLabelText("Verify rate (MB/s)"), { target: { value: "50" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(m.saveCampaigns).toHaveBeenCalledTimes(1));
+    expect(m.saveCampaigns.mock.calls[0][0]).toEqual([{ ...campaign, verify_mb_per_second: 50 }]);
   });
 
   it("saves the edited campaigns, with a pacing field never below zero", async () => {

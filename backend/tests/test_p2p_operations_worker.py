@@ -202,3 +202,8 @@ class TestRolloutEnv:
     def test_the_download_limit_reaches_the_rollout_and_defaults_to_an_hour(self):
         assert worker._rollout_env({}, {"download_timeout_seconds": 900}, "/r")["NVIS_P2P_DOWNLOAD_TIMEOUT_SECONDS"] == "900"
         assert worker._rollout_env({}, {}, "/r")["NVIS_P2P_DOWNLOAD_TIMEOUT_SECONDS"] == "3600"
+
+    def test_the_verify_rate_reaches_the_rollout_and_defaults_to_100(self):
+        assert worker._rollout_env({}, {"verify_mb_per_second": 250}, "/r")["NVIS_P2P_ROLLOUT_VERIFY_MBPS"] == "250"
+        assert worker._rollout_env({}, {}, "/r")["NVIS_P2P_ROLLOUT_VERIFY_MBPS"] == "100"
+        assert worker._rollout_env({}, {"verify_mb_per_second": 0}, "/r")["NVIS_P2P_ROLLOUT_VERIFY_MBPS"] == "0"

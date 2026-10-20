@@ -210,6 +210,7 @@ export default function P2pSettingsView() {
               {num("Max unreachable", "rollout_max_unreachable", "Failed reachability checks before a node is deferred.")}
               {num("Timeout (s)", "rollout_timeout_seconds", "Overall campaign timeout before it gives up.")}
               {num("Download limit (s)", "rollout_download_timeout_seconds", "The longest one node may spend downloading one image. The node kills the transfer itself when it passes, and a launch replaces a download older than this. Default 3600.")}
+              {num("Verify rate (MB/s)", "rollout_verify_mb_per_second", "Once every byte is written a download is checksumming and writes nothing. It then gets the larger of twice the stall window and the image's size at this rate, so a large image on a busy node is not stopped mid-verify; small images keep twice the stall window. 0 = always twice the stall window. Default 100.")}
               {num("Stall (s)", "rollout_stall_seconds", "A download that writes nothing for this long is stopped and relaunched, then deferred after Max launches — instead of holding its wave to the timeout. 0 = off.")}
               <FormField name="p2p-rollout_strategy" slotLabel="Wave plan"
                 slotHelp="Sequential slices the roster in order. Rack-staged gives every rack one copy first (the only waves that load the seeds), then grows every rack up the stage ladder.">

@@ -117,6 +117,7 @@ per wave, in order. Cluster defaults live in **Dragonfly Settings**; a campaign 
 | `rollout_fill_wave_size` | `fill_wave_size` | `0` | `rack-staged` only: nodes per wave in every later stage. `0` = the wave size. |
 | `rollout_stages` | `stages` | `1, 50%, 100%` | `rack-staged` only: the stage ladder. |
 | `rollout_stall_seconds` | `stall_seconds` | `600` | Becomes `NVIS_P2P_ROLLOUT_STALL_SECONDS`; `0` (cluster only) disables. |
+| `rollout_verify_mb_per_second` | `verify_mb_per_second` | `100` | Becomes `NVIS_P2P_ROLLOUT_VERIFY_MBPS`. A download with every byte written is checksumming; its stall window is the larger of 2 x `stall_seconds` and the image size at this rate (a 36.8 GB image at 100 MB/s gets 368 s). `0` keeps the flat 2 x stall. |
 | `rollout_download_timeout_seconds` | `download_timeout_seconds` | `3600` | Becomes `NVIS_P2P_DOWNLOAD_TIMEOUT_SECONDS`; at least `60`. |
 
 **Stage ladder.** Each rung is a cumulative per-rack target: a node count (`1`, `2`) or a share of

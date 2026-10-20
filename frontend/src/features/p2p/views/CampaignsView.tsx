@@ -32,7 +32,7 @@ import type { Operation } from "../types/fleet";
 const emptyCampaign = (): CampaignEdit => ({
   name: "", description: "", image: "", roster: "",
   wave_size: 0, parallelism: 0, poll_seconds: 0, max_launches: 0, max_unreachable: 0, timeout_seconds: 0,
-  fill_wave_size: 0, stall_seconds: 0, download_timeout_seconds: 0, strategy: "", stages: [],
+  fill_wave_size: 0, stall_seconds: 0, verify_mb_per_second: 0, download_timeout_seconds: 0, strategy: "", stages: [],
 });
 
 /** The wave plan a campaign can pick; "inherit" stands for the blank override (the cluster decides). */
@@ -51,6 +51,7 @@ const PACING_FIELDS: { key: keyof CampaignEdit; label: string; placeholder: stri
   { key: "max_unreachable", label: "Max unreachable", placeholder: "default" },
   { key: "timeout_seconds", label: "Timeout (s)", placeholder: "default" },
   { key: "stall_seconds", label: "Stall (s)", placeholder: "default" },
+  { key: "verify_mb_per_second", label: "Verify rate (MB/s)", placeholder: "default" },
   { key: "download_timeout_seconds", label: "Download limit (s)", placeholder: "default" },
 ];
 
@@ -265,6 +266,7 @@ export default function CampaignsView() {
                       component="input"
                       type="number"
                       min={0}
+                      aria-label={f.label}
                       value={String(c[f.key] as number)}
                       placeholder={f.placeholder}
                       onChange={(e: React.ChangeEvent<HTMLInputElement>) =>

@@ -429,6 +429,14 @@ class TestRolloutWavePlanSettings:
         assert any("rollout_stall_seconds" in p
                    for p in models.P2pSettings(cluster_id="c1", rollout_stall_seconds=-1).validate())
 
+    def test_the_verify_rate_defaults_to_100_and_zero_keeps_the_flat_window(self):
+        assert models.P2pSettings(cluster_id="c1").rollout_verify_mb_per_second == 100
+        flat = models.P2pSettings.from_dict({"cluster_id": "c1", "rollout_verify_mb_per_second": 0})
+        assert flat.rollout_verify_mb_per_second == 0 and flat.validate() == []
+        assert models.P2pSettings.from_dict(flat.to_dict()).rollout_verify_mb_per_second == 0
+        assert any("rollout_verify_mb_per_second" in p
+                   for p in models.P2pSettings(cluster_id="c1", rollout_verify_mb_per_second=-1).validate())
+
     def test_the_download_limit_defaults_to_an_hour_and_has_a_floor(self):
         assert models.P2pSettings(cluster_id="c1").rollout_download_timeout_seconds == 3600
         s = models.P2pSettings.from_dict({"cluster_id": "c1", "rollout_download_timeout_seconds": 1800})
@@ -644,6 +652,10 @@ class TestP2pCampaignsModel:
         back = models.P2pCampaign.from_dict(models.P2pCampaigns(cluster_id="c1", campaigns=[c]).to_dict()["campaigns"][0])
         assert (back.strategy, back.stages, back.fill_wave_size) == ("rack-staged", ["1", "50%", "100%"], 72)
         assert models.P2pCampaign(name="n", image="n.sqsh", stall_seconds=300).pacing_overrides() == {"stall_seconds": 300}
+        assert models.P2pCampaign(name="n", image="n.sqsh", verify_mb_per_second=50).pacing_overrides() == {
+            "verify_mb_per_second": 50}
+        assert any("verify_mb_per_second override must not be negative" in p for p in models.P2pCampaigns.from_dict(
+            {"cluster_id": "c1", "campaigns": [{"name": "s", "image": "a.sqsh", "verify_mb_per_second": -1}]}).validate())
         assert any("stall_seconds override must not be negative" in p for p in models.P2pCampaigns.from_dict(
             {"cluster_id": "c1", "campaigns": [{"name": "s", "image": "a.sqsh", "stall_seconds": -1}]}).validate())
         # Saved before these fields existed: nothing overridden, the cluster decides.
@@ -735,6 +747,7 @@ class TestP2pCampaignsApi:
         assert req["request"]["rollout"]["fill_wave_size"] == 0
         assert req["request"]["rollout"]["stall_seconds"] == 600
         assert req["request"]["rollout"]["download_timeout_seconds"] == 3600
+        assert req["request"]["rollout"]["verify_mb_per_second"] == 100
 
     def _launch(self, client, tmp_path, monkeypatch, pacing, **settings):
         import p2p_operations

@@ -19,7 +19,10 @@ preallocates its length) and treats a download as stalled once that number has n
 pieces it has, and the scheduler picks new parents -- or deferred once it has used its launches.
 
 What is pinned: a stall is stopped and relaunched; a download that is moving, or that has every
-byte and is checksumming, is left alone -- the latter for twice the window, then it too is a stall; a node that stalls through all its launches is
+byte and is checksumming, is left alone -- the latter for twice the window or, for a large image, the
+image's size at ``NVIS_P2P_ROLLOUT_VERIFY_MBPS`` when that is longer (a 36.8 GB NeMo image hashed
+on a node under burn-in load outlasted 2 x 60 s and was discarded, NC 2026-10-20), then it too is a
+stall; a node that stalls through all its launches is
 deferred with a reason that says so; 0 turns the behaviour off. The check and stop scripts run end
 to end through a stand-in ``ssh`` that executes the remote half locally.
 """
@@ -60,6 +63,8 @@ case $mode in
                 else printf '%s\tACTIVE\tpid=1 written=%s\n' "$n" "$((calls * 100))"; fi ;;
   verifying)    if (( calls >= 4 )); then printf '%s\tREADY\treceipt_valid\n' "$n";
                 else printf '%s\tACTIVE\tpid=1 written=%s\n' "$n" "$FULL"; fi ;;
+  slow-verify)  if (( calls >= 9 )); then printf '%s\tREADY\treceipt_valid\n' "$n";
+                else printf '%s\tACTIVE\tpid=1 written=%s\n' "$n" "$FULL"; fi ;;
   hung-full)    if [[ -e $d/stopped ]]; then printf '%s\tREADY\treceipt_valid\n' "$n";
                 else printf '%s\tACTIVE\tpid=1 written=%s\n' "$n" "$((FULL + 40960))"; fi ;;
 esac
@@ -76,11 +81,11 @@ echo "CATALOG_STOPPED node=$1"
 
 
 def _rollout(tmp_path: Path, modes: dict[str, str], stall: int, max_launches: int = 3, timeout: int = 60,
-             **extra_env: str):
+             full: int = FULL, **extra_env: str):
     root = tmp_path / "root"
     (root / "scripts").mkdir(parents=True)
     (root / "catalog").mkdir()
-    (root / "catalog" / "images.tsv").write_text(f"1\tNeMo\t{IMAGE}\t{FULL}\t{'a' * 64}\n")
+    (root / "catalog" / "images.tsv").write_text(f"1\tNeMo\t{IMAGE}\t{full}\t{'a' * 64}\n")
     for name, body in (("check-catalog-image-node.sh", _CHECK), ("launch-catalog-image-node.sh", _LAUNCH),
                        ("stop-catalog-image-node.sh", _STOP), ("preheat-catalog-image.sh", "#!/bin/bash\n")):
         (root / "scripts" / name).write_text(body)
@@ -91,7 +96,7 @@ def _rollout(tmp_path: Path, modes: dict[str, str], stall: int, max_launches: in
         (fake / f"mode-{node}").write_text(mode)
     roster = tmp_path / "roster.nodes"
     roster.write_text("\n".join(modes) + "\n")
-    env = {**os.environ, "NVIS_P2P_ROOT": str(root), "FAKE": str(fake), "FULL": str(FULL),
+    env = {**os.environ, "NVIS_P2P_ROOT": str(root), "FAKE": str(fake), "FULL": str(full),
            "NVIS_P2P_ROLLOUT_POLL_SECONDS": "1", "NVIS_P2P_ROLLOUT_STALL_SECONDS": str(stall),
            "NVIS_P2P_ROLLOUT_MAX_LAUNCHES": str(max_launches), "NVIS_P2P_ROLLOUT_TIMEOUT_SECONDS": str(timeout),
            **extra_env}
@@ -159,11 +164,51 @@ class TestStallHandling:
         proc, _, _ = _rollout_bad(tmp_path)
         assert proc.returncode == 64 and "ROLLOUT_BAD_LIMIT value=soon" in proc.stderr
 
+    def test_a_malformed_verify_rate_is_refused(self, tmp_path):
+        proc, _, _ = _rollout_bad(tmp_path, NVIS_P2P_ROLLOUT_STALL_SECONDS="2", NVIS_P2P_ROLLOUT_VERIFY_MBPS="fast")
+        assert proc.returncode == 64 and "ROLLOUT_BAD_LIMIT value=fast" in proc.stderr
 
-def _rollout_bad(tmp_path):
+
+#: 10 GB at 1000 MB/s is a 10 s verify window -- longer than twice a 2 s stall window.
+BIG = 10_000_000_000
+
+
+@pytest.mark.skipif(_BASH_MAJOR < 4, reason="the rollout needs bash >= 4 (nodes, app server and CI have 5)")
+class TestVerifyWindowScalesWithTheImage:
+    def test_a_large_image_still_checksumming_past_twice_the_window_is_left_alone(self, tmp_path):
+        proc, calls, deferred = _rollout(tmp_path, {"a": "slow-verify"}, stall=2, full=BIG,
+                                         NVIS_P2P_ROLLOUT_VERIFY_MBPS="1000")
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert calls == ["launch a"]
+        assert "ROLLOUT_STALLED" not in proc.stdout and deferred == {}
+        assert "stall_seconds=2 verify_stall_seconds=10" in proc.stdout
+
+    def test_the_same_checksum_on_a_flat_window_is_stopped(self, tmp_path):
+        """0 keeps the old rule, which is what discarded the 36.8 GB image on busy NC nodes."""
+        proc, calls, _ = _rollout(tmp_path, {"a": "slow-verify"}, stall=2, full=BIG,
+                                  NVIS_P2P_ROLLOUT_VERIFY_MBPS="0")
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert calls[:2] == ["launch a", "stop a"]
+        assert "verify_stall_seconds=4" in proc.stdout
+
+    def test_a_large_image_that_never_finishes_is_still_stopped_and_says_which_window(self, tmp_path):
+        start = time.monotonic()
+        proc, calls, deferred = _rollout(tmp_path, {"a": "hung-full"}, stall=2, full=BIG, max_launches=1,
+                                         NVIS_P2P_ROLLOUT_VERIFY_MBPS="1000")
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert calls == ["launch a", "stop a"]
+        assert deferred == {"a": "stalled_10s_after_1_launches"}
+        assert time.monotonic() - start >= 10
+
+    def test_a_small_image_keeps_twice_the_window(self, tmp_path):
+        proc, _, _ = _rollout(tmp_path, {"a": "verifying"}, stall=2, NVIS_P2P_ROLLOUT_VERIFY_MBPS="1")
+        assert "stall_seconds=2 verify_stall_seconds=4" in proc.stdout
+
+
+def _rollout_bad(tmp_path, **env_extra: str):
     roster = tmp_path / "r.nodes"
     roster.write_text("a\n")
-    env = {**os.environ, "NVIS_P2P_ROOT": str(tmp_path), "NVIS_P2P_ROLLOUT_STALL_SECONDS": "soon"}
+    env = {**os.environ, "NVIS_P2P_ROOT": str(tmp_path), "NVIS_P2P_ROLLOUT_STALL_SECONDS": "soon", **env_extra}
     proc = subprocess.run(["bash", str(SCRIPTS / "rollout-catalog-image-fleet.sh"), IMAGE, str(roster)],
                           env=env, capture_output=True, text=True, timeout=30, check=False)
     return proc, None, None
