@@ -350,18 +350,15 @@ def _sync_catalog(inner: dict, roster: pathlib.Path, log: pathlib.Path) -> int:
     if not appserver or not roster.exists():
         _append(log, "[worker] sync: no appserver ip or roster; manifest written, node refresh skipped")
         return 0
-    # Best-effort node refresh: each peer re-pulls the origin's images.tsv. A node that is down
-    # returns ssh 255; `|| true` keeps xargs from aborting the whole batch on it, and the refresh
-    # never fails the sync -- the manifest is already the truth and the node sync-timer reconciles
-    # stragglers.
+    # Best-effort node refresh: each peer re-pulls the origin's images.tsv, in one clush fan-out
+    # from this appserver -- bounded fan-out and per-node timeouts, where an ssh-per-node loop let a
+    # dead node hang its slot. A node that is down just misses this round (clush reports it on
+    # stderr); the refresh never fails the sync -- the manifest is already the truth and the node
+    # sync-timer reconciles stragglers.
     origin = f"http://{appserver}:12130/.nvis-p2p/catalog/images.tsv"
-    refresh = (
-        "xargs -P40 -I@ bash -c '"
-        "ssh -o ConnectTimeout=10 -o BatchMode=yes @ "
-        '"curl -s -m10 ' + origin + ' -o /opt/containers/.nvis-p2p/catalog/images.tsv" || true'
-        "' < " + str(roster)
-    )
-    _run(["bash", "-c", refresh], log, dict(os.environ), 900)
+    refresh = ["clush", "--nostdin", "--hostfile", str(roster), "-f", "40", "-t", "10", "-u", "60",
+               f"curl -s -m10 {origin} -o /opt/containers/.nvis-p2p/catalog/images.tsv"]
+    _run(refresh, log, dict(os.environ), 900)
     _append(log, "[worker] node catalog refresh dispatched (best-effort)")
     return 0
 

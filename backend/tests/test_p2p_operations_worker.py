@@ -207,3 +207,20 @@ class TestRolloutEnv:
         assert worker._rollout_env({}, {"verify_mb_per_second": 250}, "/r")["NVIS_P2P_ROLLOUT_VERIFY_MBPS"] == "250"
         assert worker._rollout_env({}, {}, "/r")["NVIS_P2P_ROLLOUT_VERIFY_MBPS"] == "100"
         assert worker._rollout_env({}, {"verify_mb_per_second": 0}, "/r")["NVIS_P2P_ROLLOUT_VERIFY_MBPS"] == "0"
+
+
+class TestSyncRefreshesNodesWithClush:
+    """The node refresh is one clush fan-out from the appserver, not an ssh loop (Nscale NC)."""
+
+    def test_the_refresh_is_a_bounded_clush_over_the_roster(self, tmp_path, monkeypatch):
+        calls: list[list[str]] = []
+        monkeypatch.setattr(worker, "_run", lambda cmd, log, env, timeout: calls.append(cmd) or 0)
+        roster = tmp_path / "fleet.nodes"
+        roster.write_text("n1\nn2\n")
+        inner = {"catalog_path": str(tmp_path / "images.json"), "appserver_ip": "10.0.0.22",
+                 "catalog": [{"order": 1, "name": "x", "filename": "x.sqsh", "bytes": 1, "sha256": "a" * 64}]}
+        assert worker._sync_catalog(inner, roster, tmp_path / "log") == 0
+        (cmd,) = calls
+        assert cmd[:4] == ["clush", "--nostdin", "--hostfile", str(roster)]
+        assert {"-t", "-u", "-f"} <= set(cmd)
+        assert cmd[-1].startswith("curl -s -m10 http://10.0.0.22:12130/.nvis-p2p/catalog/images.tsv ")
