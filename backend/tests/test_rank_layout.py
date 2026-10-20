@@ -132,6 +132,14 @@ def test_the_nemo_launcher_lays_out_ranks_after_its_nccl_stage_and_before_the_sh
     assert text.index('bash "${_nccl_script}"') < layout < text.index('nvis_sbatch_pin_install "${NODELIST}"')
 
 
+def test_the_nemo_launcher_can_ask_llmb_for_its_profiled_run():
+    """One Exemplar run is captured with Nsight Systems: llmb-run -p, by flag or by env."""
+    text = (SCRIPTS / "run_llmb_nemo.sh").read_text(encoding="utf-8")
+    assert "--profile) PROFILE=1; shift ;;" in text
+    assert '[[ "${NVIS_LLMB_NEMO_PROFILE:-0}" == "1" ]] && PROFILE=1' in text
+    assert text.index('[[ "${PROFILE}" -eq 1 ]] && cmd+=( -p )') > text.index('cmd=( "${LLMB_RUN}" "${LLMB_SUBCMD}"')
+
+
 def test_the_exemplar_llama_wrapper_lays_out_ranks_before_its_shim():
     text = (SCRIPTS / "run-exemplar-llama.sh").read_text(encoding="utf-8")
     assert text.index("nvis_rank_layout run-exemplar-llama") < text.index('nvis_sbatch_pin_install "$nodelist"')

@@ -32,7 +32,7 @@
 # Usage:
 #   run_llmb_nemo.sh <nodelist-csv> <rack-id>            # app contract
 #   run_llmb_nemo.sh [--dry-run] --nodelist LIST [--rack R] [--scale N]
-#                    [--dtype fp8] [--model-size 56b] [--time-limit 01:00:00]
+#                    [--dtype fp8] [--model-size 56b] [--time-limit 01:00:00] [--profile]
 #
 # Environment:
 #   NVIS_LLMB_NEMO_TIME_LIMIT  walltime handed to the recipe (default 01:00:00).
@@ -41,6 +41,8 @@
 #   NVIS_LLMB_NEMO_WORKLOAD    default pretrain_nemotron-h
 #   NVIS_LLMB_NEMO_MODEL_SIZE  default 56b
 #   NVIS_LLMB_NEMO_DTYPE       default fp8
+#   NVIS_LLMB_NEMO_PROFILE=1   same as --profile: llmb-run -p, the recipe's Nsight Systems capture
+#                              (ENABLE_PROFILE; its own step window). A suite run keeps it off.
 #   NVIS_FABRIC_SKIP=1         skip the fabric probe
 #   NVIS_LLMB_KEEP_UCX_ENV=1   keep host UCX pins (host/non-container runs only)
 set -uo pipefail
@@ -61,6 +63,8 @@ LLMB_WORKLOAD="${NVIS_LLMB_NEMO_WORKLOAD:-pretrain_nemotron-h}"
 LLMB_MODEL_SIZE="${NVIS_LLMB_NEMO_MODEL_SIZE:-56b}"
 LLMB_DTYPE="${NVIS_LLMB_NEMO_DTYPE:-fp8}"
 TIME_LIMIT_VAL="${NVIS_LLMB_NEMO_TIME_LIMIT:-01:00:00}"
+PROFILE=0
+[[ "${NVIS_LLMB_NEMO_PROFILE:-0}" == "1" ]] && PROFILE=1
 
 DRY_RUN=0
 EXPLICIT_NODELIST=""
@@ -76,6 +80,7 @@ mkdir -p "${JOB_LOG_DIR}" || die "cannot create log directory: ${JOB_LOG_DIR}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -d|--dry-run|--dryrun) DRY_RUN=1; shift ;;
+    --profile) PROFILE=1; shift ;;
     --nodelist) EXPLICIT_NODELIST="${2:?--nodelist needs a value}"; shift 2 ;;
     --nodelist=*) EXPLICIT_NODELIST="${1#*=}"; shift ;;
     --rack) RACK_ID="${2:?--rack needs a value}"; shift 2 ;;
@@ -251,6 +256,7 @@ cmd=( "${LLMB_RUN}" "${LLMB_SUBCMD}" -w "${LLMB_WORKLOAD}" -s "${LLMB_MODEL_SIZE
 # TIME_LIMIT is read by nemotron-h/launch.sh (default 00:20:00) and passed to its
 # --time_limit. --env is the supported override channel in llmb-run v26.06+.
 [[ -n "${TIME_LIMIT_VAL}" ]] && cmd+=( --env "TIME_LIMIT=${TIME_LIMIT_VAL}" )
+[[ "${PROFILE}" -eq 1 ]] && cmd+=( -p )
 [[ "${DRY_RUN}" -eq 1 ]] && cmd+=( "${LLMB_DRY_FLAG}" )
 
 echo "run_llmb_nemo: workload=${LLMB_WORKLOAD} model_size=${LLMB_MODEL_SIZE} dtype=${LLMB_DTYPE} nodes=${NNODES} scale=${SCALE}"
