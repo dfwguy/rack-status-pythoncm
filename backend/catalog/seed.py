@@ -807,6 +807,15 @@ SEED_TOOLS: list[dict[str, Any]] = [
         capabilities=["nvlink"], scopes=["rack", "multirack"],
     ),
     _preset_tool(
+        "preset-node-gate", "Node Gate", "Cleanup + health check between jobs",
+        "Run between two jobs on the same nodes: holds them exclusively, cleans up what the last job left "
+        "(GPU processes, pyxis containers, NCCL /dev/shm segments, a stopped GPU service) and fails any node "
+        "that is not fit for the next one -- GPU memory held, uncorrected ECC, power brake, NVLink fabric not "
+        "Completed, or a new hardware-fault Xid. One verdict line per node.",
+        "node-gate", ["rackDetail.validation", "multirack"], "rack", 25,
+        category="maintenance", scopes=["node", "rack", "multirack"],
+    ),
+    _preset_tool(
         "preset-mnubergemm", "MNUberGEMM", "26.03-v1.17 · 60-minute ceiling",
         "Node, rack or multi-rack MNUberGEMM using the container actually staged on the "
         "fleet. Multirack fans out one job per rack — a single allocation spanning two racks "

@@ -1884,6 +1884,17 @@ def api_prepare_launch():
     })
 
 
+#: The validation-activity tool each preset's runs are recorded under. Every preset in
+#: ``validation_presets.PRESETS`` must be listed (``test_node_gate`` asserts it): an unlisted preset failed
+#: its launch with a KeyError after the plan had been reviewed.
+PRESET_ACTIVITY_TOOL: dict[str, str] = {
+    "nccl-2.31.2": "nccl-fullrack", "llama31-405b-fp8": "llama-exemplar",
+    "gpt-oss-cpu": "external", "exemplar-system-info": "external",
+    "nemo-26.04.01": "nemo-xrack", "mnubergemm-26.03-v1.17": "mnubergemm",
+    "node-gate": "external",
+}
+
+
 def _run_validation_preset_async(body: dict):
     compatibility_error = _validation_preset_compatibility_error(body)
     if compatibility_error is not None:
@@ -1899,11 +1910,7 @@ def _run_validation_preset_async(body: dict):
         return jsonify({"ok": False, "error": "validation plan changed; prepare and review it again", "plan_hash": plan["plan_hash"]}), 409
     job_id = str(uuid.uuid4())
     operator = _operator_from_request()
-    tool = {
-        "nccl-2.31.2": "nccl-fullrack", "llama31-405b-fp8": "llama-exemplar",
-        "gpt-oss-cpu": "external", "exemplar-system-info": "external",
-        "nemo-26.04.01": "nemo-xrack", "mnubergemm-26.03-v1.17": "mnubergemm",
-    }[str(plan["preset_id"])]
+    tool = PRESET_ACTIVITY_TOOL[str(plan["preset_id"])]
     racks = [str(rack) for rack in plan["racks"]]
     _record_validation_activity(tool, stage="other", scope=str(plan["scope"]),
         rack=racks[0] if racks else "", racks=racks, log_dir=str(plan["log_dir"]),

@@ -24,7 +24,8 @@ export type ValidationPresetId =
   | "gpt-oss-cpu"
   | "exemplar-system-info"
   | "nemo-26.04.01"
-  | "mnubergemm-26.03-v1.17";
+  | "mnubergemm-26.03-v1.17"
+  | "node-gate";
 
 export type ValidationScope = "nodes" | "rack" | "multirack";
 export type ValidationStorage = "nfs" | "local";
@@ -96,6 +97,7 @@ export const VALIDATION_PRESET_LABELS: Record<string, string> = {
   "exemplar-system-info": "NVIDIA DGXC v26.06.01 system_info",
   "nemo-26.04.01": "NeMo 26.04.01",
   "mnubergemm-26.03-v1.17": "MNUberGEMM 26.03-v1.17",
+  "node-gate": "Node gate — cleanup + health check between jobs",
 };
 
 /**

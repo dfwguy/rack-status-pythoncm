@@ -43,6 +43,14 @@ const catalog: ValidationPresetsResponse = {
       requirements: { scopes: ["multirack"], container_profile: "26.04.01-nccl2.30.7" },
     },
     {
+      id: "node-gate",
+      label: "Node gate — cleanup + health check between jobs",
+      description: "Cleanup and health check between jobs.",
+      kind: "node_gate",
+      defaults: { storage: "nfs", rsync: false, container_profile: null, max_runtime_minutes: 20 },
+      requirements: { scopes: ["node", "rack", "multirack"] },
+    },
+    {
       id: "exemplar-system-info",
       label: "NVIDIA DGXC v26.06.01 system_info",
       description: "Validate system inventory.",
@@ -72,6 +80,39 @@ describe("ValidationPresetDialog", () => {
     expect(screen.getByText(/fixed direct-host CUDA 13.3\+ validation/i)).toBeInTheDocument();
     expect(screen.queryByText("Container storage")).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: /Rsync container/i })).not.toBeInTheDocument();
+  });
+
+  it("warns that the node gate kills leftover GPU processes and offers no container staging", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => jsonResponse(catalog));
+    render(
+      <ValidationPresetDialog
+        open
+        onClose={() => undefined}
+        presetId="node-gate"
+        scope="rack"
+        racks={["U8"]}
+        onLaunch={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText(/kills any process still on their GPUs/i)).toBeInTheDocument();
+    expect(screen.queryByText("Container storage")).not.toBeInTheDocument();
+  });
+
+  it("still offers container storage for a recipe the catalog has not described yet", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => jsonResponse(catalog));
+    render(
+      <ValidationPresetDialog
+        open
+        onClose={() => undefined}
+        presetId="exemplar-system-info"
+        scope="nodes"
+        nodes={["d01-01"]}
+        onLaunch={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Container storage")).toBeInTheDocument();
   });
 
   it("keeps Llama fixed at 50 steps and launches only after a reviewed dry-run", async () => {

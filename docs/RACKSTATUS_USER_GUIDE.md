@@ -270,6 +270,7 @@ Pinned presets prevent accidental “almost the same” recipes.
 | `exemplar-system-info` | node, rack, multi-rack | DGXC benchmarking `v26.06.01`; once per node; IB required |
 | `nemo-26.04.01` | rack, multi-rack | Pinned NeMo image; at most 50 steps; NFS or local storage |
 | `mnubergemm-26.03-v1.17` | node, rack | Supported fleet image and fixed workload contract |
+| `node-gate` | node, rack, multi-rack | No container; one exclusive Slurm job, 20-minute ceiling. Cleans up what the last job left (GPU processes, pyxis containers, NCCL `/dev/shm` segments, a stopped `nvidia-imex`/`persistenced`/`dcgm`) and fails a node with GPU memory held, uncorrected ECC, a power brake, an incomplete or split NVLink fabric, or a new hardware-fault Xid since its last gate. Run it on idle nodes between jobs (tool list: **Node Gate**) |
 
 ### Storage and image staging
 

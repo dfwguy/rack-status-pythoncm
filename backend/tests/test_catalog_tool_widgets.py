@@ -134,6 +134,7 @@ def test_the_validation_board_reproduces_the_hand_built_tab():
     assert board == [
         "preset-nccl",
         "nccl-fullrack-rounds",
+        "preset-node-gate",
         "validation-singlerack",
         "preset-nemo",
         "preset-gpt-oss-node",

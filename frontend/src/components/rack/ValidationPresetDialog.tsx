@@ -211,6 +211,11 @@ export function ValidationPresetDialog({
   const targetCount = nodeList.length || rackList.length;
   const targetNoun = nodeList.length > 0 ? "node" : "rack";
   const directHostPreset = presetId === "nccl-2.31.2";
+  // A recipe that runs no container has nothing to stage; the server's catalog says so with a null
+  // container_profile. Before the catalog loads, only the known direct-host recipe is assumed.
+  const noContainer =
+    directHostPreset ||
+    (preset.defaults !== undefined && "container_profile" in preset.defaults && !preset.defaults.container_profile);
   const supportedScopes =
     preset.requirements && !Array.isArray(preset.requirements) && Array.isArray(preset.requirements.scopes)
       ? preset.requirements.scopes.map(String)
@@ -245,6 +250,13 @@ export function ValidationPresetDialog({
           {presetId === "mnubergemm-26.03-v1.17" && rackList.length > 1 ? (
             <Banner status="info">
               Greenlight submits one independent, rack-scoped MNUberGEMM job per selected rack. It never combines physical racks into one MNNVL domain.
+            </Banner>
+          ) : null}
+          {presetId === "node-gate" ? (
+            <Banner status="warning">
+              The gate holds the selected nodes exclusively for up to 20 minutes and kills any process still on
+              their GPUs before it checks them. Run it on idle nodes between jobs; a node that fails stays as it
+              is for you to repair or drain.
             </Banner>
           ) : null}
           {unsupportedScope ? (
@@ -284,7 +296,7 @@ export function ValidationPresetDialog({
             </div>
           ) : null}
 
-          {!directHostPreset ? (
+          {!noContainer ? (
             <>
               <Divider />
               <div>

@@ -361,6 +361,44 @@ case "$preset" in
     fi
     ;;
 
+  node-gate)
+    # Clean up after the last job and check every node before the next (node_gate.sh). One exclusive job
+    # over the exact reviewed nodes: exclusivity is what lets the cleanup kill whatever is still on a GPU.
+    # Xid baselines live beside the logs, on the shared filesystem the nodes write, so "new since the last
+    # gate" survives between gates.
+    [[ "$storage" == nfs && "$rsync_enabled" == 0 ]] || {
+      echo "ERROR: node-gate runs no container; there is nothing to stage" >&2; exit 2;
+    }
+    gate_state="${log_dir%/}/node-gate-state"
+    results="${log_dir%/}/node-gate-$(date +%Y%m%dT%H%M%S)-$$.results"
+    gate_export="ALL,NVIS_BIN_SCRIPTS=${script_dir},NVIS_NODE_GATE_STATE=${gate_state},NVIS_NODE_GATE_RESULTS=${results}"
+    gate_cmd=(sbatch --parsable --no-requeue --exclusive --time=00:20:00 --nodes="$node_count" --nodelist="$nodelist"
+      --ntasks-per-node=1 --job-name=node-gate --output="${log_dir%/}/node-gate-%j.out"
+      --export="$gate_export" "${script_dir}/node_gate.sbatch")
+    print_cmd "${gate_cmd[@]}"
+    if (( ! dry_run )); then
+      submitted="$("${gate_cmd[@]}")"
+      gate_id="${submitted%%;*}"
+      [[ "$gate_id" =~ ^[0-9]+$ ]] || { echo "ERROR: unable to parse node-gate job id: $submitted" >&2; exit 2; }
+      echo "SUBMITTED: node-gate nodes=${node_count} jobid=${gate_id}"
+      while squeue -h -j "$gate_id" 2>/dev/null | grep -q .; do sleep 5; done
+      IFS='|' read -r _ gate_state_slurm gate_exit _ < <(sacct -X -n -P -j "$gate_id" -o JobIDRaw,State,ExitCode | head -1)
+      printf 'COMPLETE: node-gate jobid=%s state=%s exit=%s\n' "$gate_id" "${gate_state_slurm:-?}" "${gate_exit:-?}"
+      [[ -s "$results" ]] || { echo "ERROR: node-gate wrote no results ($results)" >&2; exit 2; }
+      python3 - "$results" <<'PY'
+import json, sys
+rows = [json.loads(l.split("=", 1)[1]) for l in open(sys.argv[1]) if l.startswith("NVIS_NODE_GATE_JSON=")]
+count = {s: sum(r["status"] == s for r in rows) for s in ("pass", "warning", "fail")}
+print(f"NODE_GATE_SUMMARY nodes={len(rows)} pass={count['pass']} warning={count['warning']} fail={count['fail']}")
+for r in sorted(rows, key=lambda r: (r["status"] != "fail", r["status"] != "warning", r["node"])):
+    detail = r["reason"] or "; ".join(r["warnings"]) or "ok"
+    done = f"  [{'; '.join(r['actions'])}]" if r["actions"] else ""
+    print(f"NODE_GATE {r['status'].upper():7} {r['node']}  {detail}{done}")
+PY
+      grep -q '"status":"fail"' "$results" && { echo "ERROR: node-gate failed on one or more nodes (see NODE_GATE FAIL lines)" >&2; exit 2; }
+    fi
+    ;;
+
   *) echo "ERROR: unsupported preset: $preset" >&2; exit 2 ;;
 esac
 

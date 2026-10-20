@@ -304,6 +304,17 @@ PRESETS: tuple[Preset, ...] = (
         max_runtime_minutes=60,
         requires_infiniband=False,
     ),
+    Preset(
+        "node-gate",
+        "Node gate",
+        "Cleanup and health check between jobs: one exclusive Slurm job over the exact selected nodes kills "
+        "leftover GPU processes, removes leftover pyxis containers and stale /dev/shm segments, restarts a GPU "
+        "service that is down, then fails any node with GPU memory still held, uncorrected ECC, a power brake, "
+        "an incomplete or split NVLink fabric, or a new hardware-fault Xid since its last gate.",
+        "node_gate",
+        ("node", "rack", "multirack"),
+        max_runtime_minutes=20,
+    ),
 )
 
 _BY_ID = {p.id: p for p in PRESETS}
@@ -317,6 +328,8 @@ _ALIASES = {
     "nemo": "nemo-26.04.01",
     "nemo-26.04.1": "nemo-26.04.01",
     "mnubergemm": "mnubergemm-26.03-v1.17",
+    "node_gate": "node-gate",
+    "gate": "node-gate",
 }
 
 
