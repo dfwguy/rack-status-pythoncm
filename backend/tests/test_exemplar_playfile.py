@@ -87,3 +87,29 @@ def test_the_unified_schema_still_carries_no_legacy_keys(tmp_path):
     play = _record(tmp_path, True, NVIS_EXEMPLAR_IMAGE_FOLDER="/opt/containers")
     assert "slurm_info" not in play and "env_vars" not in play
     assert play["slurm"]["gpu_partition"] == "defq"
+
+
+# ---------------------------------------------------------------- Hugging Face downloads in install mode
+
+_XET_LINE = 'export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"'
+
+
+def _xet_value(**env: str) -> str:
+    proc = subprocess.run(["bash", "-c", f'{_XET_LINE}\necho "$HF_HUB_DISABLE_XET"'],
+                          env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), **env},
+                          capture_output=True, text=True, timeout=10, check=True)
+    return proc.stdout.strip()
+
+
+def test_install_mode_downloads_without_xet_on_both_install_paths():
+    """Xet's read-only shared blobs failed the v26.08.01 install when llmb-install rewrote a tokenizer."""
+    text = SCRIPT.read_text(encoding="utf-8")
+    line = text.index(_XET_LINE)
+    assert text.index("# --- Phase 3 (install mode)") < line  # install mode only; record mode downloads nothing
+    assert line < text.index('if [[ -f "${INSTALL_PATH}/cluster_config.yaml"')  # the incremental-add path
+    assert line < text.index('"${PLAY_CMD[@]}" < <(yes')  # and the fresh --play path
+
+
+def test_a_caller_choice_about_xet_wins():
+    assert _xet_value() == "1"
+    assert _xet_value(HF_HUB_DISABLE_XET="0") == "0"

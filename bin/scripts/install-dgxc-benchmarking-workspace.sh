@@ -340,6 +340,15 @@ _SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 [[ -f "${_SCRIPT_DIR}/slurm-init.inc.sh" ]] && source "${_SCRIPT_DIR}/slurm-init.inc.sh"
 
+# Hugging Face downloads without Xet, unless the caller chose. llmb-install fetches each recipe's
+# tokenizer/config into $LLMB_INSTALL/.cache/huggingface and, for a repo that ships no
+# special_tokens_map.json (Qwen3-235B), writes one with tokenizer.save_pretrained() INTO the snapshot --
+# which also rewrites tokenizer.json through its symlink. huggingface_hub 1.x with Xet stores blobs in a
+# shared, content-addressed store as read-only (0444) files, so that write dies with "Permission denied
+# (os error 13)" and the whole install fails (dgxc-benchmarking v26.08.01, Nscale NC 2026-10-19). Plain
+# HTTP downloads leave the blobs writable, and these are a few small files per recipe, never weights.
+export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
+
 # --- Phase 2b: existing install -> incremental add, not a failed re-install ----
 # llmb-install refuses `--play` against a live install ("Existing LLMB installation
 # found ... remove the existing installation") and `express` refuses too ("Express
