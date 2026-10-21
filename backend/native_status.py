@@ -53,6 +53,7 @@ from core import is_valid_node_hostname
 from json_db import atomic_write_json
 from naming import _full_rack_expected_nodes
 from platforms import get_platform as _get_platform
+from platforms.base import device_state
 from schedulers.slurm import slurm_node_status
 from universal_parser import expand_nodelist
 
@@ -734,6 +735,28 @@ def _cmsh_ds_text() -> str:
     return out
 
 
+def _ds_line_device_state(line: str) -> tuple[str, str] | None:
+    """``(device text, state word)`` of one ``cmsh ds`` line, or None for a line with no status.
+
+    BCM writes ``<device> ...... [ STATE ] (message)``. The state belongs to the device named
+    before the bracket and to nothing else: the message after it can name *another* device, as in
+    Nscale NC's ``gpu93-su35 .. [ DOWN ] (... failed to send jobs to sys1-gso1-p-phy-gpu10-su23)``,
+    which painted the healthy gpu10-su23 down and kept it out of multi-rack selection. A line that
+    leads with the state (``[ UP ] gpu01``) names its device after the bracket instead. Callers
+    look for hostnames in the device text only. The word is :func:`platforms.base.device_state`'s,
+    the same mapping the structured BCM status gets; a trailing note such as "health check failed"
+    does not change an UP.
+
+    This text is the fallback. A cluster manager that reports state per device (BCM through
+    pythoncm) fills each node record's ``status`` directly, and ``cmsh ds`` is not run at all.
+    """
+    match = re.search(r"\[\s*([^\]]+)\]", line)
+    if not match:
+        return None
+    before = line[:match.start()]
+    return (before if re.search(r"[A-Za-z0-9]", before) else line[match.end():]), device_state(match.group(1))
+
+
 def condense_ct_nums(nums: list[int]) -> str:
     if not nums:
         return ""
@@ -800,19 +823,12 @@ def parse_cmsh_ds_to_ct_column_by_rack(ds_text: str) -> dict[str, str]:
         acc_key = f"{rr}|{st}"
         ct_acc[acc_key] = (ct_acc[acc_key] + " " + nn).strip()
 
-    for line in ds_text.splitlines():
-        if not line.strip():
+    for full_line in ds_text.splitlines():
+        parsed = _ds_line_device_state(full_line)
+        if parsed is None:
             continue
-        m = re.search(r"\[([^\]]+)\]", line)
-        if not m:
-            continue
-        bracket = re.sub(r"\s+", "", m.group(1)).lower()
-        if bracket == "up":
-            st = "UP"
-        elif bracket in ("down", "unreachable"):
-            st = "DN"
-        else:
-            st = "INST"
+        line, word = parsed
+        st = {"up": "UP", "down": "DN"}.get(word, "INST")
 
         if mode == "find_parse" and fre is not None and pre is not None:
             for fm in fre.finditer(line):
@@ -892,19 +908,12 @@ def _parse_cmsh_ds_nvis_templates(ds_text: str) -> dict[str, str]:
         acc_key = f"{rr}|{st}"
         ct_acc[acc_key] = (ct_acc[acc_key] + " " + nn).strip()
 
-    for line in ds_text.splitlines():
-        if not line.strip():
+    for full_line in ds_text.splitlines():
+        parsed = _ds_line_device_state(full_line)
+        if parsed is None:
             continue
-        m = re.search(r"\[([^\]]+)\]", line)
-        if not m:
-            continue
-        bracket = re.sub(r"\s+", "", m.group(1)).lower()
-        if bracket == "up":
-            st = "UP"
-        elif bracket in ("down", "unreachable"):
-            st = "DN"
-        else:
-            st = "INST"
+        line, word = parsed
+        st = {"up": "UP", "down": "DN"}.get(word, "INST")
         for hm in matcher.find_in_line(line):
             # Skip NVSwitch trays: the compute CT template matches the
             # "<rack>-<slot>" prefix inside "<rack>-<slot>-nv", which would fold
@@ -1226,12 +1235,13 @@ def build_node_inventory(
     # Match complete known host tokens, never partial names or arbitrary ds devices.
     known = {host.casefold() for host in nodes}
     for line in ds_text.splitlines():
-        match = re.search(r"\[\s*([^\]]+)\]", line)
-        if not match:
+        parsed = _ds_line_device_state(line)
+        if parsed is None:
             continue
-        raw = re.sub(r"\s+", "", match.group(1)).lower()
-        state = "up" if raw == "up" else "down" if raw in {"down", "unreachable"} else "inst"
-        for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9._-]*", line[:match.start()] + line[match.end():]):
+        device, state = parsed
+        if state == "unknown":
+            continue
+        for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9._-]*", device):
             if token.casefold() in known:
                 device_states[token.casefold()] = state
     # Only 'direct' mode parses the rack out of the hostname. In 'translate' the hostname does not
@@ -1266,8 +1276,13 @@ def build_node_inventory(
         # other -- NC's drained-but-powered fleet -- and the floor view shows either on request.
         # The raw state is Slurm's wherever one is read today (a provider-inventoried cluster's
         # states come from Slurm enrichment); another scheduler would map its own here.
+        # ``status`` comes from the cluster manager's own record when it reports one (BCM via
+        # pythoncm), else from the ``cmsh ds`` text, else from what the scheduler implies.
+        provider_status = str(detail.get("status") or "unknown")
         node_rec: dict[str, Any] = {
-            "id": host, "rack": rack, "status": device_states.get(host.casefold(), state),
+            "id": host, "rack": rack,
+            "status": provider_status if provider_status != "unknown"
+            else device_states.get(host.casefold(), state),
             "scheduler_state": scheduler_state, "scheduler_status": slurm_node_status(scheduler_state),
             "ip": detail.get("ip", ""),
         }
@@ -1363,6 +1378,41 @@ def counts_from_node_inventory(
         state = str(node.get("status") or "unknown")
         counts[(rack, state)] = counts.get((rack, state), 0) + 1
     return counts
+
+
+def provider_reports_status(records: list[dict[str, Any]] | None) -> bool:
+    """Whether the cluster manager's own records carry a device state (BCM through pythoncm).
+
+    When they do, they are the source of every node's ``status`` and of the rack table's
+    ``ct_down_unk`` column, and ``cmsh -c ds`` -- a 12-23 s call on the head whose free text once
+    let one node's error message mark another node down -- is not run at all.
+    """
+    return bool(records) and any(str(r.get("status") or "unknown") != "unknown" for r in records)
+
+
+def ct_column_from_node_inventory(inventory: list[dict[str, Any]]) -> dict[str, str]:
+    """The ``ct_down_unk`` column (``DN:…;INST:…;UP:…`` per rack) from a built node inventory.
+
+    The same shape :func:`parse_cmsh_ds_to_ct_column_by_rack` builds from ``ds`` text, but from
+    each placed node's ``status`` and ``tray`` -- the state the cluster manager reported for that
+    device, so no other device's message can land on it. Nodes with no tray or no known state
+    are left out.
+    """
+    blob_key = {"down": "DN", "inst": "INST", "up": "UP"}
+    trays: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for node in inventory:
+        key = blob_key.get(str(node.get("status") or ""))
+        if node.get("rack") and node.get("tray") and key:
+            trays[(node["rack"], key)].append(str(node["tray"]))
+    out: dict[str, str] = {}
+    for rack in sorted({r for r, _ in trays}):
+        parts = []
+        for key in ("DN", "INST", "UP"):
+            ranges = _condense_tray_tokens(" ".join(trays.get((rack, key), [])))
+            if ranges:
+                parts.append(f"{key}:{_nvis_naming().ct_blob(rack, ranges)}")
+        out[rack] = ";".join(parts) if parts else "-"
+    return out
 
 
 def _slurm_base_job_id(jid_raw: str) -> str | None:
@@ -1991,6 +2041,15 @@ class NativeRackTableState:
                 self.racks_refreshed_monotonic = now
 
     def _worker_ds(self) -> None:
+        with self.lock:
+            from_provider = provider_reports_status(self.node_records)
+        if from_provider:
+            # State comes with the provider's records; the column is built from them per snapshot.
+            with self.lock:
+                self.ct_by_rack = {}
+                self.ds_text = ""
+                self.ds_done = True
+            return
         try:
             text = _cmsh_ds_text()
             col = parse_cmsh_ds_to_ct_column_by_rack(text)
@@ -2277,10 +2336,14 @@ class NativeRackTableState:
         # A provider cluster (BCM/pythoncm) has no sinfo, so the per-rack node totals come from the
         # roster the cluster manager returned instead. Without this every provider rack reads 0/0
         # even when the fleet is fully enumerated. Slurm clusters keep their real sinfo_counts.
-        if not sct and node_states is not None:
-            sct = counts_from_node_inventory(
-                build_node_inventory(node_states, racks, ds_text, node_records)
-            )
+        from_provider = provider_reports_status(node_records)
+        if node_states is not None and (not sct or from_provider):
+            inventory = build_node_inventory(node_states, racks, ds_text, node_records)
+            if not sct:
+                sct = counts_from_node_inventory(inventory)
+            if from_provider:
+                ct = ct_column_from_node_inventory(inventory)
+                ds_done = True
         rows: list[dict[str, str]] = []
         n_done = n_fail = n_on = n_pending = 0
         stage1_summary = empty_stage_summary()

@@ -473,7 +473,7 @@ Legacy name **`RACK_APP_GRAFANA_URL`** → use **`RACK_WEB_GRAFANA_URI`**.
 | **`SINFO_OPTS`** | *(unset)* | Extra `sinfo` args (`native_status.py` + `rack_status.sh`). |
 | **`SQUEUE_USER`**, **`USER`** | `USER` | `squeue` user filter (`native_status.py` + scripts). |
 | **`RACK_NATIVE_CMSH_TIMEOUT_SEC`** | `120` | Native `cmsh` rack list. |
-| **`RACK_NATIVE_DS_TIMEOUT_SEC`** | `300` | Native `cmsh ds`. |
+| **`RACK_NATIVE_DS_TIMEOUT_SEC`** | `300` | Native `cmsh ds` (fallback only: not run when the BCM pythoncm query reports device status). |
 | **`RACK_NATIVE_SINFO_TIMEOUT_SEC`** | `120` | Native `sinfo`. |
 | **`RACK_NATIVE_SCONTROL_TIMEOUT_SEC`** | `60` | Native `scontrol` hostnames. |
 | **`RACK_NATIVE_SQUEUE_TIMEOUT_SEC`** | `60` | Native `squeue`. |

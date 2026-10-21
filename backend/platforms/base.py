@@ -23,14 +23,35 @@ from abc import ABC, abstractmethod
 from core import is_valid_node_hostname
 
 
+def device_state(raw: object) -> str:
+    """A cluster manager's device state as the node record's ``status`` word.
+
+    ``up``; ``down`` for DOWN or UNREACHABLE; ``inst`` for any other state the manager reports
+    (installing, INSTALLER_FAILED, booting, ...); ``unknown`` when it reports none. The same
+    mapping serves BCM's structured status and the bracket word of ``cmsh ds``, so the two
+    sources cannot disagree about what a state means.
+    """
+    word = "".join(str(raw or "").split()).lower()
+    if not word or word in {"none", "undefined", "unknown"}:
+        return "unknown"
+    if word == "up":
+        return "up"
+    if word in {"down", "unreachable"}:
+        return "down"
+    return "inst"
+
+
 def _compute_node_records(
     records: object, *, provider: str, rack_field: str = "", ip_field: str = "", unit_field: str = "",
+    status_field: str = "",
 ) -> list[dict[str, str | None]]:
     """Validate manager inventory without deriving hostnames or requiring rack membership.
 
     ``unit_field`` names the provider's position-in-rack attribute (BCM's rack unit). It is
     carried as ``rack_unit`` only when the provider reports one: it is placement data the cluster
     manager owns, so nothing here derives it from the hostname or the tray template.
+    ``status_field`` names the provider's device state; :func:`device_state` normalizes it, and a
+    record without one stays ``unknown`` for the caller to fill from another source.
     """
     if not isinstance(records, list):
         # This is a failed external query, rather than a caller passing a wrong Python type.
@@ -47,7 +68,7 @@ def _compute_node_records(
         nodes[hostname] = {
             "id": hostname,
             "rack": rack.strip() or None if isinstance(rack, str) else None,
-            "status": "unknown",
+            "status": device_state(record.get(status_field)) if status_field else "unknown",
             "ip": ip.strip() if isinstance(ip, str) else "",
             "scheduler_state": "",
         }

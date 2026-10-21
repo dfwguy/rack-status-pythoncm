@@ -117,13 +117,51 @@ def _scalar(value: object) -> str:
     return ""
 
 
-def shape_device(device: object, racks: dict[str, str] | None = None) -> dict[str, object]:
+def shape_status(status: object) -> dict[str, object]:
+    """A ``DeviceStatus`` as the fields the app reads, or {} when there is none.
+
+    ``status`` is BCM's own word (UP, DOWN, INSTALLING, ...) -- the enum member's name, the same
+    word ``cmsh ds`` prints in brackets. The health-check flag and the message are separate
+    fields here, so a node that is UP with a failed health check stays UP, and a message that
+    names some other host is that device's message, attached to nothing else.
+    """
+    if status is None:
+        return {}
+    value = getattr(status, "status", None)
+    word = str(getattr(value, "name", "") or _scalar(value)).upper()
+    if not word or word == "NONE":
+        return {}
+    return {
+        "status": word,
+        "health_check_failed": bool(getattr(status, "healthCheckFailed", False)),
+        "status_message": _scalar(_attr(status, "infoMessage", "userMessage")),
+    }
+
+
+def device_statuses(cluster: object, devices: list[object]) -> dict[str, dict[str, object]]:
+    """Device uuid -> :func:`shape_status`, for every device that has a status, in one RPC.
+
+    One ``cmstatus.getStatusForDevices`` call answers for the whole fleet (2,287 devices in
+    0.5 s on Nscale NC), where ``cmsh -c ds`` takes 12-23 s and returns free text.
+    """
+    out: dict[str, dict[str, object]] = {}
+    for status in cluster.parallel.device_status(devices) or []:
+        uuid = str(getattr(status, "ref_device_uuid", "") or "")
+        shaped = shape_status(status)
+        if uuid and shaped:
+            out[uuid] = shaped
+    return out
+
+
+def shape_device(device: object, racks: dict[str, str] | None = None,
+                 status: dict[str, object] | None = None) -> dict[str, object]:
     """One BCM device as plain JSON, including the BMC address the report needs.
 
     Rack placement takes some unpicking. ``device.rackPosition`` is a ``RackPosition`` entity
     carrying ``position`` (the U) and ``rack`` (a *uuid*, not a name), so *racks* maps rack uuid
     to rack name. Falling back to the cmsh-style "WH1D1:18" fused string keeps this working
-    against releases that return a plain string instead.
+    against releases that return a plain string instead. *status* is the device's
+    :func:`shape_status`; without one the record carries no status fields at all.
     """
     racks = racks or {}
     interfaces = [_iface_dict(i) for i in (_attr(device, "interfaces", default=[]) or [])]
@@ -156,6 +194,7 @@ def shape_device(device: object, racks: dict[str, str] | None = None) -> dict[st
         "bmc_ip": str((bmc or {}).get("ip") or ""),
         "bmc_mac": str((bmc or {}).get("mac") or ""),
         "interfaces": interfaces,
+        **(status or {}),
     }
 
 
@@ -359,6 +398,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run_query(cluster, args: argparse.Namespace, used: str, started: float) -> dict[str, object]:
+    status_error = ""
     if args.query == "version":
         data: object = {"cmdaemon": str(getattr(cluster, "version", "") or "")}
     elif args.query == "attrs":
@@ -379,10 +419,16 @@ def _run_query(cluster, args: argparse.Namespace, used: str, started: float) -> 
         devices = []
         for type_name in wanted:
             devices.extend(cluster.get_by_type(type_name) or [])
-        data = [shape_device(d, racks) for d in devices]
+        # Status is enrichment: a release without the call, or a failed one, still answers with
+        # the inventory, and the caller falls back to cmsh ds for state.
+        try:
+            statuses = device_statuses(cluster, devices)
+        except Exception as exc:  # noqa: BLE001 - reported in the payload, never fatal
+            statuses, status_error = {}, f"{type(exc).__name__}: {exc}"
+        data = [shape_device(d, racks, statuses.get(str(getattr(d, "uuid", "") or ""))) for d in devices]
         data.sort(key=lambda d: d["hostname"])
 
-    return {
+    payload: dict[str, object] = {
         "ok": True,
         "query": args.query,
         "count": len(data) if isinstance(data, list) else 1,
@@ -390,6 +436,9 @@ def _run_query(cluster, args: argparse.Namespace, used: str, started: float) -> 
         "pythoncm_path": used,
         "data": data,
     }
+    if status_error:
+        payload["status_error"] = status_error
+    return payload
 
 
 def _probe_after_bootstrap(args: argparse.Namespace) -> tuple[bool, str]:

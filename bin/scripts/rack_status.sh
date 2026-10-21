@@ -565,7 +565,11 @@ if [[ "$USE_CMSH" -eq 1 ]] && command -v "$CMSH" &>/dev/null; then
         ct_seen[$key]=1
         acc_key="${r}|${st}"
         ct_acc[$acc_key]="${ct_acc[$acc_key]:+${ct_acc[$acc_key]} }$nn"
-      done < <(grep -oEi 'p[0-9]+-r[0-9]+-ct[0-9]+' <<<"$line" | sort -u)
+      # The state belongs to the device named before the bracket; the message after it can name
+      # another device ("... [ DOWN ] (failed to send jobs to <host>)") and must not mark that one.
+      # A line that leads with the state ("[ UP ] <host>") names its device after the bracket.
+      done < <(dev="${line%%\[*}"; [[ "$dev" =~ [[:alnum:]] ]] || dev="${line#*\]}"
+               grep -oEi 'p[0-9]+-r[0-9]+-ct[0-9]+' <<<"$dev" | sort -u)
     done <"$tmp_ds"
     shopt -u nocasematch
     for acc_k in "${!ct_acc[@]}"; do

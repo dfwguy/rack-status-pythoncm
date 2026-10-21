@@ -506,6 +506,15 @@ In-memory, `NativeRackTableState` (and `MultirackTableState`) run background `ds
 workers per log dir, and live worker output is merged over the snapshot so `sinfo` and
 `ct_down_unk` are never stuck at `?`.
 
+A node's cluster-manager state (`status`: up / down / inst) comes from the provider's own records
+when they carry one: on BCM, `nvis_bcm_query.py` reads every device's status in one pythoncm call
+(`cmstatus.getStatusForDevices`), and the `ds` worker then skips `cmsh -c ds` altogether, with
+`ct_down_unk` built from the same per-node states. `cmsh -c ds` text is the fallback only. That
+text is ambiguous: a line's message can name another device
+(`gpu93-su35 .. [ DOWN ] (failed to send jobs to gpu10-su23)`), which once marked a healthy node
+down and kept its rack out of multi-rack selection. So the fallback reads only the device named
+beside the bracket.
+
 > **Expect a lag after repairing a log by hand.** The fingerprint caches invalidate correctly, but
 > `/api/status` is served from the snapshot and re-probed by the background loop — not on demand.
 > After running a collector, the rack header can take a refresh interval or more to flip. It is not
