@@ -33,6 +33,7 @@
 #   run_llmb_nemo.sh <nodelist-csv> <rack-id>            # app contract
 #   run_llmb_nemo.sh [--dry-run] --nodelist LIST [--rack R] [--scale N]
 #                    [--dtype fp8] [--model-size 56b] [--time-limit 01:00:00] [--profile]
+#                    [--mbridge-arg ARG]...
 #
 # Environment:
 #   NVIS_LLMB_NEMO_TIME_LIMIT  walltime handed to the recipe (default 01:00:00).
@@ -43,6 +44,10 @@
 #   NVIS_LLMB_NEMO_DTYPE       default fp8
 #   NVIS_LLMB_NEMO_PROFILE=1   same as --profile: llmb-run -p, the recipe's Nsight Systems capture
 #                              (ENABLE_PROFILE; its own step window). A suite run keeps it off.
+#   NVIS_LLMB_NEMO_MBRIDGE_ARGS  whitespace-separated Megatron-Bridge arguments, same as repeating
+#                              --mbridge-arg: each goes to llmb-run --mbridge-arg, which appends it after
+#                              the recipe's own overrides (MBridge --flag=value or a Hydra key=value).
+#                              llmb-run rejects whitespace inside one argument.
 #   NVIS_FABRIC_SKIP=1         skip the fabric probe
 #   NVIS_LLMB_KEEP_UCX_ENV=1   keep host UCX pins (host/non-container runs only)
 set -uo pipefail
@@ -64,6 +69,8 @@ LLMB_MODEL_SIZE="${NVIS_LLMB_NEMO_MODEL_SIZE:-56b}"
 LLMB_DTYPE="${NVIS_LLMB_NEMO_DTYPE:-fp8}"
 TIME_LIMIT_VAL="${NVIS_LLMB_NEMO_TIME_LIMIT:-01:00:00}"
 PROFILE=0
+MBRIDGE_ARGS=()
+read -r -a MBRIDGE_ARGS <<< "${NVIS_LLMB_NEMO_MBRIDGE_ARGS:-}"
 [[ "${NVIS_LLMB_NEMO_PROFILE:-0}" == "1" ]] && PROFILE=1
 
 DRY_RUN=0
@@ -81,6 +88,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -d|--dry-run|--dryrun) DRY_RUN=1; shift ;;
     --profile) PROFILE=1; shift ;;
+    --mbridge-arg) MBRIDGE_ARGS+=( "${2:?--mbridge-arg needs a value}" ); shift 2 ;;
+    --mbridge-arg=*) MBRIDGE_ARGS+=( "${1#*=}" ); shift ;;
     --nodelist) EXPLICIT_NODELIST="${2:?--nodelist needs a value}"; shift 2 ;;
     --nodelist=*) EXPLICIT_NODELIST="${1#*=}"; shift ;;
     --rack) RACK_ID="${2:?--rack needs a value}"; shift 2 ;;
@@ -257,10 +266,12 @@ cmd=( "${LLMB_RUN}" "${LLMB_SUBCMD}" -w "${LLMB_WORKLOAD}" -s "${LLMB_MODEL_SIZE
 # --time_limit. --env is the supported override channel in llmb-run v26.06+.
 [[ -n "${TIME_LIMIT_VAL}" ]] && cmd+=( --env "TIME_LIMIT=${TIME_LIMIT_VAL}" )
 [[ "${PROFILE}" -eq 1 ]] && cmd+=( -p )
+for _mb in "${MBRIDGE_ARGS[@]}"; do cmd+=( "--mbridge-arg=${_mb}" ); done
 [[ "${DRY_RUN}" -eq 1 ]] && cmd+=( "${LLMB_DRY_FLAG}" )
 
 echo "run_llmb_nemo: workload=${LLMB_WORKLOAD} model_size=${LLMB_MODEL_SIZE} dtype=${LLMB_DTYPE} nodes=${NNODES} scale=${SCALE}"
 echo "run_llmb_nemo: rack=${RACK_ID:-<none>} nodelist=${NODELIST} time_limit=${TIME_LIMIT_VAL}"
+[[ ${#MBRIDGE_ARGS[@]} -gt 0 ]] && echo "run_llmb_nemo: mbridge args: ${MBRIDGE_ARGS[*]}"
 echo "run_llmb_nemo: LLMB_INSTALL=${LLMB_INSTALL} LLMB_RUN=${LLMB_RUN}${NVIS_SHIM_DIR:+ sbatch_shim=${NVIS_SHIM_DIR}/sbatch}"
 [[ -n "${SBATCH_OUTPUT}" ]] && echo "run_llmb_nemo: sbatch stdout -> ${SBATCH_OUTPUT}"
 echo "run_llmb_nemo: fabric: NCCL_IB_HCA=${NCCL_IB_HCA:-<auto>} NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-<auto>} UCX_TLS=${UCX_TLS:-<default>} UCX_NET_DEVICES=${UCX_NET_DEVICES:-<auto>}"

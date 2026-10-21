@@ -140,6 +140,35 @@ def test_the_nemo_launcher_can_ask_llmb_for_its_profiled_run():
     assert text.index('[[ "${PROFILE}" -eq 1 ]] && cmd+=( -p )') > text.index('cmd=( "${LLMB_RUN}" "${LLMB_SUBCMD}"')
 
 
+def _mbridge_lines() -> str:
+    """The launcher's own lines that collect Megatron-Bridge arguments and add them to llmb-run."""
+    text = (SCRIPTS / "run_llmb_nemo.sh").read_text(encoding="utf-8")
+    keep = [line for line in text.splitlines()
+            if line.startswith(("MBRIDGE_ARGS=()", "read -r -a MBRIDGE_ARGS", 'for _mb in "${MBRIDGE_ARGS[@]}"'))]
+    assert len(keep) == 3, keep
+    return "\n".join(keep)
+
+
+@pytest.mark.parametrize("stated,expected", [
+    ("", []),
+    ("--moe_expert_rank_capacity_factor=1.5", ["--mbridge-arg=--moe_expert_rank_capacity_factor=1.5"]),
+    ("model.a=1  model.b=2", ["--mbridge-arg=model.a=1", "--mbridge-arg=model.b=2"]),
+])
+def test_the_nemo_launcher_hands_stated_mbridge_args_to_llmb_run(stated, expected):
+    """NVIS_LLMB_NEMO_MBRIDGE_ARGS becomes one llmb-run --mbridge-arg per word, after the recipe flags."""
+    script = f'set -u\ncmd=( llmb-run submit )\n{_mbridge_lines()}\nprintf "%s\\n" "${{cmd[@]:2}}"'
+    out = subprocess.run(["bash", "-c", script], env={**os.environ, "NVIS_LLMB_NEMO_MBRIDGE_ARGS": stated},
+                         capture_output=True, text=True, check=True).stdout
+    assert out.split() == expected
+
+
+def test_the_nemo_launcher_takes_mbridge_args_as_a_repeatable_option():
+    text = (SCRIPTS / "run_llmb_nemo.sh").read_text(encoding="utf-8")
+    assert '--mbridge-arg) MBRIDGE_ARGS+=( "${2:?--mbridge-arg needs a value}" ); shift 2 ;;' in text
+    assert '--mbridge-arg=*) MBRIDGE_ARGS+=( "${1#*=}" ); shift ;;' in text
+    assert text.index('for _mb in "${MBRIDGE_ARGS[@]}"') > text.index('cmd=( "${LLMB_RUN}" "${LLMB_SUBCMD}"')
+
+
 def test_the_exemplar_llama_wrapper_lays_out_ranks_before_its_shim():
     text = (SCRIPTS / "run-exemplar-llama.sh").read_text(encoding="utf-8")
     assert text.index("nvis_rank_layout run-exemplar-llama") < text.index('nvis_sbatch_pin_install "$nodelist"')
