@@ -643,6 +643,8 @@ class Cluster:
     naming: ClusterNaming = field(default_factory=ClusterNaming)
     geometry: ClusterGeometry = field(default_factory=ClusterGeometry)
     connection: ClusterConnection = field(default_factory=ClusterConnection)
+    # None inherits Settings/platform defaults; {} explicitly disables this cluster.
+    clusterkit_profile: dict[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Cluster:
@@ -656,6 +658,7 @@ class Cluster:
             naming=ClusterNaming.from_dict(d.get("naming")),
             geometry=ClusterGeometry.from_dict(d.get("geometry")),
             connection=ClusterConnection.from_dict(d.get("connection")),
+            clusterkit_profile=d.get("clusterkit_profile"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -672,6 +675,8 @@ class Cluster:
                 f"unknown cluster_manager {self.cluster_manager!r} (expected {CLUSTER_MANAGERS})"
             )
         problems.extend(self.connection.validate())
+        if self.clusterkit_profile is not None and not isinstance(self.clusterkit_profile, dict):
+            problems.append("clusterkit_profile must be an object or null")
         return problems
 
 

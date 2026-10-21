@@ -29,6 +29,7 @@ No import of ``app`` here (avoids cycles); ``app.py`` calls into this module.
 """
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -86,6 +87,15 @@ def overlays_for_active() -> tuple[dict[str, str], dict[str, str]]:
         high, low = {}, {}
     _overlay_cache.update({"gen": gen, "high": high, "low": low})
     return high, low
+
+
+def overlays_for_active_readonly() -> tuple[dict[str, str], dict[str, str]]:
+    """Resolve existing catalog state without constructing a writable store."""
+    from .store import read_only_repo
+
+    repo = read_only_repo()
+    project, cluster, platform = resolve(repo=repo)
+    return high_overlay(project, cluster, platform, repo=repo), low_overlay(platform, cluster, repo=repo)
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +194,8 @@ def high_overlay(
     if cluster is None:
         return {}
     out: dict[str, str] = {}
+    if cluster.clusterkit_profile is not None:
+        out["RACK_CLUSTERKIT_SITE_PROFILE"] = json.dumps(cluster.clusterkit_profile, sort_keys=True)
     n = cluster.naming
     _put(out, "NVIS_RACK_ID", n.rack_id_template)
     _put(out, "NVIS_CT_ID", n.ct_id_template)

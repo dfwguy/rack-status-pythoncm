@@ -77,6 +77,17 @@ def set_materialize_hook(fn) -> None:
 
 JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     {
+        "section": "jobs_cluster",
+        "key": "RACK_CLUSTERKIT_SITE_PROFILE",
+        "label": "ClusterKit site profile (JSON, administrator only)",
+        "description": (
+            "Non-secret ClusterKit deployment settings; disabled when absent. "
+            "Cluster catalog profile wins over Settings; Settings wins over process environment "
+            "and platform tool defaults. Validated by clusterkit_profile; never accept this "
+            "value or its low-level fields from an ordinary validation request."
+        ),
+    },
+    {
         "section": "dashboard",
         "key": "RACK_STATUS_BACKGROUND_INTERVAL_SEC",
         "label": "Status background refresh (seconds)",
@@ -979,14 +990,55 @@ def _eget(name: str, default: str | None = None) -> str | None:
     if name in high and high[name].strip():
         return high[name].strip()
     ov = _job_env_overrides_load()
-    if name in ov and ov[name].strip():
-        return ov[name].strip()
-    v = os.environ.get(name)
-    if v is not None:
-        return v
+    return _resolve_setting(name, default, high, ov, os.environ, low)
+
+
+def _resolve_setting(name, default, high, overrides, environ, low):
+    """One precedence implementation for normal readers and read-only planning."""
+    for layer in (high, overrides):
+        if name in layer and layer[name].strip():
+            return layer[name].strip()
+    if name in environ:
+        return environ[name]  # An explicitly empty process value wins.
     if name in low and low[name].strip():
         return low[name].strip()
     return default
+
+
+def read_only_values(names: tuple[str, ...]) -> dict[str, str | None]:
+    """Read the same settings/overlays without materialization, mkdir or lock files.
+
+    Catalog writes use atomic replace. A concurrent change can make a preview stale;
+    submission must resolve and revalidate again. Corrupt/unreadable existing stores
+    fail closed, rather than silently discard administrator limits.
+    """
+    high, low = {}, {}
+    if _CATALOG_AVAILABLE and catalog_context is not None:
+        high, low = catalog_context.overlays_for_active_readonly()
+    else:
+        catalog_path = Path(os.environ.get("NVIS_CATALOG_FILE") or REPO_ROOT / "var/store/catalog.json")
+        if catalog_path.exists():
+            raise ValueError("Catalog dependencies unavailable; cannot safely resolve existing site policy")
+    path = _job_env_overrides_path()
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            content = file.read(1024 * 1024 + 1)
+    except FileNotFoundError:
+        content = "{}"
+    if len(content) > 1024 * 1024:
+        raise ValueError("Settings store exceeds the read-only snapshot limit")
+    raw = json.loads(content)
+    if not isinstance(raw, dict):
+        raise TypeError("Settings store must be a JSON object")
+    overrides = {}
+    for name in names:
+        if name in _JOB_ENV_ALLOWED_KEYS and name in raw and raw[name] is not None:
+            value = str(raw[name]).strip()
+            if len(value) > 8192:
+                raise ValueError("Setting exceeds the Settings value size limit")
+            if value:
+                overrides[name] = value
+    return {name: _resolve_setting(name, None, high, overrides, os.environ, low) for name in names}
 
 
 def _eget_int(name: str, default: int) -> int:

@@ -260,6 +260,43 @@ class TinyDBRepo:
 _instance: Repo | None = None
 
 
+class _ReadOnlySnapshot:
+    """Only the read interface needed by catalog context; never creates storage."""
+
+    def __init__(self, data):
+        if not isinstance(data, dict):
+            raise TypeError("Catalog snapshot must be an object")
+        self.data = data
+
+    def list(self, table):
+        rows = self.data.get(table, {})
+        if not isinstance(rows, dict) or any(not isinstance(row, dict) for row in rows.values()):
+            raise ValueError("Invalid catalog snapshot table")
+        return list(rows.values())
+
+    def get(self, table, doc_id):
+        return next((row for row in self.list(table) if row.get("id") == doc_id), None)
+
+    def get_meta(self, key, default=None):
+        row = next((row for row in self.list(TABLE_META) if row.get("key") == key), None)
+        return row.get("value", default) if row else default
+
+
+def read_only_repo():
+    """Snapshot the existing store without TinyDB's constructor/touch side effects."""
+    if _instance is not None and not isinstance(_instance, TinyDBRepo):
+        return _instance  # Read-only use of injected/in-memory Repo implementations.
+    path = _instance.path if isinstance(_instance, TinyDBRepo) else default_catalog_path()
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            content = file.read(8 * 1024 * 1024 + 1)
+    except FileNotFoundError:
+        return _ReadOnlySnapshot({})
+    if len(content) > 8 * 1024 * 1024:
+        raise ValueError("Catalog exceeds the read-only snapshot limit")
+    return _ReadOnlySnapshot(json.loads(content or "{}"))
+
+
 def get_repo() -> Repo:
     """Return the process-wide catalog repository (created on first use)."""
     global _instance

@@ -11852,22 +11852,7 @@ def _clusterkit_rack_dir(log_dir: Path, rk: str) -> Path:
     return log_dir / "clusterkit" / rk
 
 
-def _clusterkit_get_cell(links: list[object], i: int, j: int) -> float | None:
-    """Upper-triangular storage: same convention as clusterkit ``bwResultAnalyzer.getCell``."""
-    if i == j:
-        return 0.0
-    try:
-        if i < j:
-            row = links[i]
-            if not isinstance(row, list) or j - i >= len(row):
-                return None
-            return float(row[j - i])
-        row = links[j]
-        if not isinstance(row, list) or i - j >= len(row):
-            return None
-        return float(row[i - j])
-    except (IndexError, TypeError, ValueError):
-        return None
+from clusterkit_metrics import get_cell as _clusterkit_get_cell
 
 
 def _clusterkit_parse_bandwidth_payload(
