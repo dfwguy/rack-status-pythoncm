@@ -42,12 +42,12 @@ def device_state(raw: object) -> str:
 
 
 def _compute_node_records(
-    records: object, *, provider: str, rack_field: str = "", ip_field: str = "", unit_field: str = "",
-    status_field: str = "",
+    records: object, *, provider: str, rack_field: str = "", ip_field: str = "",
+    rack_unit_field: str = "", status_field: str = "",
 ) -> list[dict[str, str | None]]:
     """Validate manager inventory without deriving hostnames or requiring rack membership.
 
-    ``unit_field`` names the provider's position-in-rack attribute (BCM's rack unit). It is
+    ``rack_unit_field`` names the provider's position-in-rack attribute (BCM's rack unit). It is
     carried as ``rack_unit`` only when the provider reports one: it is placement data the cluster
     manager owns, so nothing here derives it from the hostname or the tray template.
     ``status_field`` names the provider's device state; :func:`device_state` normalizes it, and a
@@ -72,7 +72,7 @@ def _compute_node_records(
             "ip": ip.strip() if isinstance(ip, str) else "",
             "scheduler_state": "",
         }
-        unit = record.get(unit_field) if unit_field else None
+        unit = record.get(rack_unit_field) if rack_unit_field else None
         if isinstance(unit, (str, int)) and str(unit).strip():
             nodes[hostname]["rack_unit"] = str(unit).strip()
     return list(nodes.values())

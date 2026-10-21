@@ -51,10 +51,11 @@ import nvis_id_templates as _nvis_ids
 import results_history
 from core import is_valid_node_hostname
 from json_db import atomic_write_json
-from naming import _full_rack_expected_nodes
+from naming import _full_rack_expected_nodes, provider_node_racks
 from platforms import get_platform as _get_platform
 from platforms.base import device_state
 from schedulers.slurm import slurm_node_status
+from slurm_query import collect_slurm_placement_records
 from universal_parser import expand_nodelist
 
 _logger = logging.getLogger(__name__)
@@ -192,10 +193,7 @@ def _rack_mapping_mode() -> str:
     the historical behaviour, so a stale or empty value never hides a cluster's racks. Only the
     three known values are honoured; 'pool' must be set explicitly (a blank value never means pool).
     """
-    mode = _native_env_ds("NVIS_RACK_MAPPING_MODE", "direct").strip().lower()
-    if mode in ("translate", "pool"):
-        return mode
-    return "direct"
+    return config_env.rack_mapping_mode()
 
 
 def _hostname_encodes_rack() -> bool:
@@ -1249,6 +1247,11 @@ def build_node_inventory(
     # mis-set CT template; in 'pool' there is no rack at all so parsing fabricates one. In both the
     # node stays ungrouped rather than mis-grouped. See _hostname_encodes_rack.
     parse_hostname = _hostname_encodes_rack()
+    # Pool means the cluster has no placement: a stray provider rack attribute never groups a node.
+    accept_placement = not is_pool_mode()
+    provider_racks = provider_node_racks(
+        nodes, rack_ids.values(), records, naming=naming, normalize=_normalize_rack_key_for_ds,
+    ) if accept_placement else {}
     result: list[dict[str, Any]] = []
     for host, scheduler_state in sorted(nodes.items(), key=lambda item: item[0].casefold()):
         detail = details.get(host.casefold(), {})
@@ -1256,10 +1259,8 @@ def build_node_inventory(
         if parse_hostname:
             parsed = naming.sinfo_rack_from_host(host.lower().split(".")[0])
             rack = rack_ids.get(_normalize_rack_key_for_ds(parsed[0]).casefold()) if parsed else None
-        placement = detail.get("rack")
-        if placement:
-            mapped = naming.map_cmsh_rack_list_token(placement) or _normalize_rack_key_for_ds(placement)
-            rack = rack_ids.get(mapped.casefold())
+        if detail.get("rack") and accept_placement:
+            rack = provider_racks.get(host)
         if rack is None and parse_hostname:
             # Support real names whose extra components do not fit the tray template.
             matches = [value for key, value in rack_ids.items()
@@ -2070,6 +2071,8 @@ class NativeRackTableState:
             slurm_shapes: dict[str, dict[str, Any]] = {}
             if scheduler == "slurm":
                 nodes, slurm_shapes = collect_sinfo_nodes_and_shapes()
+                # Slurm owns the roster; a translated BCM+Slurm cluster adds the manager's placement.
+                records = collect_slurm_placement_records()
                 source = "slurm"
             else:
                 records = _get_platform().compute_node_inventory()
@@ -2333,9 +2336,11 @@ class NativeRackTableState:
             errs = list(self.last_errors)
             ds_done = self.ds_done
             sinfo_done = self.sinfo_done
-        # A provider cluster (BCM/pythoncm) has no sinfo, so the per-rack node totals come from the
-        # roster the cluster manager returned instead. Without this every provider rack reads 0/0
-        # even when the fleet is fully enumerated. Slurm clusters keep their real sinfo_counts.
+        # Provider-only clusters, and Slurm clusters whose placement comes from the cluster manager
+        # (translate), derive the per-rack node totals from the placed node inventory -- without
+        # this every provider rack reads 0/0 even when the fleet is fully enumerated. Direct-mode
+        # Slurm clusters keep their hostname-derived sinfo counts. When the manager's records carry
+        # each node's state (BCM through pythoncm) the CT column comes from them too, not ``ds``.
         from_provider = provider_reports_status(node_records)
         if node_states is not None and (not sct or from_provider):
             inventory = build_node_inventory(node_states, racks, ds_text, node_records)

@@ -47,7 +47,7 @@ STOCK = "nvidia+nemo+26.04.01-arm.sqsh"
 
 @pytest.fixture
 def placed(monkeypatch):
-    monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+    monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "translate")
     members = {"Q2": Q2, "Q5": Q5}
     monkeypatch.setattr(validation_runs, "_rack_node_hostnames_from_inventory", lambda r: members.get(r, []))
     monkeypatch.setattr(validation_runs, "_normalize_rack_id", lambda r: r)

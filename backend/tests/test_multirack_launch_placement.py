@@ -46,7 +46,7 @@ def placed(monkeypatch):
     """A built dashboard state for the active cluster, holding NC-shaped placement."""
     st = SimpleNamespace(node_inventory_snapshot=lambda: {"nodes": _inventory()})
     monkeypatch.setattr(ns, "_states", {ns.native_state_key(Path("/home/cmods/nvis/logs")): st})
-    monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+    monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "translate")
     monkeypatch.setattr(ns, "_snapshot_placement_nodes", lambda: None)  # no canonical snapshot either
     monkeypatch.setattr(slurm_query, "_all_slurm_nodenames",
                         lambda: pytest.fail("translate must not match racks by hostname prefix"))
@@ -91,7 +91,7 @@ class TestSharedResolver:
         assert slurm_query._rack_node_hostnames_from_inventory("U20") == U20
 
     def test_direct_still_matches_by_hostname_prefix(self, monkeypatch):
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "direct")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "direct")
         monkeypatch.setattr(slurm_query, "_all_slurm_nodenames",
                             lambda: ["ink50-dh01-d01-11", "ink50-dh01-d01-12", "ink50-dh01-d010-11"])
         assert slurm_query._rack_node_hostnames_from_inventory("ink50-dh01-d01") == [
@@ -126,7 +126,7 @@ class TestMultirackNcclLaunch:
         assert "Z9" in response.get_json()["error"]
 
     def test_direct_passes_rack_ids_as_before(self, monkeypatch, tmp_path):
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "direct")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "direct")
         prepared, err = _prepare(monkeypatch, tmp_path, {"racks": ["ink50-dh01-d01"]})
         assert err is None
         assert prepared["nodes"] == []

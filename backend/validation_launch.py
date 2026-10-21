@@ -726,6 +726,11 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
     """Resolve an allowlisted preset into an exact-node, shell-free launch plan."""
     try:
         preset = validation_presets.resolve_preset(body.get("preset_id", body.get("validation")))
+        # GPT-OSS runs a single-architecture image; its job checks each node against the platform.
+        node_machine = ""
+        if preset.id == "gpt-oss-cpu":
+            _project, _cluster, platform = catalog_context.resolve()
+            node_machine = validation_presets.node_machine(platform.cpu_arch if platform else "")
         options = validation_presets.normalize_options(body, preset)
         log_raw = body.get("log_dir")
         log_dir = _resolve_log_dir(str(log_raw).strip() if log_raw else None)
@@ -914,6 +919,8 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
         env_updates["NVIS_WORKSPACE_DIR"] = workspace
     if image is not None:
         env_updates.update(image.env())
+    if node_machine:
+        env_updates["NVIS_GPT_CPU_ARCH"] = node_machine
     plan = {
         "preset_id": preset.id,
         "validation": preset.kind,
@@ -950,7 +957,7 @@ def _prepare_validation_preset(body: dict) -> tuple[dict | None, tuple[object, i
     plan["plan_hash"] = plan_digest({key: plan[key] for key in (
         "preset_id", "scope", "nodes", "node_groups", "racks", "campaign", "storage", "rsync_to_local",
         "local_container_dir", "container_profile", "cuda_version", "nccl_version", "max_steps",
-        "max_runtime_minutes", "artifact", "log_dir", "workspace",
+        "max_runtime_minutes", "artifact", "log_dir", "workspace", "env_updates",
     )})
     return plan, None
 

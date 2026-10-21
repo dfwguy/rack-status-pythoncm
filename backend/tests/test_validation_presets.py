@@ -8,6 +8,7 @@
 # without an express license agreement from NVIDIA CORPORATION or
 # its affiliates is strictly prohibited.
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -119,6 +120,50 @@ def test_prepare_resolves_exact_nodes_for_gpt_fanout(monkeypatch, tmp_path, pres
     assert plan["node_count"] == 2
     assert plan["preset_id"] == "gpt-oss-cpu"
     assert plan["env_updates"]["NVIS_PREPARED_NODE_COUNT"] == "2"
+
+
+@pytest.mark.parametrize(("cpu_arch", "machine", "image"), [
+    ("x86_64", "x86_64", ("nvidia+tensorrt-llm+release+1.1.0rc5.sqsh", 36640796672, "e5" * 32)),
+    ("arm64", "aarch64", ("tensorrt-llm+release+1.1.0rc5.sqsh", 30284881920, "d4" * 32)),
+])
+def test_gpt_image_is_the_catalogs_and_the_arch_the_platforms(
+        monkeypatch, tmp_path, preset_image_catalog, cpu_arch, machine, image):
+    """An x86 cluster runs GPT-OSS by naming its x86 build in its own catalog -- no arch table in code.
+
+    The reviewed artifact is the catalog entry's file, size and digest, and the launcher stages that
+    and nothing else; the node architecture the job checks comes from the platform record.
+    """
+    filename, size, sha = image
+    preset_image_catalog(models.P2pCatalog(cluster_id="default", images=[models.P2pCatalogImage(
+        order=1, name=filename, filename=filename, bytes=size, sha256=sha, required_by=["gpt-oss-cpu"])]))
+    node = "gpu-rno-249"
+    resolve = validation_launch.catalog_context.resolve
+    monkeypatch.setattr(validation_launch.catalog_context, "resolve", lambda: (
+        *resolve()[:2], models.Platform(id="p", name="P", cpu_arch=cpu_arch)))
+    monkeypatch.setattr(validation_launch, "_resolve_log_dir", lambda _raw=None: tmp_path)
+    monkeypatch.setattr(validation_launch, "_script_exists", lambda _path: True)
+    monkeypatch.setattr(validation_launch, "_all_slurm_nodenames", lambda: [node])
+    monkeypatch.setattr(validation_launch, "_validation_node_eligibility", lambda _raw: ({node: "idle"}, []))
+    with app_module.app.app_context():
+        plan, err = validation_launch._prepare_validation_preset({
+            "preset_id": "gpt-oss-cpu", "scope": "node", "nodes": [node], "storage": "nfs",
+        })
+    assert err is None
+    assert plan["artifact"]["filename"] == filename
+    assert plan["artifact"]["size"] == size and plan["artifact"]["sha256"] == sha
+    assert plan["env_updates"]["NVIS_GPT_CPU_ARCH"] == machine
+    assert plan["env_updates"]["NVIS_LAUNCH_IMAGE"] == filename
+    launcher = (REPO / "bin/scripts/run-validation-preset.sh").read_text()
+    gpt_case = launcher.split("  gpt-oss-cpu)", 1)[1].split(";;", 1)[0]
+    assert "tensorrt-llm" not in gpt_case and not re.search(r"[0-9a-f]{64}", gpt_case)
+
+
+def test_gpt_refuses_a_platform_without_an_architecture():
+    assert validation_presets.node_machine("arm64") == "aarch64"
+    assert validation_presets.node_machine("x86_64") == "x86_64"
+    for missing in ("", None, "riscv64"):
+        with pytest.raises(ValueError, match="set cpu_arch"):
+            validation_presets.node_machine(missing)
 
 
 def test_llama_prepare_is_exact_1024_gpu_contract(monkeypatch, tmp_path, preset_image_catalog):
@@ -426,8 +471,9 @@ def test_scripts_encode_runtime_and_result_gates():
     assert "NVIS_NCCL_RUNTIME_PREFLIGHT" in nccl_launcher
     assert "NVIS_NCCL_SBATCH_WAIT" in nccl_launcher
     assert "--append-verify" in stage and "flock -x" in stage and "sha256sum" in stage
-    assert "GPU_TYPE must be gb300" in gpt and '[[ "$lines" == "$3" ]]' in gpt
-    assert "/cluster/llmb/workloads:/cluster/llmb/workloads:ro" in gpt
+    assert "CPU architecture mismatch" in gpt and '[[ "$lines" == "$3" ]]' in gpt
+    assert "metal/model.bin" not in gpt
+    assert "${WORKLOAD}:${WORKLOAD}:ro" in gpt
     assert "System Info Collection Summary" in sysinfo
     assert "Failed non-fatal steps: [1-9][0-9]*" in sysinfo
     assert 'cmd+=(--export=' in sysinfo

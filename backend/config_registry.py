@@ -584,6 +584,21 @@ register(
 )
 
 
+register(
+    Setting(
+        name="LLMB_IMAGE_ROOT",
+        secret=False,
+        validate=_data_dir_problem,
+        example="/cluster/llmb/images",
+        section="validation",
+        description=(
+            "LLMB's own image store on the launch host, for presets that stage from it (GPT-OSS). "
+            "Which file and its digest are the cluster's image catalog's. Default /cluster/llmb/images."
+        ),
+    )
+)
+
+
 def _tls_cert_configured() -> bool:
     """A certificate without its key is the asymmetric failure this row exists for.
 

@@ -55,17 +55,17 @@ DONE = {"ok": True, "nemo_state": "done", "nccl_ok": True, "llm_ok": True, "jid"
 
 class TestHostnameTally:
     def test_translate_parses_no_hostname(self, monkeypatch):
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "translate")
         assert ns.sinfo_counts_for_nodes({h: "idle" for h in U20}) == {}
 
     def test_pool_parses_no_hostname(self, monkeypatch):
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "pool")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "pool")
         assert ns.sinfo_counts_for_nodes({"ink50-dh01-h02-11": "idle"}) == {}
 
 
 class TestTranslateRows:
     def test_racks_come_from_the_logs_hosts_through_the_inventory(self, monkeypatch, no_squeue):
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "translate")
         st = _state({**DONE, "hosts": U21[:2] + U20[:2] + ["not-in-inventory"]})
         rows = st.build_rows(lambda bn: bn, lambda bn: [], _inventory(down=2))
         assert rows[0]["rack"] == "U20+U21 (36N)"
@@ -74,14 +74,14 @@ class TestTranslateRows:
         assert rows[0]["sinfo"] == "U20 up=18; U21 up=16,down=2"
 
     def test_a_stale_hostname_parse_is_not_trusted_in_translate(self, monkeypatch, no_squeue):
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "translate")
         st = _state({**DONE, "physical_racks": ["p1-r19"], "hosts": U20[:1]})
         rows = st.build_rows(lambda bn: bn, lambda bn: [], _inventory())
         assert rows[0]["rack"].startswith("U20")
         assert "p1-r19" not in rows[0]["rack"]
 
     def test_without_an_inventory_the_basename_label_stands(self, monkeypatch, no_squeue):
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "translate")
         st = _state({**DONE, "hosts": U20[:1]})
         rows = st.build_rows(lambda bn: "from-basename", lambda bn: [], None)
         assert rows[0]["rack"] == "from-basename"
@@ -89,7 +89,7 @@ class TestTranslateRows:
 
 class TestDirectRowsUnchanged:
     def test_direct_keeps_the_logs_parsed_racks(self, monkeypatch, no_squeue):
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "direct")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "direct")
         st = _state({**DONE, "physical_racks": ["ink50-dh01-h02"], "hosts": U20[:1]})
         rows = st.build_rows(lambda bn: bn, lambda bn: [], _inventory())
         assert rows[0]["rack"].startswith("ink50-dh01-h02")
@@ -97,7 +97,7 @@ class TestDirectRowsUnchanged:
 
 class TestWorkerCachesHosts:
     def test_translate_worker_reads_hosts_not_racks(self, monkeypatch):
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "translate")
         monkeypatch.setattr(ns, "_load_log_cache", lambda _p: {})
         saved: dict = {}
         monkeypatch.setattr(ns, "_save_log_cache", lambda _p, disk, _alive: saved.update(disk))
@@ -137,7 +137,7 @@ class TestProviderSlurmStates:
             "pythoncm" if key == "RACK_SCHEDULER" else default
         ))
         monkeypatch.setattr(ns, "_get_platform", lambda: provider)
-        monkeypatch.setattr(ns, "_rack_mapping_mode", lambda: "translate")
+        monkeypatch.setattr(ns.config_env, "rack_mapping_mode", lambda: "translate")
         monkeypatch.setattr(ns, "collect_sinfo_nodes_and_shapes", sinfo)
         st = ns.NativeRackTableState("provider-slurm", Path("/logs"))
         st.racks = ["U20"]

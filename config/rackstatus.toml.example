@@ -114,6 +114,10 @@
 
 
 [validation]
+# LLMB's own image store on the launch host, for presets that stage from it (GPT-OSS). Which
+# file and its digest are the cluster's image catalog's. Default /cluster/llmb/images.
+# LLMB_IMAGE_ROOT = "/cluster/llmb/images"
+
 # Squashed NeMo container image used by the NeMo validation launchers.
 # NEMO_SQSH_SRC = "/cluster/containers/nvidia+nemo+26.04.01-arm.sqsh"
 

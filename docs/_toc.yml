@@ -78,6 +78,8 @@ subtrees:
       - file: explanation/why-authorization-is-default-deny
         title: Why authorization is default-deny
       - file: explanation/how-a-script-path-is-chosen
+      - file: explanation/the-cluster-home-directory
+      - file: explanation/how-cluster-paths-reach-scripts
         title: How a script path is chosen
       - file: explanation/the-cluster-home-directory
       - file: explanation/how-cluster-paths-reach-scripts

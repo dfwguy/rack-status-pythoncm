@@ -237,12 +237,15 @@ case "$preset" in
     (( node_count >= 1 && node_count <= 256 )) || { echo "ERROR: GPT-OSS CPU fan-out requires 1-256 exact nodes; got ${node_count}" >&2; exit 2; }
     preset_image "$llmb_image_root"
     stage_image "$source_image" "$local_image" "$NVIS_IMAGE_BYTES" "$NVIS_IMAGE_SHA256" 0
-    cpu_launch="${llmb_repo}/microbenchmarks/cpu_overhead/launch.sh"
-    [[ -r "$cpu_launch" || "$dry_run" == 1 ]] || { echo "ERROR: GPT-OSS CPU launch script missing: $cpu_launch" >&2; exit 2; }
-    model="${llmb_install}/workloads/microbenchmark_cpu_overhead/gpt-oss-120b/metal/model.bin"
-    [[ -r "$model" || "$dry_run" == 1 ]] || { echo "ERROR: GPT-OSS model is missing/unreadable: $model" >&2; exit 2; }
+    # Which TensorRT-LLM build runs is the catalog's (aarch64 or x86_64); the job checks each node
+    # against the architecture the platform record states, which the plan hands over.
+    cpu_arch="${NVIS_GPT_CPU_ARCH:?NVIS_GPT_CPU_ARCH is unset: launch GPT-OSS through Rack Status, which takes it from the platform record}"
+    kernel_script="${llmb_repo}/microbenchmarks/cpu_overhead/pytorch_kernel_launch_latency.py"
+    [[ -r "$kernel_script" || "$dry_run" == 1 ]] || { echo "ERROR: GPT-OSS CPU kernel script missing: $kernel_script" >&2; exit 2; }
+    model="${llmb_install}/workloads/microbenchmark_cpu_overhead/gpt-oss-120b"
+    [[ -r "$model/tokenizer.json" && -r "$model/tokenizer_config.json" || "$dry_run" == 1 ]] || { echo "ERROR: GPT-OSS tokenizer is missing/unreadable: $model" >&2; exit 2; }
     gpt_batch="${script_dir}/gpt-oss-cpu-strict.sbatch"
-    export_set="ALL,LLMB_INSTALL=${llmb_install},LLMB_REPO=${llmb_repo},RUN_CONF_IMAGE=${image},GPU_TYPE=gb300,NUM_PROMPTS=100000,LLMB_EXPERIMENTS_ROOT=${log_dir}"
+    export_set="ALL,LLMB_INSTALL=${llmb_install},LLMB_REPO=${llmb_repo},RUN_CONF_IMAGE=${image},NVIS_GPT_CPU_ARCH=${cpu_arch},NUM_PROMPTS=100000,LLMB_EXPERIMENTS_ROOT=${log_dir}"
     # Keep the validated recipe single-node, but submit one independently
     # attributable job for every exact selected node. Submit the full fan-out
     # before waiting so a rack does not serialize eighteen CPU microbenchmarks.

@@ -11,7 +11,9 @@
 
 import contextlib
 import os
+import subprocess
 import sys
+from pathlib import Path
 from unittest import mock
 
 import nvis_id_templates as nid
@@ -129,6 +131,103 @@ def test_validation_target_without_rack_uses_exact_hostname():
         return_value=["compute-001", "compute-002"],
     ):
         assert validation_target_for_rack("", "compute-001") == "compute-001"
+
+
+@pytest.mark.parametrize("placed", [None, ["DGX-B300-01"]])
+def test_translated_rack_validation_uses_actual_scheduler_hostnames(monkeypatch, placed):
+    """Members come from the placed inventory; before one exists (``None``, a cold worker), from the
+    manager's placement joined to Slurm's roster. Either way, the scheduler's spelling of the host."""
+    import config_env
+    import naming
+    import native_status
+    import node_targets
+    import slurm_query
+
+    monkeypatch.setattr(config_env, "rack_mapping_mode", lambda: "translate")
+    monkeypatch.setattr(native_status, "placed_rack_members", lambda _rack: placed)
+    monkeypatch.setattr(naming, "_nvis_naming", lambda: nid.get_nvis_naming("F[41-42]", "dgx-b300-[01-04]", ""))
+    monkeypatch.setattr(slurm_query, "_all_slurm_nodenames", lambda: ["DGX-B300-01", "dgx-b300-02"])
+    monkeypatch.setattr(slurm_query, "collect_slurm_placement_records", lambda: [
+        {"id": "dgx-b300-01", "rack": "F41"},
+        {"id": "dgx-b300-02", "rack": "F42"},
+        {"id": "dgx-b300-03", "rack": "F41"},  # absent from Slurm
+    ])
+    monkeypatch.setenv("RACK_TARGET_FROM_INVENTORY", "1")
+    assert node_targets.validation_target_for_rack("F41", None) == "DGX-B300-01"
+
+
+@pytest.mark.parametrize("mode", ["translate", "pool"])
+def test_nondirect_rack_validation_never_falls_back_to_invented_hostnames(monkeypatch, mode):
+    import config_env
+    import node_targets
+
+    monkeypatch.setattr(config_env, "rack_mapping_mode", lambda: mode)
+    monkeypatch.setattr(node_targets, "_rack_node_hostnames_from_inventory", lambda _rack: [])
+    with pytest.raises(ValueError, match="select explicit node hostnames"):
+        node_targets.validation_target_for_rack("F41", None)
+
+
+def test_query_and_target_primitives_import_without_the_status_orchestrator():
+    backend = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.modules['native_status'] = None; import slurm_query; import node_targets"],
+        cwd=backend, capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(("manager", "scheduler"), [
+    (manager, scheduler) for manager in ("bcm", "maas")
+    for scheduler in ("slurm", "pythoncm", "local", "runai", "slinky", "maas")
+    if (manager, scheduler) != ("bcm", "slurm")
+])
+def test_other_cluster_types_take_rack_members_from_the_placed_inventory(monkeypatch, manager, scheduler):
+    """Translate means the hostname names no rack, for every manager and scheduler.
+
+    Only BCM with Slurm fetches placement beside the Slurm roster; every other combination's
+    provider already placed the inventory. Either way a rack's members are the placed inventory's,
+    never a hostname-prefix match (Nscale NC, BCM with pythoncm: rack Q5 has no ``Q5-`` host).
+    """
+    import config_env
+    import native_status
+    import slurm_query
+
+    values = {"RACK_PLATFORM": manager, "RACK_SCHEDULER": scheduler,
+              "NVIS_RACK_MAPPING_MODE": "translate"}
+    monkeypatch.setattr(config_env, "_eget", lambda key, default=None: values.get(key, default))
+    provider = mock.Mock()
+    provider.compute_node_inventory.side_effect = AssertionError("unexpected placement query")
+    monkeypatch.setattr(slurm_query, "_get_platform", lambda: provider)
+    monkeypatch.setattr(slurm_query, "_all_slurm_nodenames", lambda: ["F41-node-01", "gpu7"])
+    assert slurm_query.collect_slurm_placement_records() is None
+    monkeypatch.setattr(native_status, "placed_rack_members", lambda rack: ["gpu7"] if rack == "F41" else [])
+    assert slurm_query._rack_node_hostnames_from_inventory("F41") == ["gpu7"]
+    monkeypatch.setattr(native_status, "placed_rack_members", lambda _rack: None)
+    assert slurm_query._rack_node_hostnames_from_inventory("F41") == []
+    provider.compute_node_inventory.assert_not_called()
+
+
+@pytest.mark.parametrize(("manager", "mode", "template"), [
+    ("maas", "direct", True), ("maas", "translate", False), ("bcm", "translate", False),
+])
+def test_only_direct_falls_back_to_the_template_target(monkeypatch, manager, mode, template):
+    """A template builds ``<rack>-ctNN`` names, which exist only where the hostname encodes the rack."""
+    import config_env
+    import node_targets
+
+    values = {"RACK_PLATFORM": manager, "RACK_SCHEDULER": "slurm"}
+    monkeypatch.setattr(config_env, "_eget", lambda key, default=None: values.get(key, default))
+    monkeypatch.setattr(config_env, "rack_mapping_mode", lambda: mode)
+    monkeypatch.setattr(node_targets, "_rack_node_hostnames_from_inventory", lambda _rack: [])
+    naming = mock.Mock()
+    naming.build_validation_target.return_value = "existing-template-target"
+    monkeypatch.setattr(node_targets, "_nvis_naming", lambda: naming)
+    if template:
+        assert node_targets.validation_target_for_rack("F41", None) == "existing-template-target"
+    else:
+        with pytest.raises(ValueError, match="select explicit node hostnames"):
+            node_targets.validation_target_for_rack("F41", None)
 
 
 def test_grafana_embed_host_regex_prefers_rack_prefix():

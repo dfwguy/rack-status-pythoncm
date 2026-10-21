@@ -1456,10 +1456,10 @@ class Cluster:
             problems.append(
                 f"unknown rack_mapping_mode {self.rack_mapping_mode!r} (expected {RACK_MAPPING_MODES})"
             )
-        if self.rack_mapping_mode == "translate" and not self.scalable_units:
-            # translate mode places rows/racks from the provider, but the SU grouping has no
-            # other source -- the hostname's suffix isn't read as an SU and the provider rack
-            # attribute doesn't carry one. Without the list the floor has no SUs at all.
+        # BCM + Slurm can have physical racks without fabric SU grouping. Retain the
+        # existing Translate-mode SU requirement for all other cluster combinations.
+        if (self.rack_mapping_mode == "translate" and not self.scalable_units
+                and (self.cluster_manager != "bcm" or self.scheduler != "slurm")):
             problems.append(
                 "rack_mapping_mode 'translate' requires a scalable_units (SU) translation list"
             )

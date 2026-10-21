@@ -32,6 +32,23 @@ import pytest
 KEY = "RACK_VALIDATION_CT_RANGE"  # a real Settings-managed key, so allow-list filtering applies
 
 
+@pytest.mark.parametrize(("value", "expected"), [
+    (None, "direct"), ("", "direct"), ("unknown", "direct"),
+    (" DIRECT ", "direct"), (" TRANSLATE ", "translate"), ("Pool", "pool"),
+])
+def test_rack_mapping_mode_normalizes_resolved_values(monkeypatch, value, expected):
+    monkeypatch.setattr(C, "_eget", lambda _key, _default: value)
+    assert C.rack_mapping_mode() == expected
+
+
+def test_rack_mapping_mode_follows_the_active_cluster_overlay(store, monkeypatch):
+    monkeypatch.setenv("NVIS_RACK_MAPPING_MODE", "pool")
+    store.high["NVIS_RACK_MAPPING_MODE"] = "translate"
+    assert C.rack_mapping_mode() == "translate"
+    store.high["NVIS_RACK_MAPPING_MODE"] = "direct"
+    assert C.rack_mapping_mode() == "direct"
+
+
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     """An isolated overrides file plus a controllable catalog overlay.

@@ -27,6 +27,7 @@ reportable condition the UI shows, not a 500. A timeout reports the budget it sp
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import shlex
@@ -35,14 +36,17 @@ import threading
 import time
 from pathlib import Path
 
+import config_env
 import host_exec
-import native_status
 from config_env import _eget, _env_int
 from core import SLURM_JOB_ID_RE, SLURM_STDOUT_RE
 from core import rpath as _rpath
 from core import slurm_job_base_id as _slurm_job_base_id
+from naming import provider_node_racks
 from paths import _allowed_roots, _default_log_dir, _resolve_log_dir
 from platforms import get_platform as _get_platform
+
+_logger = logging.getLogger(__name__)
 
 _SACCT_FIELD_ORDER = (
     "job_id", "name", "partition", "nnodes", "nodelist", "start", "end", "elapsed", "state", "exit_code",
@@ -113,6 +117,17 @@ def _all_slurm_nodenames() -> list[str]:
         return cached
 
 
+def collect_slurm_placement_records() -> list[dict[str, str | None]] | None:
+    """Optional provider placement; failure must never erase the scheduler roster."""
+    if not config_env.uses_bcm_slurm() or config_env.rack_mapping_mode() != "translate":
+        return None
+    try:
+        return _get_platform().compute_node_inventory()
+    except Exception:
+        _logger.warning("Provider placement unavailable; retaining ungrouped Slurm nodes", exc_info=True)
+        return []
+
+
 def _rack_node_hostnames_from_inventory(rack: str) -> list[str]:
     """Real node hostnames belonging to *rack*.
 
@@ -120,14 +135,25 @@ def _rack_node_hostnames_from_inventory(rack: str) -> list[str]:
     separator) against live Slurm inventory -- template-free, so it holds where the hostname is not
     ``<rack>-<ctNN>``. In ``translate`` and ``pool`` the hostname names no rack, so the prefix would
     match nothing (NC's rack Q5 has no ``Q5-`` host) or the wrong thing; membership then comes from
-    the dashboard's node inventory, which placed every node by the cluster manager's word.
+    the dashboard's node inventory, which placed every node by the cluster manager's word. Before
+    that inventory exists (a cold worker), a translated BCM+Slurm cluster joins the manager's
+    placement to Slurm's roster directly; pool has no rack members.
     Returns ``[]`` when inventory is unavailable or nothing matches.
     """
     rid = (rack or "").strip()
     if not rid:
         return []
-    if not native_status._hostname_encodes_rack():
-        return native_status.placed_rack_members(rid) or []
+    if config_env.rack_mapping_mode() != "direct":
+        # The status orchestrator holds the placed inventory; imported here, not at the top, so
+        # this query primitive stays importable below it.
+        import native_status
+
+        placed = native_status.placed_rack_members(rid)
+        if placed is not None:
+            return placed
+        placement = collect_slurm_placement_records()
+        hosts = _all_slurm_nodenames() if placement else []
+        return sorted(provider_node_racks(hosts, [rid], placement), key=native_status._natural_key)
     hosts = _all_slurm_nodenames()
     if not hosts:
         return []

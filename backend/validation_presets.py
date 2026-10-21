@@ -363,9 +363,33 @@ def resolve_preset(value: object) -> Preset:
     token = str(value or "").strip().lower()
     token = _ALIASES.get(token, token)
     try:
-        return _BY_ID[token]
+        preset = _BY_ID[token]
     except KeyError:
         raise ValueError(f"unknown validation preset: {value!r}") from None
+    return preset
+
+
+#: What ``uname -m`` prints on a node of a platform whose record says ``cpu_arch``.
+_NODE_MACHINE = {"arm64": "aarch64", "aarch64": "aarch64", "x86_64": "x86_64", "amd64": "x86_64"}
+
+
+def node_machine(cpu_arch: object) -> str:
+    """The node architecture (``uname -m``) the platform record states, for a launch to check.
+
+    An image runs on one architecture, and which build a cluster stages is its catalog's choice
+    (GPT-OSS: the TensorRT-LLM entry whose Required by names the preset -- aarch64 on GB300,
+    x86_64 on an RTX or B300 cluster). The job refuses a node that differs, so a catalog that names
+    the other build fails at the node with that reason instead of inside the container. Taken from
+    the platform record, never the launch host, whose architecture need not be the nodes'.
+    """
+    raw = str(cpu_arch or "").strip().lower()
+    machine = _NODE_MACHINE.get(raw)
+    if machine is None:
+        raise ValueError(
+            f"the active platform's CPU architecture is {raw or 'not set'}; set cpu_arch "
+            "(arm64 or x86_64) on its record in Catalog -> Platforms"
+        )
+    return machine
 
 
 def _version_tuple(value: str) -> tuple[int, ...]:

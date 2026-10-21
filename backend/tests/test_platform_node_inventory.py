@@ -65,6 +65,29 @@ def test_bcm_successful_empty_inventory_is_allowed(monkeypatch):
     assert BCMProvider().compute_node_inventory() == []
 
 
+def test_bcm_preserves_physical_rack_unit(monkeypatch):
+    monkeypatch.setattr("bcm_query.nodes", lambda: {"ok": True, "data": [
+        {"hostname": "dgx-b300-01", "rack_id": "F41", "rack_unit": " 2 "},
+    ]})
+    node = BCMProvider().compute_node_inventory()[0]
+    assert (node["rack"], node["rack_unit"]) == ("F41", "2")
+
+
+def test_bcm_reports_the_rack_unit_whichever_scheduler_runs(monkeypatch):
+    """The unit is BCM's placement fact; Nscale NC is BCM with pythoncm, and its rack page needs it."""
+    import config_env
+
+    values = {"RACK_PLATFORM": "bcm", "RACK_SCHEDULER": "pythoncm"}
+    monkeypatch.setattr(config_env, "_eget", lambda key, default=None: values.get(key, default))
+    monkeypatch.setattr("bcm_query.nodes", lambda: {"ok": True, "data": [
+        {"hostname": "gpu001", "rack_id": "U19", "rack_unit": "2"},
+    ]})
+    assert BCMProvider().compute_node_inventory() == [
+        {"id": "gpu001", "rack": "U19", "status": "unknown", "ip": "", "scheduler_state": "",
+         "rack_unit": "2"},
+    ]
+
+
 def test_maas_uses_machine_hostnames_without_fabricating_racks_or_health(monkeypatch):
     machine = {"hostname": "maas-gpu-1", "status": 6, "status_name": "Deployed",
                "ip_addresses": ["10.0.0.9"], "tag_names": ["rack-a"]}

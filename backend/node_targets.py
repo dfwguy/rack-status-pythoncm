@@ -26,6 +26,7 @@ from __future__ import annotations
 import os
 import re
 
+import config_env
 import host_exec
 from config_env import _eget, _env_int
 from core import is_valid_node_hostname
@@ -263,7 +264,8 @@ def validation_target_for_rack(rack: str, override: str | None) -> str:
        the naming schema.
     3. With no override, the target is the **full rack** from live Slurm inventory (real
        ``NodeName`` values), falling back to the ``NVIS_*`` template when inventory is
-       unavailable. Set ``RACK_TARGET_FROM_INVENTORY=0`` to force the template path.
+       unavailable in Direct mode. Translate mode requires placement or explicit node names.
+       Set ``RACK_TARGET_FROM_INVENTORY=0`` to force the template path in Direct mode.
     """
     ov = (override or "").strip()
     inventory_on = (
@@ -305,6 +307,9 @@ def validation_target_for_rack(rack: str, override: str | None) -> str:
             return ",".join(hosts)
     if not rack:
         raise ValueError("an explicit node target is required when rack is empty")
+    if config_env.rack_mapping_mode() != "direct":
+        # Only Direct hostnames encode the rack; a template target here names hosts that don't exist.
+        raise ValueError("rack placement is unavailable; select explicit node hostnames")
     return _nvis_naming().build_validation_target(
         rack, _validation_ct_inner(), override
     )

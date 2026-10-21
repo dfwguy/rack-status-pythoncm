@@ -1015,6 +1015,19 @@ def _eget(name: str, default: str | None = None) -> str | None:
     return default
 
 
+def rack_mapping_mode() -> str:
+    """Active cluster placement mode; blank or unknown values retain Direct behavior."""
+    mode = (_eget("NVIS_RACK_MAPPING_MODE", "direct") or "direct").strip().lower()
+    return mode if mode in ("translate", "pool") else "direct"
+
+
+def uses_bcm_slurm() -> bool:
+    """Whether the active connection uses the legacy-default BCM + Slurm combination."""
+    manager = (_eget("RACK_PLATFORM", "bcm") or "bcm").strip().lower()
+    scheduler = (_eget("RACK_SCHEDULER", "slurm") or "slurm").strip().lower()
+    return manager == "bcm" and scheduler == "slurm"
+
+
 def _eget_int(name: str, default: int) -> int:
     """Like ``_env_int`` but honors catalog overlays + Settings overrides via ``_eget``.
 

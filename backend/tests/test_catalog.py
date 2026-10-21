@@ -149,6 +149,52 @@ class TestModels:
 
 
 class TestSeed:
+    @pytest.mark.parametrize("product_line", ["dgx-b300", "DGX B300", "dgx_b300", "NVIDIA DGX B300"])
+    def test_dgx_b300_context(self, repo, product_line):
+        seed.migrate(repo, env={"RACK_CLUSTER_PRODUCT_LINE": product_line})
+        _project, cluster, platform = context.resolve()
+
+        assert cluster.platform_id == platform.id == "dgx-b300"
+        assert platform.validate() == []
+        assert platform.gpu_model == "B300"
+        assert platform.cpu_vendor == "Intel"
+        assert platform.cpu_arch == "x86_64"
+        assert platform.system_vendor == "DGX"
+        assert platform.geometry.gpus_per_node == 8
+        assert platform.geometry.nvlink_domain == 8
+        low = context.low_overlay()
+        assert low["GPU_MODEL_FLAG"] == "b300"
+        assert low["GPUS_PER_NODE"] == "8"
+        assert low["RACK_CLUSTER_GPU_PER_TRAY"] == "8"
+        assert low["RACK_VALIDATION_CT_RANGE"] == "01-04"
+        assert low["NVIS_FABRIC_EXPECT_RAILS"] == "8"
+        assert low["NVIS_FABRIC_EXPECT_RATE"] == "800"
+        assert low["NVIS_FABRIC_NETWORK"] == "IB"
+        assert context.high_overlay()["RACK_CLUSTER_PRODUCT_LINE"] == "dgx-b300"
+        ids = {t["id"] for t in context.tools_for_cluster()}
+        assert "sysinfo" in ids
+        assert "nvlink-preflight" in ids
+        assert "imex-reset" not in ids
+        assert "mnubergemm-stress" not in ids
+
+    @pytest.mark.parametrize("product_line, expected", [
+        ("B300", "b300-hgx"),
+        ("GB300 NVL72", "gb300-nvl72"),
+        ("DGX B200", "dgx-b200"),
+    ])
+    def test_b300_mapping_preserves_other_products(self, product_line, expected):
+        project = seed.build_default_project_from_env({"RACK_CLUSTER_PRODUCT_LINE": product_line})
+        assert project.clusters[0].platform_id == expected
+
+    def test_existing_catalog_gains_dgx_b300_without_changing_active_cluster(self, seeded):
+        seeded.delete(TABLE_PLATFORMS, "dgx-b300")
+        result = seed.migrate(seeded, env={"RACK_CLUSTER_PRODUCT_LINE": "dgx-b300"})
+
+        assert result["platforms_added"] == 1
+        assert seeded.get(TABLE_PLATFORMS, "dgx-b300") is not None
+        assert context.resolve()[2].id == "gb300-nvl72"
+        assert seed.migrate(seeded, env={})["platforms_added"] == 0
+
     def test_rtx_pro_6000_blackwell_platform(self):
         platform = models.Platform.from_dict(
             next(p for p in seed.SEED_PLATFORMS if p["id"] == "rtx-pro-6000-blackwell")
