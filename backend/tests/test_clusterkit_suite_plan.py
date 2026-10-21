@@ -13,15 +13,14 @@ Standalone: python3 -m unittest discover -s backend/tests -p test_clusterkit_sui
 No backend imports or pytest conftest are needed.
 """
 
-from pathlib import Path
 import importlib.util
 import json
 import shlex
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
-
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "bin" / "scripts"
 NODES = "sys1-gso1-p-phy-gpu1-su19,sys1-gso1-p-phy-gpu2-su19"
@@ -82,7 +81,7 @@ class ExplicitNodePlanTests(unittest.TestCase):
                   for p in self.root.rglob("*") if p.is_file()}
         result = subprocess.run(
             ["/bin/bash", str(self.runner), *args], env=env or self.env,
-            cwd=self.root, text=True, capture_output=True, timeout=5,
+            cwd=self.root, text=True, capture_output=True, timeout=5, check=False,
         )
         after = {p.relative_to(self.root): p.read_bytes()
                  for p in self.root.rglob("*") if p.is_file()}
@@ -151,7 +150,8 @@ class ExplicitNodePlanTests(unittest.TestCase):
             '#!/bin/bash\nprintf "%s\\n" "$@" >> "$PLAN_TEST_CALLS"\nprintf "123456\\n"\n'
         )
         args = ["/bin/bash", str(self.runner), "run", *self.options(), "--execute", "--hca", "roce_vf_r1:1"]
-        result = subprocess.run(args, env=self.env, cwd=self.root, capture_output=True, text=True, timeout=5)
+        result = subprocess.run(args, env=self.env, cwd=self.root, capture_output=True, text=True,
+                                timeout=5, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
         out = self.root / "repo/results/NC-su19/2_node_test"
         self.assertEqual((out / "jobid.txt").read_text(), "123456\n")
@@ -160,7 +160,8 @@ class ExplicitNodePlanTests(unittest.TestCase):
         self.assertIn("--nodes=2\n", calls)
         self.assertIn("--gres=none\n", calls)
         self.assertNotIn("--exclusive", calls)
-        second = subprocess.run(args, env=self.env, cwd=self.root, capture_output=True, text=True, timeout=5)
+        second = subprocess.run(args, env=self.env, cwd=self.root, capture_output=True, text=True,
+                                timeout=5, check=False)
         self.assertNotEqual(second.returncode, 0)
         self.assertIn("already exists", second.stderr)
         self.assertEqual(self.calls.read_text(), calls, "second invocation submitted another job")
@@ -204,7 +205,8 @@ class ExplicitNodePlanTests(unittest.TestCase):
                    RACK_CLUSTERKIT_SUITE_EXPECTED_NODES=NODES.replace(",", ":"),
                    CK_OUTPUT_SUBDIR="/wrong/inherited/path", CK_TEST_ARGV=str(argv), CK_TEST_PACKAGE=str(pkg))
         result = subprocess.run(["/bin/bash", str(self.scripts / "clusterkit_suite_explicit_2_node.sbatch")],
-                                env=env, cwd=self.root, capture_output=True, text=True, timeout=5)
+                                env=env, cwd=self.root, capture_output=True, text=True, timeout=5,
+                                check=False)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         args = argv.read_text().splitlines()
         self.assertEqual(args[0], "CK_OUTPUT_SUBDIR=unset")
@@ -220,7 +222,8 @@ class ExplicitNodePlanTests(unittest.TestCase):
         env["RACK_CLUSTERKIT_SUITE_GID_POLICY"] = "global"
         env["RACK_CLUSTERKIT_SUITE_OUTDIR"] = str(other_output)
         second = subprocess.run(["/bin/bash", str(self.scripts / "clusterkit_suite_explicit_2_node.sbatch")],
-                                env=env, cwd=self.root, capture_output=True, text=True, timeout=5)
+                                env=env, cwd=self.root, capture_output=True, text=True, timeout=5,
+                                check=False)
         self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
         self.assertIn("GID_ENV=5", second.stdout)
         self.assertIn(f"--outputdir={other_output}/baseline", argv.read_text())
@@ -258,7 +261,8 @@ class ExplicitNodePlanTests(unittest.TestCase):
                    RACK_CLUSTERKIT_SUITE_HCA="roce_vf_r1:1",
                    RACK_CLUSTERKIT_SUITE_EXPECTED_NODES=NODES.replace(",", ":"))
         result = subprocess.run(["/bin/bash", str(self.scripts / "clusterkit_suite_explicit_2_node.sbatch")],
-                                env=env, cwd=self.root, capture_output=True, text=True, timeout=5)
+                                env=env, cwd=self.root, capture_output=True, text=True, timeout=5,
+                                check=False)
         self.assertEqual(result.returncode, 7)
         self.assertEqual(self.calls.read_text().splitlines(), ["baseline", "global-gid", "tcp-control"])
         self.assertIn("PRIMARY_EXIT=7 GLOBAL_GID_EXIT=0 TCP_CONTROL_EXIT=0", (output / "status.txt").read_text())
@@ -272,7 +276,8 @@ class ExplicitNodePlanTests(unittest.TestCase):
         path_output.mkdir()
         env.update(RACK_CLUSTERKIT_SUITE_OUTDIR=str(path_output), RACK_CLUSTERKIT_SUITE_PATH_CHECK="1")
         second = subprocess.run(["/bin/bash", str(self.scripts / "clusterkit_suite_explicit_2_node.sbatch")],
-                                env=env, cwd=self.root, capture_output=True, text=True, timeout=5)
+                                env=env, cwd=self.root, capture_output=True, text=True, timeout=5,
+                                check=False)
         self.assertEqual(second.returncode, 8)
         self.assertEqual(self.calls.read_text().splitlines()[-2:], ["baseline", "single-path"])
         self.assertIn("SINGLE_PATH_EXIT=8", (path_output / "status.txt").read_text())

@@ -48,6 +48,7 @@ class SlurmScheduler(Scheduler):
         args += list(spec.extra_args)
         if spec.script:
             args.append(spec.script)
+            args += list(spec.script_args)
         elif spec.command:
             args += ["--wrap", spec.command]
         return args

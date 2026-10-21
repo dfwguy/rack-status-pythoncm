@@ -76,13 +76,15 @@ class TestSlurmScheduler:
         conn = FakeConn({"sbatch": (0, "12345\n", "")})
         sched = SlurmScheduler(conn)
         spec = JobSpec(name="nccl", nodes=3, nodelist="n1,n2,n3", ntasks_per_node=4,
-                       output="/logs/nccl_%j.out", script="nccl_allreduce.sbatch")
+                       output="/logs/nccl_%j.out", script="nccl_allreduce.sbatch",
+                       script_args=["/plans/plan.json", "/opt/nvis/bin/scripts"])
         handle = sched.submit(spec)
         assert handle.job_id == "12345"
         cmd = conn.calls[0]
         for frag in ["sbatch", "--parsable", "--job-name=nccl", "-N 3",
                      "--nodelist=n1,n2,n3", "--ntasks-per-node=4",
-                     "--output=/logs/nccl_%j.out", "nccl_allreduce.sbatch"]:
+                     "--output=/logs/nccl_%j.out", "nccl_allreduce.sbatch",
+                     "/plans/plan.json", "/opt/nvis/bin/scripts"]:
             assert frag in cmd, f"missing {frag!r} in: {cmd}"
 
     def test_submit_command_uses_wrap(self):

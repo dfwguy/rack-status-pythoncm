@@ -39,6 +39,7 @@ class JobSpec:
     nodelist: str | None = None         # explicit Slurm nodelist (pins placement)
     ntasks_per_node: int | None = None
     script: str | None = None           # a batch script path (sbatch <script>)
+    script_args: list[str] = field(default_factory=list)  # literal argv after script
     command: str | None = None          # an inline command (sbatch --wrap / local exec)
     image: str | None = None            # container image (run:AI / pyxis, future)
     output: str | None = None           # stdout path (may contain %j)

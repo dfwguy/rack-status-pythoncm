@@ -191,7 +191,8 @@ def parse_profile(raw) -> ProfileResolution:
         values["ucx_transports"] = tuple(tls)
 
     allowlist = values["node_allowlist"]
-    if not isinstance(allowlist, (list, tuple)) or any(not valid_node(n) for n in allowlist):
+    if (not isinstance(allowlist, (list, tuple)) or len(allowlist) > 512
+            or any(not valid_node(n) for n in allowlist)):
         errors.append("node_allowlist must contain literal valid hostnames")
     elif len({n.casefold() for n in allowlist}) != len(allowlist):
         errors.append("Duplicate node_allowlist entry")

@@ -189,7 +189,8 @@ class PlannerTests(unittest.TestCase):
             self.assertEqual(p["nodes"], names)
             self.assertEqual(p["expected_pair_count"], expected_pairs)
             self.assertEqual(p["resources"]["ntasks"], count)
-            self.assertFalse(p["submission_enabled"])
+            self.assertTrue(p["submission_enabled"])
+            self.assertTrue(p["execution_ready"])
             self.assertEqual(p["performance_status"], "UNVERIFIED")
             self.assertTrue(p["entrypoint_supported"])
             self.assertIn("clusterkit_pairwise.sbatch", p["entrypoint"])
@@ -303,6 +304,8 @@ class PlannerTests(unittest.TestCase):
                 p = self.plan(raw_profile=profile(**changes))
                 self.assertIsNone(p["sbatch_argv"])
                 self.assertFalse(p["entrypoint_supported"])
+                self.assertFalse(p["execution_ready"])
+                self.assertFalse(p["submission_enabled"])
 
     def test_plan_has_zero_filesystem_scheduler_and_environment_side_effects(self):
         resolved = parse_profile(profile());snap = inventory(2);before = dict(os.environ)

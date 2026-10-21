@@ -88,7 +88,8 @@ class ExecutionTests(unittest.TestCase):
             self.assertIn('--nodes=' + str(count), plan['sbatch_argv'])
             self.assertIn('--gres=none', plan['sbatch_argv'])
             self.assertNotIn('--exclusive', plan['sbatch_argv'])
-            self.assertFalse(plan['submission_enabled'])
+            self.assertTrue(plan['submission_enabled'])
+            self.assertTrue(plan['execution_ready'])
             self.assertEqual(plan['expected_pair_count'], count * (count-1)//2)
 
     def test_tampered_plans_cannot_change_commands_limits_or_output(self):

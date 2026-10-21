@@ -269,6 +269,12 @@ except ImportError:
 if _CATALOG_AVAILABLE and catalog_bp is not None:
     app.register_blueprint(catalog_bp)
 
+# Configuration-driven ClusterKit planning/execution. The blueprint keeps the
+# new workflow isolated from the two legacy ClusterKit launch routes.
+from clusterkit_api import clusterkit_bp
+
+app.register_blueprint(clusterkit_bp)
+
 # Grafana panel-embed API (/api/observability/dashboards, /dashboards/<view>, /health).
 # Optional by design: a missing bind mount or an unreadable grafana_embed_map.json must
 # not stop the app booting — the SPA renders its own "not wired yet" state instead.

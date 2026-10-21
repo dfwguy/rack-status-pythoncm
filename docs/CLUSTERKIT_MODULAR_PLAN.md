@@ -103,31 +103,28 @@ A plan contains schema version, generated attempt ID, exact nodes, resolved
 non-secret profile, timestamped availability, configured/unknown topology,
 resource argv, expected unique unordered pairs, warnings and blockers. It
 reports `functional_status=NOT_RUN`, `performance_status=UNVERIFIED`,
-`submitted=false`, `execution_ready=false`, `submission_enabled=false`.
-The hash fingerprints this exact preview; it is not an authorization token,
-and a new preview gets a new attempt ID. Phase 4 must persist/confirm the plan
-and revalidate effective policy/inventory at submission.
+`submitted=false` and reports execution/submission capability from compatibility
+blockers. The hash fingerprints this exact preview; it is not an authorization
+token, and a new preview gets a new attempt ID. The product API signs the preview,
+then revalidates effective policy and inventory before submission.
 
-Only a compatible two-node CPU/RoCE profile gets an actual `sbatch_argv` pointing
-at the existing reviewed static entrypoint. That remains a proposal, never
-executed by these modules. It has two exact nodes/tasks, one task and CPU per
-node, requested 1 GiB/node, no GPUs/exclusive/requeue and the configured bounded
-walltime. The existing entrypoint's functional parameters and three transports
-must match; unsupported policies get blockers, not ignored settings.
-
-For one-node and 4/8-node plans, `sbatch_resource_argv` is available but
-`sbatch_argv`/`entrypoint` are null. This is intentional: no nonexistent/unreviewed
-script is presented as runnable, and no 4/8-node job is sent to a two-node-only
-script. Every scope remains submission-disabled in this phase. Attempt paths
-are planned with generated IDs; Phase 4 must exclusively create them and save
-profile/plan/source/job metadata before submission. Planning creates none.
+Compatible one-node preflight and 2/4/8-node CPU/RoCE profiles get an actual
+`sbatch_argv` pointing at the reviewed static preflight or generalized pairwise
+entrypoint. The plan has exact nodes/tasks, one task and CPU per node, requested
+1 GiB/node, no GPUs/exclusive/requeue and the configured bounded walltime.
+Functional parameters and transports must match the reviewed recipe; unsupported
+policies get blockers, not ignored settings.
+Attempt paths are planned with generated IDs. The product service exclusively
+creates them and saves profile, plan, source, activity and job metadata before
+submission. Planning itself still creates nothing.
 
 Performance threshold values, when supplied, are explicitly in megabytes/sec
 and microseconds. Enabling evaluation requires both a verified flag and an
-acceptance reference; it still cannot accept an unrun test. Evaluation and
-functional PASS/WARN/FAIL normalization belong to Phase 5. Raw vendor PPN and
-technology labels must continue to be preserved and corrected in sidecars,
-not overwritten in original output.
+acceptance reference; it still cannot accept an unrun test. Functional
+PASS/WARN/FAIL normalization and result retrieval are implemented, while verified
+performance evaluation remains future work. Raw vendor PPN and technology labels
+must continue to be preserved and corrected in sidecars, not overwritten in
+original output.
 
 ## Verification observations (2026-10-19)
 

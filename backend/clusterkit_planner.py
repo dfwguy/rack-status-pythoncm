@@ -265,8 +265,12 @@ def build_plan(raw_request, resolution, inventory, *, scripts_dir, attempt_id=No
             "entrypoint": entrypoint, "entrypoint_supported": not blockers,
             "sbatch_resource_argv": resources, "sbatch_argv": sbatch,
             "command_display": shlex.join(sbatch) if sbatch else None,
-            "execution_ready": False, "submission_enabled": False,
-            "execution_blockers": [*blockers, "Submission service is not implemented in this planning-only phase"],
+            "execution_ready": not blockers, "submission_enabled": not blockers,
+            "execution_blockers": blockers,
+            "submission_requirements": [
+                "A current signed preview confirmation is required",
+                "Policy and Slurm inventory are revalidated before the attempt is claimed",
+            ],
             "warnings": warnings}
     plan["plan_hash"] = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
     return plan
