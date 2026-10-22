@@ -38,6 +38,8 @@ const row: RackRow = { rack: "g01", nemo: "done", last_job: "-", sinfo: "idle", 
 
 // No async command is launched here, so the store only has to answer "nothing running".
 const idleStore: RackCommandsStoreValue = {
+  getActivity: () => null,
+  watchActivity: vi.fn(),
   getRackLast: () => null,
   getPendingForRack: () => [],
   replayLastOutput: vi.fn(),

@@ -89,6 +89,7 @@ export type ViewId =
   | "postRunNodeReport"
   | "deploymentTracker"
   | "tools"
+  | "clusterkit"
   | "workflows"
   | "terminal"
   | "projects"
@@ -151,6 +152,7 @@ const navEntries: NavEntry[] = [
     leaves: [
       { id: "tools", label: "Operations & Scripts", icon: <Wrench size={ICON_SIZE} /> },
       { id: "workflows", label: "Workflows", icon: <Workflow size={ICON_SIZE} /> },
+      { id: "clusterkit", label: "ClusterKit", icon: <Network size={ICON_SIZE} /> },
       { id: "terminal", label: "Terminal", icon: <Terminal size={ICON_SIZE} /> },
     ],
   },

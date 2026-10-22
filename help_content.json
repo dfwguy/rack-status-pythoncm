@@ -1,6 +1,6 @@
 {
   "generated_by": "frontend/scripts/gen-help-content.mjs",
-  "count": 89,
+  "count": 90,
   "entries": [
     {
       "id": "dashboard",
@@ -1936,6 +1936,51 @@
         "description": "Hierarchical tree for selecting a cluster, rack, or host as the observability scope."
       },
       "aiContext": "ScopeTree is the cluster→rack→host selection tree inside ScopeExplorer that sets the active observability scope."
+    },
+    {
+      "id": "clusterkit",
+      "kind": "view",
+      "title": "ClusterKit",
+      "domain": "Tools",
+      "routePath": "/tools/clusterkit",
+      "summary": "Preview and run the configured ClusterKit validation recipe on exact nodes or configured groups.",
+      "description": "The modular ClusterKit workflow uses the active cluster's site policy, confirms a signed exact allocation, and tracks its durable activity. Functional execution and observed pair coverage are separate from performance acceptance. The reviewed recipe currently supports local host CPU/RoCE execution; remote staging and GPU validation are not enabled by this page.",
+      "features": [
+        "Readiness and bounded node selection.",
+        "Print-only preview followed by explicit confirmation.",
+        "Durable status, pair measurements, node diagnostics and raw artifacts.",
+        "Context-scoped attempt history, including failures."
+      ],
+      "howTo": [
+        {
+          "task": "Run validation",
+          "steps": [
+            "Configure the cluster's atomic ClusterKit site profile in Settings or the project catalog.",
+            "Open Tools > ClusterKit and select the node count and exact nodes or configured group.",
+            "Preview the exact allocation, HCA, resources and attempt directory.",
+            "Confirm the unexpired preview and follow Status & results.",
+            "Keep functional PASS separate from performance UNVERIFIED; consult the fabric team for acceptance thresholds."
+          ]
+        }
+      ],
+      "related": [
+        "tools",
+        "settings",
+        "projects"
+      ],
+      "keywords": [
+        "clusterkit",
+        "pairwise",
+        "bandwidth",
+        "latency",
+        "roce",
+        "validation"
+      ],
+      "aria": {
+        "label": "ClusterKit validation",
+        "description": "Select, preview, confirm and inspect configuration-driven ClusterKit runs."
+      },
+      "aiContext": "ClusterKit at /tools/clusterkit uses /api/clusterkit readiness, inventory, preview, runs and artifacts. One node is preflight; multi-node runs observe all unordered pairs in each metric and path mode. Functional PASS does not imply verified performance. Execution is local host CPU/RoCE only. History filters exact attempt directories and execution identity, not parent log roots. Keep deployment separate from isolated validation."
     },
     {
       "id": "tools",

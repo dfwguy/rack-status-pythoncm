@@ -62,6 +62,7 @@ export const ROUTES: RouteDef[] = [
   { viewId: "obsEvents", path: "/observability/events", domain: "Observability", label: "Events" },
   { viewId: "obsAuditTrail", path: "/observability/audit-trail", domain: "Observability", label: "Audit Trail" },
   { viewId: "tools", path: "/tools/operations", domain: "Tools", label: "Operations & Scripts" },
+  { viewId: "clusterkit", path: "/tools/clusterkit", domain: "Tools", label: "ClusterKit" },
   { viewId: "workflows", path: "/tools/workflows", domain: "Tools", label: "Workflows" },
   { viewId: "terminal", path: "/tools/terminal", domain: "Tools", label: "Terminal" },
   { viewId: "analytics", path: "/analytics/overview", domain: "Analytics & Benchmarks", label: "Analytics" },

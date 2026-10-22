@@ -21,6 +21,9 @@ import { useEffect } from "react";
 import { useRackCommandsStore } from "./RackCommandsStoreContext";
 import { RackCommandsStoreProvider } from "./RackCommandsStoreProvider";
 
+const activeContext = vi.hoisted(() => ({ version: 0 }));
+vi.mock("./ActiveClusterContext", () => ({ useActiveCluster: () => activeContext }));
+
 vi.mock("./RackLocksContext", () => ({
   useRackLocksContext: () => ({
     locks: {
@@ -58,6 +61,16 @@ function Trigger({ rack, onDone }: { rack: string; onDone?: () => void }) {
   return null;
 }
 
+function ActivityProbe() {
+  const { watchActivity, getActivity, getRackLast } = useRackCommandsStore();
+  const activity = getActivity("node-group-run");
+  return <>
+    <button onClick={() => watchActivity("node-group-run", "/api/clusterkit/runs/node-group-run")}>Watch activity</button>
+    <p data-testid="activity-phase">{String(activity?.status?.phase || "no activity")}</p>
+    <p data-testid="rack-output">{getRackLast("node-group-run") ? "rack" : "no rack"}</p>
+  </>;
+}
+
 function AsyncValidationTrigger({ onAccepted }: { onAccepted: (jobId: string) => void }) {
   const { launchAsyncValidationFamily } = useRackCommandsStore();
   useEffect(() => {
@@ -78,6 +91,7 @@ describe("RackCommandsStoreProvider interceptor", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    activeContext.version = 0;
     fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -141,6 +155,40 @@ describe("RackCommandsStoreProvider interceptor", () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     expect(screen.queryByText(/rack busy/i)).not.toBeInTheDocument();
+  });
+
+  it("monitors a node/group activity after the originating view unmounts without a rack key", async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      fetchMock.mockImplementation(() => Promise.resolve(new Response(JSON.stringify({ ok: true, phase: ++calls === 1 ? "running" : "done" }))));
+      const { rerender } = render(<RackCommandsStoreProvider><ActivityProbe /></RackCommandsStoreProvider>);
+      await act(async () => { fireEvent.click(screen.getByText("Watch activity")); });
+      expect(screen.getByTestId("activity-phase")).toHaveTextContent("running");
+      expect(screen.getByTestId("rack-output")).toHaveTextContent("no rack");
+      rerender(<RackCommandsStoreProvider><p>Another view</p></RackCommandsStoreProvider>);
+      await act(async () => { await vi.advanceTimersByTimeAsync(3100); });
+      rerender(<RackCommandsStoreProvider><ActivityProbe /></RackCommandsStoreProvider>);
+      expect(screen.getByTestId("activity-phase")).toHaveTextContent("done");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls.every(([, init]) => !init.method || init.method === "GET")).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("aborts old-context activity monitoring and hides its cached output on a cluster change", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockResolvedValue(new Response(JSON.stringify({ ok: true, phase: "running" })));
+      const { rerender } = render(<RackCommandsStoreProvider><ActivityProbe /></RackCommandsStoreProvider>);
+      await act(async () => { fireEvent.click(screen.getByText("Watch activity")); });
+      const signal = fetchMock.mock.calls[0][1].signal as AbortSignal;
+      activeContext.version = 1;
+      rerender(<RackCommandsStoreProvider><ActivityProbe /></RackCommandsStoreProvider>);
+      expect(signal.aborted).toBe(true);
+      expect(screen.getByTestId("activity-phase")).toHaveTextContent("no activity");
+      await act(async () => { await vi.advanceTimersByTimeAsync(3100); });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
   });
 
   it("returns after async submission and treats a server timeout as terminal", async () => {

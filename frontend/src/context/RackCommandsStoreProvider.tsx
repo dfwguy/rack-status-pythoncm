@@ -11,6 +11,7 @@
  */
 import {
   useCallback,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -28,6 +29,7 @@ import { validationRackKey } from "../lib/rackCommandTypes";
 import { apiFetch } from "../lib/apiFetch";
 import { launchWithReview } from "../lib/launchReview";
 import { useRackLocksContext } from "./RackLocksContext";
+import { useActiveCluster } from "./ActiveClusterContext";
 import type { RackLockEntry } from "../hooks/useRackLocks";
 import {
   RackCommandsStoreContext,
@@ -84,6 +86,100 @@ function syncCmdKindFromTitle(title: string): NodeCmdKind {
 }
 
 export function RackCommandsStoreProvider({ children }: { children: ReactNode }) {
+  const { version } = useActiveCluster();
+  const [activities, setActivities] = useState<
+    Record<
+      string,
+      { context: number; status: Record<string, unknown> | null; error: string }
+    >
+  >({});
+  const watchers = useRef(new Map<string, AbortController>());
+  const contextVersion = useRef(version);
+  useEffect(() => {
+    contextVersion.current = version;
+    const active = watchers.current;
+    return () => {
+      for (const controller of active.values()) controller.abort();
+      active.clear();
+    };
+  }, [version]);
+
+  const getActivity = useCallback(
+    (id: string) =>
+      activities[id]?.context === version ? activities[id] : null,
+    [activities, version],
+  );
+  const watchActivity = useCallback(
+    (id: string, statusUrl: string, refresh = false) => {
+      if (contextVersion.current !== version) return;
+      if (watchers.current.has(id) && !refresh) return;
+      watchers.current.get(id)?.abort();
+      const controller = new AbortController();
+      watchers.current.set(id, controller);
+      const update = (
+        status: Record<string, unknown> | null,
+        error: string,
+      ) => {
+        if (controller.signal.aborted) return;
+        setActivities((old) => ({
+          ...Object.fromEntries(Object.entries(old).slice(-99)),
+          [id]: {
+            context: version,
+            status: status || old[id]?.status || null,
+            error,
+          },
+        }));
+      };
+      const deadline = Date.now() + POLL_MAX_MS;
+      const poll = async () => {
+        if (contextVersion.current !== version || controller.signal.aborted)
+          return;
+        let delay = 3000;
+        try {
+          const response = await apiFetch(statusUrl, {
+            signal: controller.signal,
+            cache: "no-store",
+          });
+          const status = (await response.json()) as Record<string, unknown>;
+          if (!response.ok)
+            throw new Error(String(status.error || `HTTP ${response.status}`));
+          update(status, "");
+          if (
+            ["done", "error", "timeout"].includes(String(status.phase)) &&
+            status.work_phase !== "submission_unknown"
+          ) {
+            if (watchers.current.get(id) === controller)
+              watchers.current.delete(id);
+            return;
+          }
+        } catch (reason) {
+          if (controller.signal.aborted) return;
+          update(
+            null,
+            `${String(reason)}. Checking status only; no job is resubmitted.`,
+          );
+          delay = 10000;
+        }
+        if (controller.signal.aborted) return;
+        if (Date.now() >= deadline) {
+          update(
+            null,
+            "Client monitoring paused after two hours. Refresh to reconnect to the durable activity.",
+          );
+          watchers.current.delete(id);
+          return;
+        }
+        const cancel = () => window.clearTimeout(timer);
+        const timer = window.setTimeout(() => {
+          controller.signal.removeEventListener("abort", cancel);
+          void poll();
+        }, delay);
+        controller.signal.addEventListener("abort", cancel, { once: true });
+      };
+      void poll();
+    },
+    [version],
+  );
   const [lastByRack, setLastByRack] = useState<Record<string, RackLastAsyncOutput>>({});
   const [pending, setPending] = useState<Array<{ id: string; rackKey: string; label: string }>>([]);
   const [stream, setStream] = useState<StreamState | null>(null);
@@ -372,6 +468,8 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
 
   const value = useMemo<RackCommandsStoreValue>(
     () => ({
+      getActivity,
+      watchActivity,
       getRackLast,
       getPendingForRack,
       replayLastOutput,
@@ -384,6 +482,8 @@ export function RackCommandsStoreProvider({ children }: { children: ReactNode })
       openTailLogNemo,
     }),
     [
+      getActivity,
+      watchActivity,
       getRackLast,
       getPendingForRack,
       replayLastOutput,

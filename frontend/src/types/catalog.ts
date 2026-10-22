@@ -298,6 +298,8 @@ export interface Cluster {
   nccl_env: ClusterNcclEnv;
   /** How this cluster runs ClusterKit; empty = the launcher's defaults. Optional on older records. */
   clusterkit?: ClusterClusterKit;
+  /** Atomic modular site policy; independent of the legacy rack launcher settings. */
+  clusterkit_profile?: Record<string, unknown> | null;
   connection: ClusterConnection;
   /** Empty means "derive from the platform's `fabric.racks_per_su`", not "one SU". */
   scalable_units: ClusterScalableUnit[];

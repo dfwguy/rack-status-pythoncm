@@ -75,6 +75,7 @@ const DeploymentTrackerView = lazy(() =>
   import("./features/deployment-tracker/views/DeploymentTrackerView").then((m) => ({ default: m.DeploymentTrackerView })),
 );
 const ToolsView = lazy(() => import("./views/ToolsView").then((m) => ({ default: m.ToolsView })));
+const ClusterKitView = lazy(() => import("./features/clusterkit/ClusterKitView"));
 const WorkflowsView = lazy(() => import("./views/WorkflowsView").then((m) => ({ default: m.WorkflowsView })));
 const MetricsView = lazy(() => import("./views/MetricsView").then((m) => ({ default: m.MetricsView })));
 const LogsView = lazy(() => import("./views/LogsView").then((m) => ({ default: m.LogsView })));
@@ -135,6 +136,7 @@ const VIEW_TITLES: Record<ViewId, string> = {
   postRunNodeReport: "Post Run Node Report",
   deploymentTracker: "Deployment Tracker",
   tools: "Operations & Scripts",
+  clusterkit: "ClusterKit",
   workflows: "Workflows",
   terminal: "Terminal",
   projects: "Projects & Clusters",
@@ -442,6 +444,7 @@ function AppContent() {
           <Route path="/observability/events" element={<EventsView />} />
           <Route path="/observability/audit-trail" element={<AuditTrailView />} />
           <Route path="/tools/operations" element={<ToolsView logDir={logDir} />} />
+          <Route path="/tools/clusterkit" element={<ClusterKitView />} />
           <Route path="/tools/workflows" element={<WorkflowsView rackData={data} />} />
           <Route path="/tools/terminal" element={<TerminalWorkspaceView logDir={logDir} />} />
           <Route path="/analytics/overview" element={<AnalyticsView logDir={logDir} rows={data?.rows ?? []} status={data} />} />
