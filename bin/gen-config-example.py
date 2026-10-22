@@ -29,6 +29,7 @@ uncomments something. An example whose act of copying reconfigures a cluster is 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import textwrap
 from pathlib import Path
@@ -149,7 +150,9 @@ def _literal(setting) -> str:
         return raw.strip()
     if setting.toml_type == config_registry.TOML_ARRAY:
         return "[" + ", ".join(f'"{p.strip()}"' for p in raw.split(",")) + "]"
-    return f'"{raw}"'
+    # JSON's quoted string escaping is also valid TOML basic-string escaping.
+    # Atomic JSON settings contain literal quotes and cannot be interpolated raw.
+    return json.dumps(raw, ensure_ascii=False)
 
 
 def main() -> int:

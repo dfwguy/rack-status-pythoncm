@@ -135,3 +135,16 @@
 # NVFTP project folder name. Not a credential, despite matching the sensitive-name pattern on
 # 'TOKEN'.
 # RACK_PROJECT_TOKEN = "my-project"
+
+
+[clusterkit]
+# Collection grace after scheduler completion before a missing normalized summary becomes a
+# failure.
+# RACK_CLUSTERKIT_COLLECT_GRACE_SEC = "300"
+
+# Signed preview lifetime in seconds, clamped to 30-900. An expired preview cannot submit work.
+# RACK_CLUSTERKIT_PREVIEW_TTL_SEC = "300"
+
+# Atomic modular ClusterKit site policy as JSON; paths, approved nodes/groups and HCA belong to
+# this cluster profile. Disabled until configured; cluster.clusterkit_profile takes precedence.
+# RACK_CLUSTERKIT_SITE_PROFILE = "{\"enabled\":false}"

@@ -80,7 +80,7 @@ class TestSlurmScheduler:
         handle = sched.submit(spec)
         assert handle.job_id == "12345"
         cmd = conn.calls[0]
-        for frag in ["sbatch", "--parsable", "--job-name=nccl", "-N 3",
+        for frag in ["sbatch", "--parsable", "--job-name=nccl", "--nodes=3",
                      "--nodelist=n1,n2,n3", "--ntasks-per-node=4",
                      "--output=/logs/nccl_%j.out", "nccl_allreduce.sbatch"]:
             assert frag in cmd, f"missing {frag!r} in: {cmd}"
@@ -98,6 +98,16 @@ class TestSlurmScheduler:
         conn = FakeConn({"sbatch": (1, "", "Invalid partition")})
         with pytest.raises(RuntimeError, match="sbatch failed"):
             SlurmScheduler(conn).submit(JobSpec(script="x.sbatch"))
+
+    def test_transport_type_error_does_not_repeat_a_possible_submission(self):
+        class AcceptedThenFaulted(FakeConn):
+            def run(self, cmd, **kwargs):
+                self.calls.append(cmd)
+                raise TypeError("transport failed after scheduler acceptance")
+        conn = AcceptedThenFaulted()
+        with pytest.raises(TypeError):
+            SlurmScheduler(conn).submit(JobSpec(script="x.sbatch"))
+        assert len(conn.calls) == 1
 
     def test_status_normalizes_cancelled(self):
         conn = FakeConn({"sacct": (0, "CANCELLED+ \n", "")})

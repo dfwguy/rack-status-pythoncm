@@ -378,6 +378,16 @@ RACK_REMOTE_BASE_PATH = register(
 
 
 # -- The settings a real deployment actually sets ------------------------------------------------
+register(Setting(name="RACK_CLUSTERKIT_SITE_PROFILE", secret=False, ui_managed=True,
+                 example='{"enabled":false}', section="clusterkit",
+                 description="Atomic modular ClusterKit site policy as JSON; paths, approved nodes/groups and HCA belong to this cluster profile. Disabled until configured; cluster.clusterkit_profile takes precedence."))
+register(Setting(name="RACK_CLUSTERKIT_PREVIEW_TTL_SEC", secret=False, ui_managed=True,
+                 example="300", section="clusterkit",
+                 description="Signed preview lifetime in seconds, clamped to 30-900. An expired preview cannot submit work."))
+register(Setting(name="RACK_CLUSTERKIT_COLLECT_GRACE_SEC", secret=False, ui_managed=True,
+                 example="300", section="clusterkit",
+                 description="Collection grace after scheduler completion before a missing normalized summary becomes a failure."))
+
 #
 # The settings deployed sites carried in `rack-config.env`, now in `rackstatus.toml`. None of these is
 # *required* — each has a working default — but they are declared so that `rackstatus.toml.example`

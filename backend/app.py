@@ -345,10 +345,13 @@ def _refresh_validation_activities_cycle() -> int:
         rec
         for rec in rows
         if isinstance(rec, dict)
-        and any(
-            _task_needs_slurm_hydration(task)
-            for task in (rec.get("tasks") or [])
-            if isinstance(task, dict)
+        and (
+            (rec.get("source") == "clusterkit-api" and rec.get("phase") not in {"done", "error", "timeout"})
+            or any(
+                _task_needs_slurm_hydration(task)
+                for task in (rec.get("tasks") or [])
+                if isinstance(task, dict)
+            )
         )
     ]
     if not candidates:
@@ -844,7 +847,8 @@ _AUTH_BYPASS_ENDPOINTS = web_auth.AUTH_BYPASS_ENDPOINTS
 @app.before_request
 def _require_dashboard_auth():
     global _JOB_ENV_BOOTSTRAP_DONE
-    if not _JOB_ENV_BOOTSTRAP_DONE:
+    from request_policy import is_print_only_request
+    if not _JOB_ENV_BOOTSTRAP_DONE and not is_print_only_request(request.path, request.method):
         try:
             _job_env_overrides_load()
         except Exception:
@@ -1210,6 +1214,9 @@ def _lake_capture_mode() -> str:
 
 
 def _lake_should_capture(path: str, method: str) -> bool:
+    from request_policy import is_print_only_request
+    if is_print_only_request(path, method):
+        return False
     mode = _lake_capture_mode()
     if mode == "off" or not path.startswith("/api/"):
         return False

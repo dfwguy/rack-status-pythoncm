@@ -6,7 +6,7 @@ Every action the product declares, which is what a policy's `actions` field may 
 **Generated from the live registry** — a route without a declaration cannot appear here,
 and the build gate in `backend/tests/test_action_coverage.py` fails if one exists.
 
-202 actions across 57 services: 65 reads and 137 mutations.
+204 actions across 57 services: 65 reads and 139 mutations.
 
 A read-only role is `["*:read", "*:list"]` — the two read verbs — rather than an
 enumeration of the reads below.
@@ -74,7 +74,7 @@ case does not match.
 | [`support`](#support) | singleton | 3 | nvidia-bug-report collection: run it across a rack, then list and serve what landed. |
 | [`tools`](#tools) | singleton | 8 | The Tools page: workspace installers, container downloads, Grafana launch. |
 | [`validation`](#validation) | instance | 14 | Launching validation: every run-* endpoint, and the preset path that is replacing them. |
-| [`validation.activity`](#validationactivity) | instance | 5 | Validation activities: the durable answer to "what ran on this rack, and what came of it". |
+| [`validation.activity`](#validationactivity) | instance | 7 | Validation activities: the durable answer to "what ran on this rack, and what came of it". |
 | [`vault`](#vault) | singleton | 3 | NVFTP token vault: read-only access to the stored credential. |
 | [`workflow`](#workflow) | instance | 8 | Workflow templates and workflow runs. |
 
@@ -854,9 +854,11 @@ Identified by `activity_id`, `id` on the request.
 |---|---|---|---|
 | `validation.activity:adopt` | mutate | instance | `POST activities.api_validation_activities_adopt` |
 | `validation.activity:annotate` | mutate | instance | `POST activities.api_validation_activity_corrective_action` |
+| `validation.activity:create` | mutate | instance | `POST clusterkit_modular.clusterkit_submit` |
 | `validation.activity:delete` | mutate | instance | `DELETE activities.api_multirack_job_delete`<br>`DELETE activities.api_validation_activity_delete` |
-| `validation.activity:list` | read | instance | `GET activities.api_multirack_campaign`<br>`GET activities.api_multirack_jobs`<br>`GET activities.api_multirack_status`<br>`GET activities.api_validation_activities`<br>`GET activities.api_validation_activities_ledger` |
-| `validation.activity:read` | read | instance | `GET activities.api_validation_activity_detail` |
+| `validation.activity:list` | read | instance | `GET activities.api_multirack_campaign`<br>`GET activities.api_multirack_jobs`<br>`GET activities.api_multirack_status`<br>`GET activities.api_validation_activities`<br>`GET activities.api_validation_activities_ledger`<br>`GET clusterkit_modular.clusterkit_history`<br>`GET clusterkit_modular.clusterkit_inventory`<br>`GET clusterkit_modular.clusterkit_readiness` |
+| `validation.activity:preview` | mutate | instance | `POST clusterkit_modular.clusterkit_preview` |
+| `validation.activity:read` | read | instance | `GET activities.api_validation_activity_detail`<br>`GET clusterkit_modular.clusterkit_artifact`<br>`GET clusterkit_modular.clusterkit_artifacts`<br>`GET clusterkit_modular.clusterkit_run` |
 
 ## `vault`
 

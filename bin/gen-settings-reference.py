@@ -101,6 +101,9 @@ class _Reader(NamedTuple):
 #: `_unclassified_readers` finds every function that forwards a parameter into an environment read,
 #: so a new one fails the build until it is added here (or to `_NOT_SETTING_READERS`).
 _PARAM_READERS: dict[tuple[str, str], _Reader] = {
+    # Default platform lookup is raw; modular ClusterKit pins already-resolved
+    # settings onto the provider before calling it.
+    ("platforms.base", "_slurm_setting"): _Reader("raw", (1, "name"), (2, "default")),
     ("app", "_validation_activities_refresh_number"): _Reader("ladder"),
     ("config_preflight", "_is_set"): _Reader("raw", (0, None), None),
     ("core", "truthy_env"): _Reader("raw"),

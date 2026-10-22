@@ -319,6 +319,11 @@ def _hydrate_activity_task_logs(activity_id: str, rec: dict | None = None) -> No
         rec = validation_activities.get_activity(aid)
     if not rec:
         return
+    if rec.get("source") == "clusterkit-api":
+        from clusterkit_service import refresh_activity_record
+        refreshed = refresh_activity_record(aid, validation_activities)
+        rec.update(refreshed["activity"])
+        return
     log_dir = str(rec.get("log_dir") or "")
     tasks = [t for t in (rec.get("tasks") or []) if isinstance(t, dict)]
     # Batch squeue lookup for all refs that still need refresh.

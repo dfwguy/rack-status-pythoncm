@@ -265,6 +265,9 @@ def _record(response) -> bool:
     # NFR-2 / AC-17: assets short-circuit before any settings read, stat or registry lookup.
     if is_static(path):
         return False
+    from request_policy import is_print_only_request
+    if response.status_code < 400 and is_print_only_request(path, request.method):
+        return False
     if not sink.AUDIT_ENABLED.resolve():
         return False
 

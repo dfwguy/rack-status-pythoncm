@@ -470,6 +470,54 @@ class SqliteDocRepo:
 _instance: Repo | None = None
 
 
+class _ReadOnlySnapshot:
+    """Read the catalog without TinyDB constructors, locks or materialization."""
+
+    def __init__(self, data):
+        if not isinstance(data, dict):
+            raise TypeError("Catalog snapshot must be an object")
+        self.data = data
+
+    def list(self, table):
+        rows = self.data.get(table, {})
+        if not isinstance(rows, dict) or any(not isinstance(row, dict) for row in rows.values()):
+            raise ValueError("Invalid catalog snapshot table")
+        return list(rows.values())
+
+    def get(self, table, doc_id):
+        return next((row for row in self.list(table) if row.get("id") == doc_id), None)
+
+    def get_meta(self, key, default=None):
+        row = next((row for row in self.list(TABLE_META) if row.get("key") == key), None)
+        return row.get("value", default) if row else default
+
+
+def read_only_repo():
+    """Snapshot an existing catalog; never initialize a writable store for preview."""
+    if _instance is not None and not isinstance(_instance, (TinyDBRepo, SqliteDocRepo)):
+        return _instance
+    path = _instance.path if _instance is not None else default_catalog_path()
+    if isinstance(_instance, SqliteDocRepo):
+        with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as conn:
+            names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            data = {}
+            for name in (TABLE_META, TABLE_PROJECTS, TABLE_PLATFORMS, TABLE_TOOLS):
+                if name in names:
+                    rows = conn.execute(f"SELECT payload FROM {name}").fetchmany(2049)
+                    if len(rows) > 2048:
+                        raise ValueError("Catalog snapshot exceeds its record limit")
+                    data[name] = {str(i): json.loads(row[0]) for i, row in enumerate(rows)}
+            return _ReadOnlySnapshot(data)
+    try:
+        with path.open("r", encoding="utf-8") as file:
+            content = file.read(8 * 1024 * 1024 + 1)
+    except FileNotFoundError:
+        return _ReadOnlySnapshot({})
+    if len(content) > 8 * 1024 * 1024:
+        raise ValueError("Catalog exceeds the read-only snapshot limit")
+    return _ReadOnlySnapshot(json.loads(content or "{}"))
+
+
 def get_repo() -> Repo:
     """Return the process-wide catalog repository (created on first use)."""
     global _instance

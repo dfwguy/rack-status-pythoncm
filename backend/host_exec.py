@@ -130,6 +130,32 @@ def _catalog_topology() -> tuple[list[dict], list[dict]] | None:
     )
 
 
+def read_only_roles():
+    """Resolve declared local roles without writable execution bootstrap."""
+    from config_env import _CATALOG_AVAILABLE, catalog_context, read_only_values
+
+    if _topology_provider is not None:
+        raise ValueError("Custom topology provider has no read-only snapshot contract")
+    values = read_only_values(("RACK_EXEC_MODE", "RACK_REMOTE_BASE_PATH", "RACK_STATUS_LOG_DIR"))
+    if _CATALOG_AVAILABLE:
+        from catalog.store import read_only_repo
+        _project, cluster, _platform = catalog_context.resolve(repo=read_only_repo())
+        if cluster is not None and cluster.connection.endpoints:
+            spec = cluster.connection
+            endpoints = [e.__dict__ | {"opts": list(e.opts)} for e in spec.endpoints]
+            roles = [r.__dict__ for r in spec.roles]
+            return build_topology(endpoints, roles), role_roots(roles)
+    if (values.get("RACK_EXEC_MODE") or "ssh").strip().lower() != "local":
+        raise ValueError("Local execution must be configured for modular ClusterKit; remote staging is unsupported")
+    roots = {}
+    base = values.get("RACK_REMOTE_BASE_PATH")
+    if base:
+        roots.update(scripts=base.rstrip("/") + "/bin/scripts", logs=base.rstrip("/") + "/var/logs")
+    if values.get("RACK_STATUS_LOG_DIR"):
+        roots["logs"] = values["RACK_STATUS_LOG_DIR"]
+    return build_connection(TransportConfig(exec_mode="local")), roots
+
+
 def _load_topology() -> tuple[list[dict], list[dict]] | None:
     provider = _topology_provider or _catalog_topology
     try:

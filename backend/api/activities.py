@@ -76,6 +76,12 @@ def _refresh_validation_activities_lazy(rows: list[dict]) -> None:
         aid = str(rec.get("activity_id") or rec.get("job_id") or "")
         if not aid:
             continue
+        if rec.get("source") == "clusterkit-api":
+            try:
+                _hydrate_activity_task_logs(aid, rec)
+            except (OSError, RuntimeError, ValueError):
+                _logger.exception("ClusterKit activity refresh failed for %s", aid)
+            continue
         tasks = rec.get("tasks") or []
         if not any(_task_needs_slurm_hydration(t) for t in tasks if isinstance(t, dict)):
             # Still refresh rollup for legacy rows missing work_phase.

@@ -1390,6 +1390,8 @@ class Cluster:
     nccl_env: ClusterNcclEnv = field(default_factory=ClusterNcclEnv)
     # How this site runs ClusterKit (test cases, GPU-Direct).
     clusterkit: ClusterClusterKit = field(default_factory=ClusterClusterKit)
+    # Atomic policy for modular node/group validation; independent of legacy rack recipes.
+    clusterkit_profile: dict[str, Any] | None = None
     connection: ClusterConnection = field(default_factory=ClusterConnection)
     # Empty means "derive from the platform's racks_per_su"; see scalable_units_for().
     scalable_units: list[ClusterScalableUnit] = field(default_factory=list)
@@ -1422,6 +1424,7 @@ class Cluster:
             fabric=ClusterFabric.from_dict(d.get("fabric")),
             nccl_env=ClusterNcclEnv.from_dict(d.get("nccl_env")),
             clusterkit=ClusterClusterKit.from_dict(d.get("clusterkit")),
+            clusterkit_profile=d.get("clusterkit_profile"),
             connection=ClusterConnection.from_dict(d.get("connection")),
             scalable_units=(
                 [ClusterScalableUnit.from_dict(s) for s in sus_raw]
@@ -1481,6 +1484,9 @@ class Cluster:
         problems.extend(self.fabric.validate())
         problems.extend(self.nccl_env.validate())
         problems.extend(self.clusterkit.validate())
+        if self.clusterkit_profile is not None:
+            from clusterkit_profile import parse_profile
+            problems.extend(f"clusterkit_profile: {error}" for error in parse_profile(self.clusterkit_profile).errors)
         problems.extend(self._validate_campaigns())
         return problems
 

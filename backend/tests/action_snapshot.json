@@ -408,6 +408,54 @@
   "variant": "sync"
  },
  {
+  "endpoint": "clusterkit_modular.clusterkit_artifact",
+  "method": "GET",
+  "action": "validation.activity:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "clusterkit_modular.clusterkit_artifacts",
+  "method": "GET",
+  "action": "validation.activity:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "clusterkit_modular.clusterkit_history",
+  "method": "GET",
+  "action": "validation.activity:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "clusterkit_modular.clusterkit_inventory",
+  "method": "GET",
+  "action": "validation.activity:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "clusterkit_modular.clusterkit_preview",
+  "method": "POST",
+  "action": "validation.activity:preview",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "clusterkit_modular.clusterkit_readiness",
+  "method": "GET",
+  "action": "validation.activity:list",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "clusterkit_modular.clusterkit_run",
+  "method": "GET",
+  "action": "validation.activity:read",
+  "variant": "sync"
+ },
+ {
+  "endpoint": "clusterkit_modular.clusterkit_submit",
+  "method": "POST",
+  "action": "validation.activity:create",
+  "variant": "async"
+ },
+ {
   "endpoint": "comments.api_comment_put",
   "method": "DELETE",
   "action": "comments:delete",

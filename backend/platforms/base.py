@@ -23,6 +23,11 @@ from abc import ABC, abstractmethod
 from core import is_valid_node_hostname
 
 
+def _slurm_setting(provider, name, default=""):
+    settings = getattr(provider, "_slurm_settings", None)
+    return settings.get(name, default) if settings is not None else os.environ.get(name, default)
+
+
 def device_state(raw: object) -> str:
     """A cluster manager's device state as the node record's ``status`` word.
 
@@ -110,10 +115,10 @@ class PlatformProvider(ABC):
     # -- Slurm helpers (most are identical across platforms) -----------------
 
     def _slurm_module(self) -> str:
-        return (os.environ.get("RACK_SLURM_MODULE") or "slurm").strip() or "slurm"
+        return (_slurm_setting(self, "RACK_SLURM_MODULE") or "slurm").strip() or "slurm"
 
     def _skip_module_load(self) -> bool:
-        return os.environ.get("RACK_SLURM_SKIP_MODULE_LOAD", "").strip().lower() in (
+        return _slurm_setting(self, "RACK_SLURM_SKIP_MODULE_LOAD", "").strip().lower() in (
             "1", "true", "yes",
         )
 
@@ -123,7 +128,7 @@ class PlatformProvider(ABC):
         # non-login ssh, so Slurm CLIs die with "Could not establish a configuration source"
         # (DNS SRV fallback) even when given absolute paths. RACK_SLURM_CONF exports it in
         # the remote shell. Documented in RACKSTATUS_GO_LIVE.md.
-        conf = (os.environ.get("RACK_SLURM_CONF") or "").strip()
+        conf = (_slurm_setting(self, "RACK_SLURM_CONF") or "").strip()
         pre = f"export SLURM_CONF={shlex.quote(conf)}; " if conf else ""
         if self._skip_module_load():
             return pre + cmd
@@ -142,7 +147,7 @@ class PlatformProvider(ABC):
         rediscover Slurm's non-login-shell PATH or guess a versioned BCM install path.
         """
         env_key = f"RACK_SLURM_{name.upper()}"
-        executable = (os.environ.get(env_key) or name).strip() or name
+        executable = (_slurm_setting(self, env_key) or name).strip() or name
         cmd = shlex.quote(executable)
         if extra_args:
             cmd = f"{cmd} {extra_args}"

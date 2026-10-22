@@ -69,6 +69,7 @@ class JobSpec:
     # Account the work runs as. Slurm takes this from the submitting identity; a native
     # runner is told explicitly, and getting it wrong writes logs nobody can read.
     execution_user: str | None = None
+    script_args: list[str] = field(default_factory=list)
 
 
 @dataclass

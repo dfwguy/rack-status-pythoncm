@@ -42,7 +42,7 @@ before -- so the migration is "create the tree on the head node", not "upgrade a
 from __future__ import annotations
 
 import time
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 import host_exec
 from config_env import _eget
@@ -202,11 +202,33 @@ def layers(project_id: str = "", platform_id: str = "") -> list[str]:
     In legacy mode this is the single flat directory, which is what makes every existing
     deployment behave exactly as it did.
     """
-    if not _has_tree():
-        return [legacy_dir()]
-    out = [d for d in (project_dir(project_id), custom_dir(), platform_dir(platform_id)) if d]
-    out.append(multi_platform_dir())
-    return out
+    return _layer_paths(tree_root(), legacy_dir(), project_id or active_project_id(),
+                        platform_id or active_platform_id(), _has_tree())
+
+
+def _layer_paths(root: str, legacy: str, project: str, platform: str, has_tree: bool) -> list[str]:
+    if not has_tree:
+        return [legacy]
+    out = [f"{root}/{PROJECT_PREFIX}{project}"] if project else []
+    out.append(f"{root}/{CUSTOM}")
+    if platform:
+        out.append(f"{root}/{platform}")
+    return [*out, f"{root}/{MULTI_PLATFORM}"]
+
+
+def local_scripts_dir_snapshot(values: dict, role_root: str = "") -> str:
+    """Same script layers for a verified local, print-only execution context.
+
+    The caller supplies the read-only settings snapshot and checks local transport
+    first. No writable catalog/transport bootstrap or stale path cache is involved.
+    """
+    base = (values.get("RACK_REMOTE_BASE_PATH") or "").rstrip("/")
+    root = (values.get("NVIS_SCRIPTS_TREE") or "").strip() or (
+        f"{base}/scripts" if base else str(_repo_root() / "bin" / "scripts-tree"))
+    legacy = role_root or (f"{base}/bin/scripts" if base else str(_repo_root() / "bin" / "scripts"))
+    paths = _layer_paths(root, legacy, values.get("NVIS_PROJECT_ID") or "",
+                         values.get("NVIS_PLATFORM_ID") or "", Path(f"{root}/{MULTI_PLATFORM}").is_dir())
+    return next((path for path in paths if Path(path).is_dir()), paths[-1])
 
 
 def scripts_dir(project_id: str = "", platform_id: str = "") -> str:

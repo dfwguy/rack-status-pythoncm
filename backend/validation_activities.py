@@ -128,6 +128,7 @@ _SBATCH_SUBMITTED_RE = re.compile(r"Submitted batch job\s+(\d+)", re.IGNORECASE)
 
 _UPDATABLE = frozenset({
     "phase",
+    "work_phase",
     "returncode",
     "error",
     "finished_at",
@@ -1121,6 +1122,7 @@ def record_activity(
     command_display: str = "",
     dry_run: bool = False,
     scheduler: str = "unknown",
+    execution_provider: str = "",
     source: str = "ui",
     activity_id: str | None = None,
     tasks: list[dict[str, Any]] | None = None,
@@ -1150,6 +1152,7 @@ def record_activity(
             "operator": _sanitize_operator(operator),
             "command_display": str(command_display or ""),
             "scheduler": scheduler,
+            "execution_provider": execution_provider or scheduler,
             "dry_run": dry_run,
             "phase": "starting",
             "returncode": None,
@@ -1475,6 +1478,8 @@ def add_or_update_task(
     results_log_path: str | None = None,
     task_id: str | None = None,
     collecting_since: str | None = None,
+    returncode: int | None = None,
+    finished_at: str | None = None,
 ) -> str:
     """Add or merge a child task on an activity. Returns ``task_id``."""
     aid = (activity_id or "").strip()
@@ -1514,6 +1519,10 @@ def add_or_update_task(
             patch["phase"] = phase
         if work_phase is not None:
             patch["work_phase"] = work_phase
+        if returncode is not None:
+            patch["returncode"] = returncode
+        if finished_at is not None:
+            patch["finished_at"] = finished_at
         if evidence is not None:
             patch["evidence"] = evidence
         if stdout_path is not None:
@@ -1603,6 +1612,15 @@ def get_activity(activity_id: str) -> dict[str, Any] | None:
         return None
     rec = rows.get(aid)
     return dict(rec) if isinstance(rec, dict) else None
+
+
+def activity_history() -> list[dict[str, Any]]:
+    """Merge the durable archive and live working set; retain pruned failed attempts."""
+    rows = {row["activity_id"]: row for row in _archive().list(ARCHIVE_TABLE)
+            if isinstance(row, dict) and row.get("activity_id")}
+    for row in list_activities(limit=0):
+        rows[row["activity_id"]] = row
+    return list(rows.values())
 
 
 def list_activities(

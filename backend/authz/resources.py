@@ -179,6 +179,7 @@ COLLECTION_FALLBACK_VERBS = frozenset({"read", "list", "create"})
 #: document about all of them — and never *each member in turn*. `rack.power:off` can never appear
 #: here: powering off the collection is powering off the fleet.
 COLLECTION_FALLBACK_ACTIONS: frozenset[str] = frozenset({
+    "validation.activity:preview",  # A print-only plan has no activity instance yet.
     # `/api/node-report/start` is a fleet sweep by construction — its own docstring says "a second
     # fleet-wide sweep" over "~2000 nodes". There is no per-node target to name.
     "report.node:generate",

@@ -89,6 +89,21 @@ def _nvis_workspace_dir_effective() -> str:
 
 JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     {
+        "section": "jobs_cluster", "key": "RACK_CLUSTERKIT_SITE_PROFILE",
+        "label": "ClusterKit node validation profile (JSON)",
+        "description": "Atomic site policy for preflight and 2/4/8-node validation. Paths, partition, allowed nodes/groups and HCA belong here; disabled until configured. A cluster-owned profile takes precedence.",
+    },
+    {
+        "section": "jobs_cluster", "key": "RACK_CLUSTERKIT_PREVIEW_TTL_SEC",
+        "label": "ClusterKit preview lifetime (seconds)",
+        "description": "Confirmation lifetime, bounded to 30-900 seconds; default 300.",
+    },
+    {
+        "section": "jobs_cluster", "key": "RACK_CLUSTERKIT_COLLECT_GRACE_SEC",
+        "label": "ClusterKit artifact collection grace (seconds)",
+        "description": "Wait after completion for normalized results, bounded to 30-1800 seconds; default 300.",
+    },
+    {
         "section": "dashboard",
         "key": "RACK_STATUS_BACKGROUND_INTERVAL_SEC",
         "label": "Status background refresh (seconds)",
@@ -1013,6 +1028,47 @@ def _eget(name: str, default: str | None = None) -> str | None:
     if name in low and low[name].strip():
         return low[name].strip()
     return default
+
+
+def _resolve_setting(name, default, high, overrides, environ, low):
+    for layer in (high, overrides):
+        if name in layer and layer[name].strip():
+            return layer[name].strip()
+    if name in environ:
+        return environ[name]
+    if name in low and low[name].strip():
+        return low[name].strip()
+    return default
+
+
+def read_only_values(names: tuple[str, ...]) -> dict[str, str | None]:
+    """Read the same settings ladder without materialization or lock-file writes."""
+    high, low = {}, {}
+    if _CATALOG_AVAILABLE and catalog_context is not None:
+        high, low = catalog_context.overlays_for_active_readonly()
+    else:
+        catalog_path = Path(os.environ.get("NVIS_CATALOG_FILE") or REPO_ROOT / "var/store/catalog.json")
+        if catalog_path.exists():
+            raise ValueError("Catalog dependencies unavailable; cannot resolve existing site policy")
+    try:
+        with _job_env_overrides_path().open("r", encoding="utf-8") as file:
+            content = file.read(1024 * 1024 + 1)
+    except FileNotFoundError:
+        content = "{}"
+    if len(content) > 1024 * 1024:
+        raise ValueError("Settings store exceeds the read-only snapshot limit")
+    raw = json.loads(content)
+    if not isinstance(raw, dict):
+        raise TypeError("Settings store must be a JSON object")
+    overrides = {}
+    for name in names:
+        if name in _JOB_ENV_ALLOWED_KEYS and name in raw and raw[name] is not None:
+            value = str(raw[name]).strip()
+            if len(value) > 8192:
+                raise ValueError("Setting exceeds the Settings value size limit")
+            if value:
+                overrides[name] = value
+    return {name: _resolve_setting(name, None, high, overrides, os.environ, low) for name in names}
 
 
 def rack_mapping_mode() -> str:

@@ -29,6 +29,7 @@ No import of ``app`` here (avoids cycles); ``app.py`` calls into this module.
 """
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -92,6 +93,15 @@ def overlays_for_active() -> tuple[dict[str, str], dict[str, str]]:
 # ---------------------------------------------------------------------------
 # Active context selection
 # ---------------------------------------------------------------------------
+
+
+def overlays_for_active_readonly() -> tuple[dict[str, str], dict[str, str]]:
+    """Resolve the existing configuration ladder without writable bootstrap."""
+    from .store import read_only_repo
+
+    repo = read_only_repo()
+    project, cluster, platform = resolve(repo=repo)
+    return high_overlay(project, cluster, platform, repo=repo), low_overlay(platform, cluster, repo=repo)
 
 
 def get_active(repo: Repo | None = None) -> dict[str, str]:
@@ -259,6 +269,8 @@ def high_overlay(
     # How this cluster runs ClusterKit. RACK_ forwards over SSH; the ClusterKit launch reads both
     # through _eget, so the cluster's choice beats a global Settings value.
     _put(out, "RACK_CLUSTERKIT_TESTS", " ".join(cluster.clusterkit.tests))
+    if cluster.clusterkit_profile is not None:
+        out["RACK_CLUSTERKIT_SITE_PROFILE"] = json.dumps(cluster.clusterkit_profile)
     _put(out, "RACK_CLUSTERKIT_GPUDIRECT", "1" if cluster.clusterkit.gpudirect else "")
     _put(out, "RACK_CLUSTERKIT_MULTIRACK_TESTS", " ".join(cluster.clusterkit.multirack_tests))
     _put(out, "RACK_CLUSTER_NAME", cluster.name)
