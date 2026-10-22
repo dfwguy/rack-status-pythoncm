@@ -31,6 +31,10 @@ from clusterkit_planner import PlanningError, build_plan
 from clusterkit_profile import parse_profile
 from clusterkit_results import preflight_evidence, read_json, summarize, write_json
 
+# Healthy multi-rail UCX discovery can exceed five seconds. This remains
+# within the existing 45-second one-node / 60-second pairwise preflight step.
+UCX_DEVICE_QUERY_TIMEOUT_SECONDS = 15
+
 SOURCE_FILES = ('backend/clusterkit_profile.py', 'backend/clusterkit_planner.py', 'backend/clusterkit_job.py',
                 'backend/clusterkit_metrics.py', 'backend/clusterkit_results.py',
                 'backend/schedulers/base.py', 'backend/schedulers/slurm.py', 'backend/platforms/base.py',
@@ -231,7 +235,13 @@ def preflight_node(plan, scripts_dir):
         record['tools'] = tools
         record['mpi_version'] = checked_output([tools['mpi'], '--version'])[:4096]
         record['ucx_version'] = checked_output([tools['ucx'], '-v'])[:4096]
-        ucx = checked_output([tools['ucx'], '-d', '-t', 'rc_mlx5'])
+        record['ucx_device_inventory_timeout_seconds'] = UCX_DEVICE_QUERY_TIMEOUT_SECONDS
+        started = time.monotonic()
+        try:
+            ucx = checked_output([tools['ucx'], '-d', '-t', 'rc_mlx5'],
+                                 seconds=UCX_DEVICE_QUERY_TIMEOUT_SECONDS)
+        finally:
+            record['ucx_device_inventory_seconds'] = round(time.monotonic() - started, 3)
         if not re.search(r'Device:\s*' + re.escape(record['hca']) + r'(?:\s|$)', ucx):
             raise RuntimeError('Selected HCA is absent from the HPC-X UCX rc inventory')
         record['ucx_device_inventory'] = ucx

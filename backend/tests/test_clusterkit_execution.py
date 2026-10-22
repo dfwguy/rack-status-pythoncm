@@ -214,6 +214,53 @@ class ExecutionTests(unittest.TestCase):
             self.assertEqual(read_json(root / 'node-0-before.json')['status'], 'FAIL')
             with self.assertRaisesRegex(RuntimeError, 'No ClusterKit invocation'): E.rank_exec(plan, SCRIPTS, 'baseline')
 
+    def _ucx_discovery_preflight(self, *, never_completes=False):
+        """Model healthy seven-second inventory and a genuinely hung command without sleeping."""
+        plan = make_plan(self.root, 1)
+        root = Path(plan['results_directory']);root.mkdir()
+        network = {'host': 'node0', 'hca': 'fake_rail:1',
+                   'global_v2_gid': {'index': 5, 'gid': '2001:db8::1', 'type': 'RoCE v2'}}
+        tools = {'clusterkit': '/fake/clusterkit', 'mpi': '/fake/mpirun', 'ucx': '/fake/ucx_info'}
+        def tool(argv, **kwargs):
+            if argv[1:] == ['-d', '-t', 'rc_mlx5']:
+                if never_completes or kwargs['timeout'] < 7:
+                    raise subprocess.TimeoutExpired(argv, kwargs['timeout'])
+                return subprocess.CompletedProcess(argv, 0, 'Device: fake_rail:1\n', '')
+            return subprocess.CompletedProcess(argv, 0, 'fixture version\n', '')
+        with mock.patch.dict(os.environ, {'SLURM_JOB_ID': '123'}), \
+                mock.patch.object(E, 'rank_context', return_value=(0, 'node0')), \
+                mock.patch.object(E.platform, 'machine', return_value='aarch64'), \
+                mock.patch.object(E, 'legacy_diag'), \
+                mock.patch.object(E, 'choose_hca', return_value=network), \
+                mock.patch.object(E, 'bind_cpu', return_value={'assigned_cpu': 0, 'affinity_after': [0]}), \
+                mock.patch.object(E, 'tool_paths', return_value=tools), \
+                mock.patch.object(subprocess, 'run', side_effect=tool) as run, \
+                mock.patch.object(os, 'execv', side_effect=AssertionError('Preflight cannot benchmark')):
+            if never_completes:
+                with self.assertRaises(subprocess.TimeoutExpired):
+                    E.preflight_node(plan, SCRIPTS)
+            else:
+                E.preflight_node(plan, SCRIPTS)
+        return read_json(root/'node-0-before.json'), run.call_args_list
+
+    def test_healthy_slow_ucx_discovery_fits_bounded_preflight(self):
+        record, calls = self._ucx_discovery_preflight()
+        self.assertEqual(record['status'], 'PASS')
+        self.assertEqual(record['gid_index'], 5)
+        self.assertEqual(record['ucx_device_inventory_timeout_seconds'], 15)
+        self.assertGreaterEqual(record['ucx_device_inventory_seconds'], 0)
+        queries = [c for c in calls if c.args[0][1:] == ['-d', '-t', 'rc_mlx5']]
+        self.assertEqual(len(queries), 1)
+        self.assertEqual(queries[0].kwargs['timeout'], 15)
+
+    def test_hung_ucx_discovery_still_fails_once_and_retains_timing(self):
+        record, calls = self._ucx_discovery_preflight(never_completes=True)
+        self.assertEqual(record['status'], 'FAIL')
+        self.assertIn('timed out', record['error'])
+        self.assertEqual(record['ucx_device_inventory_timeout_seconds'], 15)
+        self.assertGreaterEqual(record['ucx_device_inventory_seconds'], 0)
+        self.assertEqual(sum(c.args[0][1:] == ['-d', '-t', 'rc_mlx5'] for c in calls), 1)
+
     def test_batch_simulates_1_2_4_8_without_real_scheduler_or_benchmarks(self):
         for count in (1, 2, 4, 8):
             plan = make_plan(self.root, count, compare=count != 1)

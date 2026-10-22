@@ -127,7 +127,7 @@ def read_only_roles():
     catalog constructor or a custom provider with unspecified side effects.
     This returns the existing transport composition and roots, without executing it.
     """
-    from config_env import read_only_values, _CATALOG_AVAILABLE, catalog_context
+    from config_env import _CATALOG_AVAILABLE, catalog_context, read_only_values
     if _topology_provider is not None:
         raise ValueError("Custom topology provider has no read-only snapshot contract")
     values = read_only_values(("RACK_EXEC_MODE", "RACK_REMOTE_BASE_PATH", "RACK_STATUS_LOG_DIR"))
