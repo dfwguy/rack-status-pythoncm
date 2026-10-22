@@ -21,6 +21,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
+from clusterkit_job import job_spec
 from clusterkit_profile import (
     LABEL,
     PAIRWISE_COUNTS,
@@ -28,6 +29,7 @@ from clusterkit_profile import (
     valid_node,
     valid_path,
 )
+from schedulers.slurm import SlurmScheduler
 
 
 class PlanningError(ValueError):
@@ -236,8 +238,6 @@ def build_plan(raw_request, resolution, inventory, *, scripts_dir, attempt_id=No
     if not blockers:
         filename = "clusterkit_preflight.sbatch" if request.scope == "preflight" else "clusterkit_pairwise.sbatch"
         entrypoint = str(PurePosixPath(scripts_dir) / filename)
-        sbatch = ["sbatch", *resources, f"--output={outdir}/slurm-%j.out",
-                  entrypoint, str(PurePosixPath(outdir) / "plan.json"), scripts_dir]
     pairs = [list(pair) for pair in itertools.combinations(selected, 2)] if request.scope != "preflight" else []
     topology = [{"node": node, "membership": "configured" if any(node in g.nodes for g in profile.topology_groups) else "unknown",
                  "groups": [{"name": g.name, "kind": g.kind, "authoritative": g.authoritative, "source": g.source}
@@ -272,6 +272,9 @@ def build_plan(raw_request, resolution, inventory, *, scripts_dir, attempt_id=No
                 "Policy and Slurm inventory are revalidated before the attempt is claimed",
             ],
             "warnings": warnings}
+    if entrypoint:
+        plan["sbatch_argv"] = ["sbatch", *SlurmScheduler.render_argv(job_spec(plan))]
+        plan["command_display"] = shlex.join(plan["sbatch_argv"])
     plan["plan_hash"] = hashlib.sha256(json.dumps(plan, sort_keys=True).encode()).hexdigest()
     return plan
 

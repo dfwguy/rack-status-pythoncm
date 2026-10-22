@@ -31,8 +31,9 @@ from clusterkit_planner import PlanningError, build_plan
 from clusterkit_profile import parse_profile
 from clusterkit_results import preflight_evidence, read_json, summarize, write_json
 
-SOURCE_FILES = ('backend/clusterkit_profile.py', 'backend/clusterkit_planner.py',
+SOURCE_FILES = ('backend/clusterkit_profile.py', 'backend/clusterkit_planner.py', 'backend/clusterkit_job.py',
                 'backend/clusterkit_metrics.py', 'backend/clusterkit_results.py',
+                'backend/schedulers/base.py', 'backend/schedulers/slurm.py', 'backend/platforms/base.py',
                 'backend/clusterkit_execution.py', 'bin/scripts/clusterkit_execute.py',
                 'bin/scripts/clusterkit_preflight.sbatch', 'bin/scripts/clusterkit_pairwise.sbatch',
                 'bin/scripts/clusterkit_rank.sh', 'bin/scripts/clusterkit_suite_node_diag.py')

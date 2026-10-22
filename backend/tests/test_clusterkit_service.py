@@ -9,16 +9,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
-
-from flask import Flask
 
 BACKEND = Path(__file__).resolve().parents[1]
 REPO = BACKEND.parent
 SCRIPTS = REPO / "bin" / "scripts"
 sys.path.insert(0, str(BACKEND))
 
-import clusterkit_api
 import clusterkit_service as service
 from clusterkit_planner import parse_inventory
 from clusterkit_profile import parse_profile
@@ -52,6 +48,10 @@ class FakeScheduler:
     def status(self, handle):
         self.last_status = handle
         return self.state
+
+    def find_by_tag(self, *args):
+        self.recovery_query = args
+        return getattr(self, "recovered_handle", None)
 
     def cancel(self, handle):
         self.cancelled.append(handle.job_id)
@@ -89,11 +89,40 @@ class FakeRegistry:
         return copy.deepcopy(row) if row else None
 
 
+def write_passing_summary(plan, root, job_id="12345"):
+    if __package__:
+        from .test_clusterkit_execution import node_record, payload
+    else:
+        from test_clusterkit_execution import node_record, payload
+    from clusterkit_results import summarize
+    for rank in range(plan['node_count']):
+        record = node_record(plan,rank)
+        record['job_id'] = job_id
+        (root/f'node-{rank}-before.json').write_text(json.dumps(record))
+    stages = [] if plan['scope']=='preflight' else ['baseline'] + (['single-path'] if plan['effective_profile']['path_comparison'] else [])
+    for stage in stages:
+        directory = root/stage/'vendor-date'
+        directory.mkdir(parents=True)
+        for test in ('bandwidth','latency'):
+            raw = payload(plan,test)
+            raw['JOBID'] = job_id
+            (directory/(test+'.json')).write_text(json.dumps(raw))
+        for rank in range(plan['node_count']):
+            record = node_record(plan,rank)
+            record.update(job_id=job_id,stage=stage)
+            (root/f'rank-placement-{stage}-{rank}.json').write_text(json.dumps(record))
+    outcome = {'job_id':job_id,'preflight_exit':0,'primary_exit':0,
+               'stages':{stage:0 for stage in stages},'errors':[],'diagnostics':{}}
+    summary = summarize(plan,root,outcome)
+    (root/'summary.json').write_text(json.dumps(summary))
+    return summary
+
+
 class ClusterKitServiceTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.root = Path(self.tmp.name)
+        self.root = Path(self.tmp.name).resolve()
         self.results = self.root / "results"
         self.results.mkdir()
         self.hpcx = self.root / "hpcx-init.sh"
@@ -206,8 +235,8 @@ class ClusterKitServiceTests(unittest.TestCase):
             scripts_dir=str(SCRIPTS), secret=self.secret, now=1001,
         )
         root = Path(submitted["results_directory"])
-        (root / "summary.json").write_text(json.dumps({"functional_status": "PASS",
-                                                        "performance_status": "UNVERIFIED"}))
+        plan = json.loads((root / "plan.json").read_text())
+        write_passing_summary(plan, root)
         scheduler.state = "COMPLETED"
         reconciled = service.reconcile(submitted["activity_id"], registry, scheduler)
         self.assertEqual(reconciled["summary"]["functional_status"], "PASS")
@@ -253,24 +282,5 @@ class ClusterKitServiceTests(unittest.TestCase):
         self.assertEqual(json.loads(nested_data)["Testname"], "bandwidth")
         with self.assertRaises(ValueError):
             service.artifact(activity, "../summary.json")
-
-
-class ClusterKitApiTests(unittest.TestCase):
-    def setUp(self):
-        self.app = Flask(__name__)
-        self.app.secret_key = "k" * 64
-        self.app.register_blueprint(clusterkit_api.clusterkit_bp)
-        self.client = self.app.test_client()
-
-    def test_readiness_and_confirmation_guard(self):
-        resolution = parse_profile({"enabled": False})
-        with mock.patch.object(clusterkit_api, "resolve_profile", return_value=resolution):
-            response = self.client.get("/api/clusterkit/readiness")
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.get_json()["configuration_ready"])
-        response = self.client.post("/api/clusterkit/runs", json={})
-        self.assertEqual(response.status_code, 400)
-
-
 if __name__ == "__main__":
     unittest.main()

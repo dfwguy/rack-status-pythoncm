@@ -269,11 +269,7 @@ except ImportError:
 if _CATALOG_AVAILABLE and catalog_bp is not None:
     app.register_blueprint(catalog_bp)
 
-# Configuration-driven ClusterKit planning/execution. The blueprint keeps the
-# new workflow isolated from the two legacy ClusterKit launch routes.
-from clusterkit_api import clusterkit_bp
-
-app.register_blueprint(clusterkit_bp)
+from request_policy import is_print_only_request
 
 # Grafana panel-embed API (/api/observability/dashboards, /dashboards/<view>, /health).
 # Optional by design: a missing bind mount or an unreadable grafana_embed_map.json must
@@ -914,6 +910,13 @@ def _hydrate_activity_task_logs(activity_id: str, rec: dict | None = None) -> No
         rec = validation_activities.get_activity(aid)
     if not rec:
         return
+    if rec.get("source") == "clusterkit-api":
+        # Modular ClusterKit owns context binding and normalized evidence. The
+        # generic Slurm/log ladder must never promote it from COMPLETED alone.
+        from clusterkit_service import refresh_activity_record
+        result = refresh_activity_record(aid, validation_activities)
+        rec.update(result["activity"])
+        return
     log_dir = str(rec.get("log_dir") or "")
     tasks = [t for t in (rec.get("tasks") or []) if isinstance(t, dict)]
     # Batch squeue lookup for all refs that still need refresh.
@@ -1095,6 +1098,13 @@ def _refresh_validation_activities_lazy(rows: list[dict]) -> None:
         aid = str(rec.get("activity_id") or rec.get("job_id") or "")
         if not aid:
             continue
+        if rec.get("source") == "clusterkit-api":
+            if rec.get("phase") not in validation_activities.TERMINAL_PHASES:
+                try:
+                    _hydrate_activity_task_logs(aid, rec)
+                except (OSError, RuntimeError, ValueError, KeyError):
+                    _logger.warning("modular ClusterKit refresh deferred for %s", aid, exc_info=True)
+            continue
         tasks = rec.get("tasks") or []
         _reconcile_validation_activity_parent_phase(aid, rec)
         if not any(_task_needs_slurm_hydration(t) for t in tasks if isinstance(t, dict)):
@@ -1141,11 +1151,12 @@ def _refresh_validation_activities_cycle() -> int:
         rec
         for rec in rows
         if isinstance(rec, dict)
-        and any(
+        and ((rec.get("source") == "clusterkit-api"
+              and rec.get("phase") not in validation_activities.TERMINAL_PHASES) or any(
             _task_needs_slurm_hydration(task)
             for task in (rec.get("tasks") or [])
             if isinstance(task, dict)
-        )
+        ))
     ]
     if not candidates:
         return 0
@@ -2798,7 +2809,7 @@ def _is_public_spa_static_path() -> bool:
 @app.before_request
 def _require_dashboard_auth():
     global _JOB_ENV_BOOTSTRAP_DONE
-    if not _JOB_ENV_BOOTSTRAP_DONE:
+    if not _JOB_ENV_BOOTSTRAP_DONE and not is_print_only_request(request.path, request.method):
         try:
             _job_env_overrides_load()
         except Exception:
@@ -10772,6 +10783,8 @@ def _lake_capture_mode() -> str:
 
 
 def _lake_should_capture(path: str, method: str) -> bool:
+    if is_print_only_request(path, method):
+        return False
     mode = _lake_capture_mode()
     if mode == "off" or not path.startswith("/api/"):
         return False

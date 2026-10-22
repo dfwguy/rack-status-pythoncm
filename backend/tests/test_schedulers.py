@@ -46,6 +46,9 @@ class ConfiguredSlurmPlatform:
     def sbatch_cmd(self, args=""):
         return self._cmd("sbatch", args)
 
+    def squeue_cmd(self, args=""):
+        return self._cmd("squeue", args)
+
     def sacct_cmd(self, args=""):
         return self._cmd("sacct", args)
 
@@ -60,7 +63,7 @@ class TestSlurmScheduler:
     def test_all_scheduler_slurm_calls_use_platform_binaries(self):
         from schedulers.base import JobHandle
 
-        conn = FakeConn({"/configured/slurm/sbatch": (0, "42\n", "")})
+        conn = FakeConn({"/configured/slurm/sbatch": (0, "42\n", ""), "/configured/slurm/sacct": (0, "PENDING\n", "")})
         sched = SlurmScheduler(conn, ConfiguredSlurmPlatform())
         handle = sched.submit(JobSpec(command="hostname"))
         sched.status(handle)
@@ -81,7 +84,7 @@ class TestSlurmScheduler:
         handle = sched.submit(spec)
         assert handle.job_id == "12345"
         cmd = conn.calls[0]
-        for frag in ["sbatch", "--parsable", "--job-name=nccl", "-N 3",
+        for frag in ["sbatch", "--parsable", "--job-name=nccl", "--nodes=3",
                      "--nodelist=n1,n2,n3", "--ntasks-per-node=4",
                      "--output=/logs/nccl_%j.out", "nccl_allreduce.sbatch",
                      "/plans/plan.json", "/opt/nvis/bin/scripts"]:
@@ -106,10 +109,10 @@ class TestSlurmScheduler:
         from schedulers.base import JobHandle
         assert SlurmScheduler(conn).status(JobHandle("1", "slurm")) == "CANCELLED"
 
-    def test_status_pending_when_sacct_empty(self):
+    def test_status_unknown_when_accounting_and_queue_empty(self):
         conn = FakeConn({"sacct": (0, "", "")})
         from schedulers.base import JobHandle
-        assert SlurmScheduler(conn).status(JobHandle("1", "slurm")) == "PENDING"
+        assert SlurmScheduler(conn).status(JobHandle("1", "slurm")) == "UNKNOWN"
 
 
 class TestLocalScheduler:

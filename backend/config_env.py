@@ -77,6 +77,16 @@ def set_materialize_hook(fn) -> None:
 
 JOB_ENV_UI_DEFINITIONS: list[dict[str, str]] = [
     {
+        "section": "jobs_cluster", "key": "RACK_CLUSTERKIT_PREVIEW_TTL_SEC",
+        "label": "ClusterKit preview lifetime (seconds)",
+        "description": "Confirmation lifetime, bounded to 30–900 seconds; default 300.",
+    },
+    {
+        "section": "jobs_cluster", "key": "RACK_CLUSTERKIT_COLLECT_GRACE_SEC",
+        "label": "ClusterKit artifact collection grace (seconds)",
+        "description": "Wait after completion for normalized results, bounded to 30–1800 seconds; default 300.",
+    },
+    {
         "section": "jobs_cluster",
         "key": "RACK_CLUSTERKIT_SITE_PROFILE",
         "label": "ClusterKit site profile (JSON, administrator only)",
