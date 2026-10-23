@@ -11,7 +11,7 @@ CPU/RoCE preflight and all-pairs bandwidth/latency, with optional baseline versu
 single-path comparison. It does **not** enable GPU tests, remote SSH staging, or
 performance acceptance. Existing rack-based ClusterKit tools remain unchanged.
 
-## Keep the Live Deployment Separate
+## 1. Keep the Live Deployment Separate
 
 On NC, the observed deployment is the root-owned Docker container
 `nvis-rack-status-nc`, image `nvis-rack-status:0.3.1-nscale-nc-app.69f742f`,
@@ -26,7 +26,7 @@ ClusterKit execution arrangement is a separate host process running as `cmods`.
 Preserve that arrangement for this review. Docker-to-host execution remains a
 separate deployment decision, not something the frontend enables automatically.
 
-## Prepare the Isolated Host Workspace
+## 2. Prepare the Isolated Host Workspace
 
 The Mac handoff includes matched source and built `static/spa` assets, plus an
 optional wheelhouse for **Linux x86_64 / CPython 3.12**. Check the actual interpreter,
@@ -35,7 +35,12 @@ architecture and wheel compatibility before installing anything.
 1. Transfer the archive through the approved jump host and verify its SHA-256.
 2. Extract into a **new**, `cmods`-owned workspace, not the live deployment tree.
 3. Confirm effective identity with `id` and confirm both the intended Python and
-   Slurm clients are usable as `cmods`. No root workaround is required or intended.
+   Slurm clients are usable as `cmods`. Load the approved Slurm module into the
+   parent service environment before launch: `sbatch`, `srun`, `sinfo`, `squeue`,
+   `scontrol` and `sacct` must resolve there. Absolute provider paths alone do
+   not satisfy the compute recipe's PATH requirements. Do not skip module
+   initialization unless that environment is already complete. No root
+   workaround is required or intended.
 4. Create a new Linux virtual environment there. Do not copy the Mac virtual
    environment. With a compatible wheelhouse, install without network access:
 
@@ -57,7 +62,7 @@ architecture and wheel compatibility before installing anything.
 The prebuilt SPA requires no Node/npm on the AppServer. Do not run `start.sh` there
 if its dependency/bootstrap downloads would require internet access.
 
-## Configure the Site Policy
+## 3. Configure the Site Policy
 
 Use the existing Settings entry **ClusterKit node validation profile (JSON)**
 (`RACK_CLUSTERKIT_SITE_PROFILE`) or the active cluster catalog's atomic
@@ -93,7 +98,7 @@ team provides and validates acceptance criteria. Preview TTL is configurable via
 `RACK_CLUSTERKIT_PREVIEW_TTL_SEC` (30-900 seconds, default 300); collection grace via
 `RACK_CLUSTERKIT_COLLECT_GRACE_SEC` (30-1800 seconds, default 300).
 
-## Validate Without Launching Jobs
+## 4. Validate Without Launching Jobs
 
 1. Confirm login, active project/cluster, readiness and the execution user.
 2. Preview one-node preflight and 2/4/8-node explicit/group selections permitted
@@ -105,7 +110,7 @@ team provides and validates acceptance criteria. Preview TTL is configurable via
 5. Confirm disabled/unsupported configuration produces an actionable error and
    cannot submit a job. Verify an unauthorized session cannot access the API.
 
-## Separately Approve Live Tests
+## 5. Separately Approve Live Tests
 
 Only after explicit cluster-owner approval, confirm one preflight, review it, then
 approve a small pairwise test. Larger tests require their own approval. This
@@ -131,13 +136,19 @@ view of the shared live/archive activity store. Generic validation history retai
 its existing exact `log_dir` semantics. Neither API rewrites the immutable summary
 just to change its scheduler-state observation.
 
-## Local Verification and Review
+## 6. Run Local Verification and Review
 
 Use `./start.sh` to build/run locally. Unit tests use Flask's in-process client,
 simulated Slurm, and synthetic UI fixtures; they require no cluster connectivity.
 Browser screenshots likewise exercise fixture responses, **not real measurements**.
-The AppServer's earlier live evidence proved the older modular backend recipe;
-this GreenLight port and UI still require the isolated AppServer review above.
+The [October 23 V19 evidence](../reference/clusterkit-v19-validation-2026-10-23.md)
+now proves the matched GreenLight API-to-Slurm lifecycle with the compute import
+fix in an isolated `cmods` host process. It does not prove the production
+container's execution arrangement. Browser fixture validation on the Mac and
+real HTTP validation on the AppServer are distinct checks. Review new releases
+with the isolation procedure above; do not repeat live jobs without a reason
+and explicit approval.
 
 Do not deploy into the live Docker application until the matched frontend/backend
-package has passed that review and a separate deployment plan is approved.
+package has passed that review and the
+[deployment plan](clusterkit-deployment-plan.md) is approved.

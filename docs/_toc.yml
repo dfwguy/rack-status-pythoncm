@@ -43,6 +43,10 @@ subtrees:
         title: How to bring P2P peers up on new or reimaged nodes
       - file: how-to/publish-the-deployment-tracker
         title: How to publish the deployment tracker
+      - file: how-to/clusterkit-ui-isolated-validation
+        title: How to validate the ClusterKit UI in an isolated instance
+      - file: how-to/clusterkit-deployment-plan
+        title: How to prepare a reviewed ClusterKit rollout on NC
 
   - caption: Reference — the machinery, described
     entries:
@@ -70,6 +74,8 @@ subtrees:
             title: Action vocabulary — every service and action
       - file: reference/p2p-catalog-distribution
         title: P2P catalog distribution — components, parameters, scripts
+      - file: reference/clusterkit-v19-validation-2026-10-23
+        title: ClusterKit V19 validation, 2026-10-23
 
   - caption: Explanation — why it is like this
     entries:
