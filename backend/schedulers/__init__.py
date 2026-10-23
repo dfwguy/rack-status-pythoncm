@@ -18,6 +18,9 @@ Backends: SlurmScheduler + LocalScheduler (implemented); run:AI / slinky / MaaS
 """
 from __future__ import annotations
 
+from importlib import import_module
+from typing import TYPE_CHECKING
+
 from schedulers.base import (
     NODE_STATES,
     TERMINAL_STATES,
@@ -26,10 +29,33 @@ from schedulers.base import (
     JobSpec,
     Scheduler,
 )
-from schedulers.factory import build_scheduler
-from schedulers.local import LocalScheduler
-from schedulers.slurm import SlurmScheduler
-from schedulers.stubs import MaaSScheduler, RunAIScheduler, SlinkyScheduler
+
+if TYPE_CHECKING:
+    from schedulers.factory import build_scheduler
+    from schedulers.local import LocalScheduler
+    from schedulers.slurm import SlurmScheduler
+    from schedulers.stubs import MaaSScheduler, RunAIScheduler, SlinkyScheduler
+
+# Importing the data model on compute nodes must not load host-only providers.
+# Preserve the public exports, resolving a backend only when a caller requests it.
+_LAZY_EXPORTS = {
+    "build_scheduler": "schedulers.factory",
+    "LocalScheduler": "schedulers.local",
+    "SlurmScheduler": "schedulers.slurm",
+    "MaaSScheduler": "schedulers.stubs",
+    "RunAIScheduler": "schedulers.stubs",
+    "SlinkyScheduler": "schedulers.stubs",
+}
+
+
+def __getattr__(name):
+    module_name = _LAZY_EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_name), name)
+    globals()[name] = value
+    return value
+
 
 __all__ = [
     "NODE_STATES",

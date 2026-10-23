@@ -109,6 +109,12 @@ def deployment(monkeypatch, tmp_path):
         _token = ""
 
         def get(self, path, **kw):
+            # Satisfy the status route's path contract independently of a checkout
+            # having a developer-created var/logs directory. Cluster data stays demo.
+            if path == "/api/status":
+                query = dict(kw.pop("query_string", {}) or {})
+                query.setdefault("log_dir", str(tmp_path))
+                kw["query_string"] = query
             return self.client.get(path, headers=self._auth(kw), **kw)
 
         def post(self, path, **kw):

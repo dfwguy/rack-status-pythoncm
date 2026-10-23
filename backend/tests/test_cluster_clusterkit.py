@@ -366,6 +366,9 @@ class TestPairs:
             (fake / f).chmod(0o755)
         env = {
             "PATH": f"{fake}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+            # Module initialization may prepend the real Slurm clients. Pin the
+            # existing launcher override so this fixture always uses its fake CLI.
+            "RACK_SLURM_BIN": str(fake),
             "NVIS_SLURM_HOSTLIST": hosts,
             "NVIS_WORKSPACE_DIR": str(tmp_path),
             "RACK_JOB_LOG_DIR": str(tmp_path / "logs"),

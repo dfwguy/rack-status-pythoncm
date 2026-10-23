@@ -16,8 +16,6 @@ import shlex
 import time
 from datetime import datetime, timedelta
 
-from platforms import get_platform
-
 from schedulers.base import TERMINAL_STATES, JobHandle, JobResult, JobSpec, Scheduler
 
 # Slurm's node states, compact (``sinfo %t``) and long (``%T`` / ``scontrol``) spellings, onto the
@@ -64,7 +62,13 @@ class SlurmScheduler(Scheduler):
 
     def __init__(self, connection, platform=None, profile: str = "control"):
         self.conn = connection
-        self.platform = platform or get_platform()
+        # Pure argv rendering is also used by compute-side plan validation;
+        # importing it must not pull in the application's host transport/store.
+        if platform is None:
+            from platforms import get_platform
+
+            platform = get_platform()
+        self.platform = platform
         self.profile = profile
 
     def _run(self, cmd: str, timeout: int = 120):
