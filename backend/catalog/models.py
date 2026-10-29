@@ -32,7 +32,7 @@ _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
 # Vocabulary kept permissive on purpose -- new GPUs/vendors must not require a code
 # change. These lists drive UI hints/validation warnings, not hard rejection.
 GPU_MODELS = ("B200", "B300", "GB200", "GB300", "R200", "VR200", "H200", "H100")
-CPU_VENDORS = ("Grace", "Intel", "AMD")
+CPU_VENDORS = ("Grace", "Vera", "Intel", "AMD")
 SYSTEM_VENDORS = ("NVIDIA", "DGX", "Dell", "SMC", "Supermicro")
 FORM_FACTORS = ("NVL72", "NVL36", "HGX-8", "HGX-4", "MGX")
 CLUSTER_MANAGERS = ("bcm", "maas")
@@ -232,7 +232,7 @@ class Platform:
     generation: str = ""  # Blackwell, Blackwell-Ultra, Rubin, Hopper
     gpu_model: str = ""  # B200, B300, GB200, GB300, R200, VR200
     superchip: str = ""  # GB200, GB300, VR200, or "" for HGX/x86 systems
-    cpu_vendor: str = ""  # Grace, Intel, AMD
+    cpu_vendor: str = ""  # Grace, Vera, Intel, AMD
     cpu_arch: str = ""  # arm64, x86_64
     system_vendor: str = ""  # NVIDIA, DGX, Dell, SMC
     form_factor: str = ""  # NVL72, NVL36, HGX-8

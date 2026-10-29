@@ -45,8 +45,8 @@
 #   NVIS_EXEMPLAR_CPU_PARTITION  SLURM CPU partition            (default defq)
 #   NVIS_EXEMPLAR_GPU_GRES       GPUs per node (NVL72 = 4)      (default 4)
 #   NVIS_EXEMPLAR_GPU_TYPE       gb200 | gb300 | vr200 | h100   (default gb200). Also drives the
-#                                NVL NCCL scale patch: gb*/NVL72 adds 72xN scales, vr*/NVL144
-#                                adds 144xN (1..8 racks) to nccl/metadata.yaml so full-rack
+#                                NVL NCCL scale patch: GBx00 and VR200 NVL72 add 72xN scales
+#                                (1..8 racks) to nccl/metadata.yaml so full-rack
 #                                microbenchmark_nccl passes. See docs/DGXC_LLMB_NCCL_SCALE_PATCH.md
 #   NVIS_EXEMPLAR_ARCH           aarch64 | x86_64               (default aarch64)
 #   NVIS_EXEMPLAR_INSTALL_METHOD slurm | local                  (default slurm)
@@ -159,15 +159,15 @@ ensure_repo_trust
 
 # --- NVL72 / NVL144 NCCL scale allowlist patch ---------------------------------
 # Stock microbenchmark_nccl only accepts POWER-OF-TWO scales, so a full NVLink rack
-# (GBx00 NVL72 = 72 GPUs, VRx00 NVL144 = 144) and its N-rack multiples are rejected by
+# (GBx00 and VR200 NVL72 = 72 GPUs) and its N-rack multiples are rejected by
 # `llmb-run single --scale`. We add the rack multiples (1..8 racks) to the recipe's
 # nccl/metadata.yaml for the ACTIVE gpu_type profile, preserving the originals. Idempotent
 # and re-applied on every install (metadata.yaml lives in llmb_repo, which llmb-install
 # regenerates). See docs/DGXC_LLMB_NCCL_SCALE_PATCH.md.
 _rack_gpus_for_gpu_type() {
-  case "${1,,}" in
-    gb200|gb300|gbx00|gb*) echo 72 ;;
-    vr200|vr300|vrx00|vr*) echo 144 ;;
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    gb200|gb300|gbx00|gb*|vr200) echo 72 ;;
+    vr300|vrx00|vr*) echo 144 ;;
     *) echo 0 ;;
   esac
 }

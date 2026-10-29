@@ -10,6 +10,8 @@
 """Tests for the NVIS catalog: store, models, seed/migrate, and context resolution."""
 from __future__ import annotations
 
+from copy import deepcopy
+
 import pytest
 from catalog import context, models, seed
 from catalog.store import (
@@ -131,6 +133,85 @@ class TestModels:
 
 
 class TestSeed:
+    def test_vr_nvl72_hardware_profile(self, repo):
+        seed.migrate(repo, env={})
+        platform = models.Platform.from_dict(repo.get(TABLE_PLATFORMS, "vr200-nvl"))
+        assert platform.validate() == []
+        assert platform.cpu_vendor == "Vera"
+        assert platform.cpu_vendor in models.CPU_VENDORS
+        assert platform.cpu_arch == "arm64"
+        assert not platform.has_capability("grace")
+        assert platform.interconnect["scaleup"] == "NVLink6"
+        g = platform.geometry
+        assert (g.gpus_per_node, g.nodes_per_tray, g.trays_per_rack) == (4, 1, 18)
+        assert g.gpus_per_node * g.nodes_per_tray * g.trays_per_rack == g.gpus_per_rack == 72
+        assert g.nvlink_domain == 72
+        # Hardware metadata does not claim a verified workload/container release.
+        assert platform.status == "future"
+
+    @pytest.mark.parametrize("product", ["vr200", "VR NVL72", "Vera Rubin NVL72"])
+    def test_vr_project_selects_rubin_instead_of_gb200(self, repo, product):
+        seed.migrate(repo, env={
+            "RACK_CLUSTER_PRODUCT_LINE": product,
+            "RACK_CLUSTER_CUSTOMER_NAME": "Lab",
+            "RACK_PROJECT_ID": "vr-lab",
+            "RACK_CLUSTER_ID": "early-vr",
+            "RACK_PLATFORM": "bcm",
+        })
+        project, cluster, platform = context.resolve(repo=repo)
+        assert project.id == "vr-lab"
+        assert project.customer == "Lab"
+        assert cluster.id == "early-vr"
+        assert cluster.cluster_manager == "bcm"
+        assert platform.id == "vr200-nvl"
+
+    def test_rubin_nvl4_name_is_not_treated_as_nvl72(self):
+        assert seed._guess_platform_id({"RACK_CLUSTER_PRODUCT_LINE": "Vera Rubin NVL4"}) != "vr200-nvl"
+
+    @pytest.mark.parametrize("source", ["seed", "user"])
+    def test_migrate_legacy_vr_defaults_preserves_site_settings(self, repo, source):
+        legacy = deepcopy(next(p for p in seed.SEED_PLATFORMS if p["id"] == "vr200-nvl"))
+        legacy.update({
+            "name": "VR200 NVL (Vera Rubin)",
+            "cpu_vendor": "Grace",
+            "capabilities": ["nvlink", "nvswitch", "imex", "mnnvl", "grace"],
+            "description": "Vera Rubin VR200 NVL (forward-looking; geometry provisional).",
+            "system_vendor": "HPE",
+            "source": source,
+        })
+        legacy["geometry"]["nodes_per_tray"] = 2
+        legacy["tool_param_defaults"]["RACK_STATUS_LOG_DIR"] = "/site/logs"
+        repo.upsert(TABLE_PLATFORMS, legacy)
+        result = seed.migrate(repo, env={})
+        updated = repo.get(TABLE_PLATFORMS, "vr200-nvl")
+        if source == "user":
+            assert result["vr200_platform_updated"] is False
+            assert updated == legacy
+            return
+        assert result["vr200_platform_updated"] is True
+        assert updated["cpu_vendor"] == "Vera"
+        assert updated["geometry"]["nodes_per_tray"] == 1
+        assert "grace" not in updated["capabilities"]
+        assert updated["system_vendor"] == "HPE"
+        assert updated["tool_param_defaults"]["RACK_STATUS_LOG_DIR"] == "/site/logs"
+        assert seed.migrate(repo, env={})["vr200_platform_updated"] is False
+        assert repo.get(TABLE_PLATFORMS, "vr200-nvl") == updated
+
+    @pytest.mark.parametrize("source", ["seed", "user"])
+    def test_migrate_preserves_custom_vr_hardware(self, repo, source):
+        custom = deepcopy(next(p for p in seed.SEED_PLATFORMS if p["id"] == "vr200-nvl"))
+        custom.update({
+            "name": "Site VR",
+            "cpu_vendor": "Site Vera",
+            "description": "Site-approved profile",
+            "capabilities": ["nvlink"],
+            "source": source,
+        })
+        custom["geometry"].update({"trays_per_rack": 9, "gpus_per_rack": 36})
+        repo.upsert(TABLE_PLATFORMS, custom)
+        assert seed.migrate(repo, env={})["vr200_platform_updated"] is False
+        assert repo.get(TABLE_PLATFORMS, "vr200-nvl") == custom
+
     def test_seed_counts_and_idempotent(self, repo):
         s1 = seed.migrate(repo, env={})
         assert s1["platforms_added"] == len(seed.SEED_PLATFORMS)
@@ -173,6 +254,37 @@ class TestSeed:
 
 
 class TestContext:
+    @pytest.mark.parametrize("platform_id, expected", [("gb300-nvl72", "4"), ("b200-hgx-intel", "8")])
+    def test_existing_platform_placement_keeps_hardware_geometry(self, platform_id, expected):
+        platform = models.Platform.from_dict(next(p for p in seed.SEED_PLATFORMS if p["id"] == platform_id))
+        cluster = models.Cluster(
+            id="lab", name="Lab", platform_id=platform_id,
+            geometry=models.ClusterGeometry(trays_per_rack=2),
+        )
+        low = context.geometry_defaults(platform, cluster)
+        assert low["RACK_CLUSTER_GPU_PER_TRAY"] == expected
+        assert low["GPUS_PER_NODE"] == expected
+        assert low["RACK_EXPORT_NODES_PER_RACK"] == "2"
+
+    @pytest.mark.parametrize("trays", [1, 9, 18])
+    def test_vr_placement_does_not_change_gpus_inside_a_tray(self, repo, trays):
+        seed.migrate(repo, env={})
+        platform = models.Platform.from_dict(repo.get(TABLE_PLATFORMS, "vr200-nvl"))
+        cluster = models.Cluster(
+            id="early-vr", name="Early VR", platform_id=platform.id,
+            geometry=models.ClusterGeometry(trays_per_rack=trays),
+        )
+        low = context.low_overlay(platform, cluster)
+        assert low["GPUS_PER_NODE"] == "4"
+        assert low["RACK_CLUSTER_GPU_PER_TRAY"] == "4"
+        assert low["RACK_EXPORT_NODES_PER_RACK"] == str(trays)
+        assert low["RACK_VALIDATION_CT_RANGE"] == f"01-{trays:02d}"
+        assert low["GPU_MODEL_FLAG"] == "vr200"
+        assert "RACK_STATUS_LOG_DIR" not in low
+        assert "RACK_VALIDATION_CONTAINER_ROOT" not in low
+        assert "CORE_TO_HCA_SCRIPT" not in low
+        assert "MNNVL_TOPOLOGY" not in low
+
     def test_active_and_resolve(self, seeded):
         active = context.get_active()
         assert active["project"] == "nscale"

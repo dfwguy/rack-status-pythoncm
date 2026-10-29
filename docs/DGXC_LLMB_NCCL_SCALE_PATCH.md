@@ -1,17 +1,52 @@
-# DGXC-Benchmarking (`llmb-run`) — NCCL scale + node-pinning patch (GBx00 / VRx00)
+# DGXC-Benchmarking (`llmb-run`) — NCCL scale + node-pinning patch (GBx00 / VR200)
 
 Patch instructions for running the `microbenchmark_nccl` workload from
 [`dgxc-benchmarking`](https://github.com/NVIDIA/dgxc-benchmarking) (a.k.a. **Exemplar** /
 `llmb-run`) on **full-rack NVLink domains** — GB200/GB300 **NVL72** (GBx00) and VR200
-**NVL144** (VRx00). Validated on Boston (GB200 NVL72, DGXC `v25.10.01`, `llmb-run` v25.10.01)
+**NVL72**. Validated on Boston (GB200 NVL72, DGXC `v25.10.01`, `llmb-run` v25.10.01)
 2026-07-03.
 
+VR200 geometry follows the [VR NVL72 validation requirements, Section 3.2](https://gitlab-master.nvidia.com/nvis-npi/DGXC-NVIS-Validation/-/blob/main/DGXC-Partner-Validation-VR-NVL72.md#32-rack-level-validation):
+18 nodes × 4 GPUs = 72 GPUs per rack. Workspace preparation is tested offline;
+Rubin workload recipes and containers still require verification on the target system.
+The [DGX VR hardware guide](https://docs.nvidia.com/dgx/dgxvr-user-guide/hardware.html#compute-trays)
+describes each compute tray as one OS-running compute node with two Vera CPUs and
+four Rubin GPUs. `nodes_per_tray` counts OS nodes, not CPUs or compute boards.
+
 **TL;DR** — Out of the box `microbenchmark_nccl` only accepts **power-of-two** GPU scales, so a
-full rack (72 GPUs on GBx00, 144 on VRx00) and its N-rack multiples are rejected. You must
+full rack (72 GPUs on GBx00 or VR200 NVL72) and its N-rack multiples are rejected. You must
 (1) add the rack-multiple scales to the workload's `metadata.yaml`, (2) drive the new
 `llmb-run single` CLI (the old `submit --nodelist` is gone), pinning nodes via a `sbatch`
 `--nodelist` shim (⚠️ **not** `SBATCH_NODELIST` — that env var is ignored by sbatch), and
 (3) fix workspace ownership + git trust if the install ran as root.
+
+---
+
+## VR NVL72 follow-up
+
+The catalog entry remains `future`. Correct geometry and an allowed GPU count do
+not establish workload compatibility. Track the remaining support work here:
+
+- [ ] Select a Rubin-compatible benchmarking release and record the verified driver,
+  CUDA, NCCL, DCGM/EUD and container versions in the existing tool/platform configuration.
+  The installer's historical `v25.10.01` default is not a Rubin recommendation.
+- [ ] Audit launch defaults in `backend/validation_presets.py`,
+  `bin/scripts/nemo-nemotron5h_56b-mbridge-fp8.sh`, and
+  `bin/scripts/clusterkit.sbatch`. Replace or explicitly gate GB300-specific images,
+  GPU recipe defaults, topology files and CPU-to-HCA mappings for VR. Do not copy
+  another platform's recipe merely to make a `vr200` block exist.
+- [ ] Map the selected tools to Section 3 of the VR validation guide: include
+  DeepSeek V3 FP8, conditional Ubergemm2, node-level checks and rack NVLink-only
+  collectives. Confirm duration/repetition, telemetry, error and coverage evidence
+  through the existing workflow and results pipeline.
+- [ ] Validate the configured BCM inventory, node/rack mapping, PythonCM API access
+  where used, and Slurm/Enroot/Pyxis execution on a reserved target. Keep customer
+  hostnames, paths, accounts and partitions on the project/cluster configuration.
+- [ ] Run node and complete-rack acceptance on hardware with matching approved
+  performance references. Confirm actual rail/port topology and fabric settings;
+  inherited fabric defaults are not as-built verification. Update support status
+  only after recording that evidence. Apply multi-rack requirements only at the
+  available and agreed scale.
 
 ---
 
@@ -23,8 +58,8 @@ ERROR: Error: Scale 72 not supported for microbenchmark_nccl_nccl.
 Supported scales: 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048
 ```
 
-A full GBx00 rack = **18 nodes × 4 GPUs = 72 GPUs**; a full VRx00 rack = **144 GPUs**. Neither
-72 nor 144 (nor their N-rack multiples) is a power of two, so the recipe validator rejects them.
+A full GBx00 or VR200 NVL72 rack = **18 nodes × 4 GPUs = 72 GPUs**.
+72 and its N-rack multiples are not powers of two, so the recipe validator rejects them.
 
 ---
 
@@ -42,9 +77,10 @@ validation — from the workload recipe's `metadata.yaml`:
 selected by `launcher.gpu_type` in `<LLMB_INSTALL>/cluster_config.yaml`.
 
 > Stock `v25.10.01` ships only `gb200`, `b200`, `h100` blocks. Confirm which one your cluster
-> uses: `grep gpu_type <LLMB_INSTALL>/cluster_config.yaml`. GB200/GB300 NVL72 clusters run the
-> **`gb200`** profile. If your cluster reports a `gpu_type` with no matching block, add one
-> (copy an existing block and rename) — otherwise `llmb-run` errors before scale validation.
+> uses: `grep gpu_type <LLMB_INSTALL>/cluster_config.yaml`. The historical Boston deployment
+> used the **`gb200`** profile. A Rubin deployment needs a release with a compatible
+> **`vr200`** recipe; renaming a Blackwell profile does not establish Rubin support.
+> If there is no matching block, the installer leaves that recipe unchanged.
 
 ### 1a. GBx00 — NVL72 (72 GPUs/rack)
 
@@ -59,18 +95,18 @@ the original power-of-two scales. Edit the `gb200` block's `scales:` line to:
 |------:|--:|--:|--:|--:|--:|--:|--:|--:|
 | GPUs (`--scale`) | 72 | 144 | 216 | 288 | 360 | 432 | 504 | 576 |
 
-### 1b. VRx00 — NVL144 (144 GPUs/rack)
+### 1b. VR200 — NVL72 (72 GPUs/rack)
 
-Add the 144-multiples for 1–8 racks (`144, 288, 432, 576, 720, 864, 1008, 1152`), keeping the
-originals. Edit the VRx00 profile's `scales:` line (the block named for your `gpu_type`) to:
+Use the same 72-multiples as §1a, applied only to an existing, compatible `vr200`
+profile. Keep the original power-of-two scales:
 
 ```yaml
-          scales: [2, 4, 8, 16, 32, 64, 128, 144, 256, 288, 432, 512, 576, 720, 864, 1008, 1024, 1152, 2048]
+          scales: [2, 4, 8, 16, 32, 64, 72, 128, 144, 216, 256, 288, 360, 432, 504, 512, 576, 1024, 2048]
 ```
 
 | Racks | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
 |------:|--:|--:|--:|--:|--:|--:|--:|--:|
-| GPUs (`--scale`) | 144 | 288 | 432 | 576 | 720 | 864 | 1008 | 1152 |
+| GPUs (`--scale`) | 72 | 144 | 216 | 288 | 360 | 432 | 504 | 576 |
 
 ### 1c. Apply idempotently (target only the right block)
 
@@ -88,14 +124,14 @@ inblk && /scales:/{print "          scales: [2, 4, 8, 16, 32, 64, 72, 128, 144, 
 ' "$F" > "$F.new" && mv "$F.new" "$F"
 ```
 
-For **VRx00**, swap the block guards to your `gpu_type` (and the reset guard to the following
-sibling block) and use the 144-multiple list from §1b.
+For **VR200**, swap the block guards to `vr200` (and the reset guard to the following
+sibling block) and use the 72-multiple list from §1b.
 
 ### 1d. Verify
 
 ```bash
 LLMB_INSTALL=<LLMB_INSTALL> <LLMB_INSTALL>/llmb-run list
-# microbenchmark_nccl → nccl → Scales: … 72 … 144 … 288 … (or 144 … 288 … for VRx00)
+# microbenchmark_nccl → nccl → Scales: … 72 … 144 … 288 …
 ```
 
 > **Durability:** `metadata.yaml` lives in `llmb_repo`, which a **reinstall regenerates** — the
@@ -220,7 +256,7 @@ repos"** checkbox (`NVIS_EXEMPLAR_TRUST_GIT`, default on) in Tools → Operation
 3. `LLMB_INSTALL` = the **workspace** (`<top>/llmb`); binary resolves (§3).
 4. Workspace owned by the invoking user; git repos trusted (§4).
 5. Drive `llmb-run single` with the `sbatch --nodelist` shim for rack pinning (§2); `--scale`
-   = the exact rack-multiple (72×N for GBx00, 144×N for VRx00).
+   = the exact rack-multiple (72×N for GBx00 or VR200 NVL72).
 6. Dry-run (`-d`) clean → real submit → confirm `ReqNodeList` (not `(null)`) lists the
    requested racks via `scontrol show job <id>`.
 
