@@ -133,6 +133,15 @@ class TestModels:
 
 
 class TestSeed:
+    @pytest.mark.parametrize("platform_id", ["gb200-nvl72", "gb300-nvl72"])
+    def test_grace_blackwell_profiles_retain_grace(self, repo, platform_id):
+        seed.migrate(repo, env={})
+        platform = models.Platform.from_dict(repo.get(TABLE_PLATFORMS, platform_id))
+        assert platform.cpu_vendor == "Grace"
+        assert platform.has_capability("grace")
+        assert platform.geometry.gpus_per_node == 4
+        assert platform.geometry.gpus_per_rack == 72
+
     def test_vr_nvl72_hardware_profile(self, repo):
         seed.migrate(repo, env={})
         platform = models.Platform.from_dict(repo.get(TABLE_PLATFORMS, "vr200-nvl"))
@@ -169,7 +178,7 @@ class TestSeed:
         assert seed._guess_platform_id({"RACK_CLUSTER_PRODUCT_LINE": "Vera Rubin NVL4"}) != "vr200-nvl"
 
     @pytest.mark.parametrize("source", ["seed", "user"])
-    def test_migrate_legacy_vr_defaults_preserves_site_settings(self, repo, source):
+    def test_seed_preserves_existing_vr_profile(self, repo, source):
         legacy = deepcopy(next(p for p in seed.SEED_PLATFORMS if p["id"] == "vr200-nvl"))
         legacy.update({
             "name": "VR200 NVL (Vera Rubin)",
@@ -182,35 +191,10 @@ class TestSeed:
         legacy["geometry"]["nodes_per_tray"] = 2
         legacy["tool_param_defaults"]["RACK_STATUS_LOG_DIR"] = "/site/logs"
         repo.upsert(TABLE_PLATFORMS, legacy)
-        result = seed.migrate(repo, env={})
-        updated = repo.get(TABLE_PLATFORMS, "vr200-nvl")
-        if source == "user":
-            assert result["vr200_platform_updated"] is False
-            assert updated == legacy
-            return
-        assert result["vr200_platform_updated"] is True
-        assert updated["cpu_vendor"] == "Vera"
-        assert updated["geometry"]["nodes_per_tray"] == 1
-        assert "grace" not in updated["capabilities"]
-        assert updated["system_vendor"] == "HPE"
-        assert updated["tool_param_defaults"]["RACK_STATUS_LOG_DIR"] == "/site/logs"
-        assert seed.migrate(repo, env={})["vr200_platform_updated"] is False
-        assert repo.get(TABLE_PLATFORMS, "vr200-nvl") == updated
-
-    @pytest.mark.parametrize("source", ["seed", "user"])
-    def test_migrate_preserves_custom_vr_hardware(self, repo, source):
-        custom = deepcopy(next(p for p in seed.SEED_PLATFORMS if p["id"] == "vr200-nvl"))
-        custom.update({
-            "name": "Site VR",
-            "cpu_vendor": "Site Vera",
-            "description": "Site-approved profile",
-            "capabilities": ["nvlink"],
-            "source": source,
-        })
-        custom["geometry"].update({"trays_per_rack": 9, "gpus_per_rack": 36})
-        repo.upsert(TABLE_PLATFORMS, custom)
-        assert seed.migrate(repo, env={})["vr200_platform_updated"] is False
-        assert repo.get(TABLE_PLATFORMS, "vr200-nvl") == custom
+        seed.migrate(repo, env={})
+        assert repo.get(TABLE_PLATFORMS, "vr200-nvl") == legacy
+        seed.migrate(repo, env={})
+        assert repo.get(TABLE_PLATFORMS, "vr200-nvl") == legacy
 
     def test_seed_counts_and_idempotent(self, repo):
         s1 = seed.migrate(repo, env={})

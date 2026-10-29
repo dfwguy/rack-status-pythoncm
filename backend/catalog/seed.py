@@ -15,7 +15,6 @@
 * upserts the built-in **platforms** and **tools** *only when a doc with that id does
   not already exist* (so operator edits are never clobbered). Built-ins are tagged
   ``source="seed"``;
-* corrects known legacy VR NVL72 seed fields only when their old values still match;
 * on first run (no projects yet), creates a **default project/cluster from the current
   environment** (``NVIS_*`` / ``RACK_*``) so existing single-cluster deployments keep
   working unchanged, and records it as the active context.
@@ -615,38 +614,11 @@ def build_default_project_from_env(env: dict[str, str] | None = None) -> models.
 # ---------------------------------------------------------------------------
 
 
-def _migrate_vr200_platform(repo: Repo) -> bool:
-    """Correct legacy VR defaults without replacing an operator's site settings."""
-    raw = repo.get(TABLE_PLATFORMS, "vr200-nvl")
-    if raw is None or raw.get("source") != "seed":
-        return False
-    target = next(p for p in SEED_PLATFORMS if p["id"] == "vr200-nvl")
-    legacy = {
-        "name": "VR200 NVL (Vera Rubin)",
-        "cpu_vendor": "Grace",
-        "geometry": {
-            "gpus_per_node": 4,
-            "nodes_per_tray": 2,
-            "trays_per_rack": 18,
-            "gpus_per_rack": 72,
-            "nvlink_domain": 72,
-        },
-        "capabilities": ["nvlink", "nvswitch", "imex", "mnnvl", "grace"],
-        "description": "Vera Rubin VR200 NVL (forward-looking; geometry provisional).",
-    }
-    updates = {key: target[key] for key, old in legacy.items() if raw.get(key) == old}
-    if not updates:
-        return False
-    repo.upsert(TABLE_PLATFORMS, {**raw, **updates})
-    return True
-
-
 def migrate(repo: Repo, *, env: dict[str, str] | None = None) -> dict[str, Any]:
     """Idempotently seed/migrate the catalog. Returns a small summary for logging."""
     summary: dict[str, Any] = {
         "platforms_added": 0,
         "tools_added": 0,
-        "vr200_platform_updated": False,
         "default_project_created": False,
     }
 
@@ -655,7 +627,6 @@ def migrate(repo: Repo, *, env: dict[str, str] | None = None) -> dict[str, Any]:
         if repo.get(TABLE_PLATFORMS, p["id"]) is None:
             repo.upsert(TABLE_PLATFORMS, models.Platform.from_dict(p).to_dict())
             summary["platforms_added"] += 1
-    summary["vr200_platform_updated"] = _migrate_vr200_platform(repo)
     for t in SEED_TOOLS:
         if repo.get(TABLE_TOOLS, t["id"]) is None:
             repo.upsert(TABLE_TOOLS, models.Tool.from_dict(t).to_dict())

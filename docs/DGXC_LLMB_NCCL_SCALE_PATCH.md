@@ -25,8 +25,12 @@ full rack (72 GPUs on GBx00 or VR200 NVL72) and its N-rack multiples are rejecte
 ## VR NVL72 follow-up
 
 The catalog entry remains `future`. Correct geometry and an allowed GPU count do
-not establish workload compatibility. Track the remaining support work here:
+not establish workload compatibility. Seeding supplies corrected defaults for new
+catalogs and leaves existing saved profiles untouched. Track the remaining support
+work here:
 
+- [ ] If reusing a catalog, review its saved `vr200-nvl` entry and update the Vera
+  CPU and NVL72 geometry through the catalog UI as needed. Retain site customizations.
 - [ ] Select a Rubin-compatible benchmarking release and record the verified driver,
   CUDA, NCCL, DCGM/EUD and container versions in the existing tool/platform configuration.
   The installer's historical `v25.10.01` default is not a Rubin recommendation.
