@@ -43,6 +43,10 @@ import {
 } from "../lib/rackTopology";
 
 interface RackFloorViewProps {
+  /** Opt-in logical grid when the caller has no configured physical row layout. */
+  unconfiguredLayout?: "tiles";
+  selectedRack?: string;
+  initialStatusMode?: FloorStatusMode;
   rows: RackRow[];
   naming?: NvisNamingSchema;
   /** Backend-authoritative section/row/rack tree; preferred over client parsing. */
@@ -166,6 +170,9 @@ function schedulerCountsText(nodes: NodeInventoryEntry[]): string {
 }
 
 interface RackTileProps {
+  fullLabel?: boolean;
+  selectionLabel?: string;
+  selected?: boolean;
   rack: FloorRack;
   /** This rack's nodes in tray order; empty when the server sent no inventory for it. */
   nodes: NodeInventoryEntry[];
@@ -174,7 +181,7 @@ interface RackTileProps {
   onRackSelect?: (rack: string) => void;
 }
 
-function RackTile({ rack, nodes, mode, sources, onRackSelect }: RackTileProps) {
+function RackTile({ rack, nodes, mode, sources, onRackSelect, selected = false, selectionLabel, fullLabel = false }: RackTileProps) {
   const { row, parts, health } = rack;
   const vColor = validationColor(row.nemo);
   const scheduler = mode === "scheduler" && nodes.length > 0 ? schedulerRackSummary(nodes) : null;
@@ -199,6 +206,8 @@ function RackTile({ rack, nodes, mode, sources, onRackSelect }: RackTileProps) {
     <Tooltip title={tip} arrow placement="top">
       <Box
         role="button"
+        aria-pressed={selected}
+        aria-label={selectionLabel}
         tabIndex={0}
         onClick={() => onRackSelect?.(row.rack)}
         onKeyDown={(e) => {
@@ -209,6 +218,8 @@ function RackTile({ rack, nodes, mode, sources, onRackSelect }: RackTileProps) {
         }}
         sx={{
           position: "relative",
+          outline: selected ? "2px solid" : "none",
+          outlineColor: "primary.main",
           width: 96,
           cursor: onRackSelect ? "pointer" : "default",
           border: "1px solid var(--border-color-base, rgba(0,0,0,0.18))",
@@ -227,7 +238,9 @@ function RackTile({ rack, nodes, mode, sources, onRackSelect }: RackTileProps) {
           sx={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, borderRadius: "3px 0 0 3px", background: edge }}
         />
         <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 0.5 }}>
-          <Text kind="mono/sm" style={{ fontWeight: 700 }}>{parts.rackLabel}</Text>
+          <Text kind="mono/sm" style={{ fontWeight: 700, ...(fullLabel ? {
+            maxWidth: 64, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          } : {}) }}>{fullLabel ? row.rack : parts.rackLabel}</Text>
           <Box sx={{ display: "flex", alignItems: "center", gap: "4px" }}>
             {vColor && (
               <Box sx={{ width: 7, height: 7, borderRadius: "50%", backgroundColor: vColor }} />
@@ -235,9 +248,9 @@ function RackTile({ rack, nodes, mode, sources, onRackSelect }: RackTileProps) {
             <Box sx={{ width: 8, height: 8, borderRadius: "50%", background: edge }} />
           </Box>
         </Box>
-        {nodes.length > 0 ? <NodeGrid nodes={nodes} mode={mode} /> : <TrayGrid rack={rack} />}
-        <Text kind="body/regular/sm" style={{ display: "block", marginTop: 4, fontSize: 11, color: "var(--color-text-secondary, #6b6b6b)" }}>
-          {scheduler
+        {nodes.length > 0 ? <NodeGrid nodes={nodes} mode={mode} /> : !fullLabel ? <TrayGrid rack={rack} /> : null}
+        <Text kind="body/regular/sm" style={{ display: "block", marginTop: 4, fontSize: 14, color: "var(--text-color-secondary)" }}>
+          {fullLabel && !nodes.length ? "No mapped nodes" : scheduler
             ? `${scheduler.counts.idle}/${scheduler.total} idle`
             : `${health.upCount}/${health.total} up`}
         </Text>
@@ -276,6 +289,9 @@ function loadGroupBy(): "row" | "su" {
 
 /** Datacenter floor view: racks grouped by section (hall) -> row, each a tile with a tray micro-grid. */
 export function RackFloorView({
+  unconfiguredLayout,
+  selectedRack,
+  initialStatusMode,
   rows,
   naming,
   hierarchy,
@@ -310,13 +326,16 @@ export function RackFloorView({
     }
   };
   const showSu = suGroups.length > 0 && groupBy === "su";
+  const flat = unconfiguredLayout === "tiles";
+  const flatRacks = sections.flatMap((section) => section.rows.flatMap((row) => row.racks))
+    .sort((a, b) => a.row.rack.localeCompare(b.row.rack, undefined, { numeric: true }));
   const multiSection = sections.length > 1 || (sections[0]?.key ?? "") !== "";
 
   // The orchestrator view is the default and always there; the scheduler view only where a
   // scheduler answered for these nodes -- a floor painted entirely "unknown" would say nothing.
   const byRack = useMemo(() => inventoryByRack(nodes), [nodes]);
   const schedulerAvailable = Boolean(nodeSources?.scheduler) && Boolean(byRack && byRack.size > 0);
-  const [statusMode, setStatusMode] = useState<FloorStatusMode>(loadStatusMode);
+  const [statusMode, setStatusMode] = useState<FloorStatusMode>(() => initialStatusMode ?? loadStatusMode());
   const changeStatusMode = (mode: FloorStatusMode) => {
     setStatusMode(mode);
     try {
@@ -331,6 +350,9 @@ export function RackFloorView({
     <RackTile
       key={r.row.rack}
       rack={r}
+      fullLabel={flat}
+      selected={selectedRack === r.row.rack}
+      selectionLabel={selectedRack !== undefined ? `Select rack ${r.row.rack}` : undefined}
       nodes={nodesInTrayOrder(byRack?.get(r.row.rack.trim().toLowerCase()) ?? [])}
       mode={mode}
       sources={nodeSources}
@@ -374,7 +396,7 @@ export function RackFloorView({
                     size="tiny"
                     onClick={() => changeGroupBy(g)}
                   >
-                    {g === "row" ? "By row" : "By SU"}
+                    {g === "row" ? flat ? "Overview" : "By row" : "By SU"}
                   </Button>
                 ))}
               </Box>
@@ -417,7 +439,15 @@ export function RackFloorView({
           </Box>
         ))}
 
-      {!showSu && sections.map((section) => (
+      {!showSu && flat ? (
+        <Box role="group" aria-label="Rack tiles" sx={{
+          display: "grid", gridTemplateColumns: "repeat(auto-fill, 96px)", gap: 1,
+          alignItems: "start", justifyContent: "start",
+        }}>
+          {flatRacks.map(tile)}
+        </Box>
+      ) : null}
+      {!showSu && !flat && sections.map((section) => (
         <Box key={section.key || "all"} sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
           {multiSection && (
             <Text kind="title/sm" style={{ display: "block" }}>

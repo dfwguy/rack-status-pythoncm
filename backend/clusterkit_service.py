@@ -121,7 +121,8 @@ def recipe_digest(plan):
     files = set(SOURCE_FILES) | {'backend/clusterkit_service.py', 'backend/clusterkit_context.py',
         'backend/clusterkit_artifacts.py', 'backend/clusterkit_attempts.py',
         'backend/clusterkit_summary.py', 'backend/schedulers/slurm.py',
-        'backend/schedulers/base.py', 'backend/platforms/base.py'}
+        'backend/schedulers/base.py', 'backend/platforms/base.py',
+        'backend/clusterkit_inventory.py', 'backend/cluster_snapshot.py'}
     return _hash({'sources': {name: digest(source_path(name, plan['scripts_directory'])) for name in sorted(files)},
                   'hpcx_init': digest(plan['effective_profile']['hpcx_init'])})
 
@@ -162,7 +163,13 @@ def readiness(resolution: ProfileResolution) -> dict[str, Any]:
     if resolution.profile is None:
         return response
     profile = resolution.profile
+    if profile.rack_inventory:
+        snapshot = (resolution.inventory or {}).get("snapshot", {})
+        response.update(rack_inventory_enabled=True, rack_inventory_ready=snapshot.get("state") == "fresh",
+                        rack_inventory_snapshot=snapshot,
+                        rack_inventory_error=(resolution.inventory or {}).get("error"))
     response.update({
+        "whole_rack_enabled": profile.whole_rack_enabled,
         "partition": profile.partition,
         "path_comparison": profile.path_comparison,
         "explicit_nodes": list(profile.node_allowlist),
@@ -182,10 +189,19 @@ def readiness(resolution: ProfileResolution) -> dict[str, Any]:
     return response
 
 
-def inventory(resolution: ProfileResolution, reader: SlurmInventory) -> dict[str, Any]:
+def inventory(resolution: ProfileResolution, reader: SlurmInventory, *, group: str = "") -> dict[str, Any]:
     if not resolution.ready or resolution.profile is None:
         raise ValueError("ClusterKit profile is disabled or invalid")
     profile = resolution.profile
+    if group:
+        selected = next((entry for entry in profile.topology_groups if entry.name == group), None)
+        if selected is None:
+            raise ValueError("Unknown rack or configured group")
+        snapshot = reader.query(selected.nodes)
+        snapshot["group"] = group
+        for row in snapshot["nodes"]:
+            row["allowed"] = profile.allows(row["node"])
+        return snapshot
     candidates = list(profile.node_allowlist)
     if not candidates:
         candidates = sorted({node for group in profile.topology_groups for node in group.nodes})
@@ -193,6 +209,9 @@ def inventory(resolution: ProfileResolution, reader: SlurmInventory) -> dict[str
         return {"source": "slurm", "captured_at": None, "nodes": [],
                 "note": "No finite configured node inventory; preview explicit nodes to query them."}
     candidates = [node for node in candidates if profile.allows(node)]
+    if len(candidates) > 512:
+        return {"source": "slurm", "captured_at": None, "nodes": [],
+                "note": "Select a rack to refresh its bounded Slurm inventory."}
     return reader.query(tuple(candidates)) if candidates else {"source": "slurm", "captured_at": None, "nodes": []}
 
 
@@ -213,6 +232,12 @@ def preview(raw_request, resolution, reader, *, scripts_dir, secret, context=Non
 
 def confirm_plan(token, resolution, reader, *, scripts_dir, secret, context=None, now=None):
     payload = verify_preview(token, secret, now=now)
+    if resolution.profile and resolution.profile.rack_inventory:
+        from clusterkit_inventory import require_current_inventory
+        try:
+            require_current_inventory(resolution)
+        except ValueError as exc:
+            raise ConfirmationError(str(exc)) from exc
     if profile_digest(resolution) != payload.get('profile_hash'):
         raise ConfirmationError('ClusterKit site policy changed after preview')
     try:
@@ -505,7 +530,7 @@ def history(resolution, registry, *, context, limit=25, before=None):
             intent, plan = load_intent(str(attempt), row['activity_id'])
         except (OSError, ValueError, RuntimeError):
             continue
-        if intent.get('context') != context:
+        if not execution_context.same_context(intent.get('context'), context):
             continue
         rows.append({**row, 'node_count': len(plan['nodes']), 'expected_pair_count': plan['expected_pair_count'],
                      'attempt_id': plan['attempt_id'], 'path_comparison': plan['request']['path_comparison'],

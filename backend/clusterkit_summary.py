@@ -77,7 +77,8 @@ def validate_summary(summary, plan, job_id):
     for stage in required:
         result = stages[stage]
         if (type(exits[stage]) is not int or exits[stage] != 0 or not isinstance(result, dict)
-                or type(result.get('exit_status')) is not int or result['exit_status'] != 0):
+                or type(result.get('exit_status')) is not int or result['exit_status'] != 0
+                or result.get('status', 'PASS') != 'PASS'):
             raise ValueError('Passing summary has a failed stage')
         placements = result.get('placements')
         if not isinstance(placements, list) or len(placements) != plan['node_count']:

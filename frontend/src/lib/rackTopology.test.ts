@@ -10,7 +10,7 @@
  * its affiliates is strictly prohibited.
  */
 import { describe, expect, it } from "vitest";
-import { barColumns, buildFloorLayout, buildScalableUnitLayout, floorLayoutFromHierarchy, rackHealth } from "./rackTopology";
+import { barColumns, buildFloorLayout, buildScalableUnitLayout, floorLayoutFromHierarchy, hasConfiguredFloorLayout, rackHealth } from "./rackTopology";
 import type { RackRow, RackHierarchy } from "../types/api";
 
 function rackRow(rack: string): RackRow {
@@ -200,5 +200,19 @@ describe("barColumns — node-count bar wraps into pleasant rows", () => {
   it("never returns less than 1 column", () => {
     expect(barColumns(1)).toBe(1);
     expect(barColumns(0)).toBe(1);
+  });
+});
+
+
+describe("configured physical floor layout", () => {
+  const naming = { rack_id: "Q[01-99]", ct_id: "", nvsw_id: "", ct_joiner: "-ct", node_id_mode: "rack_ct_suffix" as const };
+  it("requires administrator layout metadata instead of inferring rows from rack labels", () => {
+    expect(hasConfiguredFloorLayout(null, null)).toBe(false);
+    expect(hasConfiguredFloorLayout(null, naming)).toBe(false);
+    expect(hasConfiguredFloorLayout(null, { ...naming, rack_id: "bos01-[A-Z][01-99]" })).toBe(true);
+  });
+  it("accepts an explicit hierarchy independently of hostname templates", () => {
+    expect(hasConfiguredFloorLayout({ levels: ["row", "rack"], unmatched: [], sections: [] }, null)).toBe(false);
+    expect(hasConfiguredFloorLayout({ levels: ["row", "rack"], unmatched: [], sections: [{ key: "floor", label: "Floor", rows: [] }] }, null)).toBe(true);
   });
 });

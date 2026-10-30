@@ -9,13 +9,14 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import type { InventoryNode, RunStatus } from "./types";
+import type { InventoryNode, RunStatus, Readiness, Summary } from "./types";
 
 export function nodeAvailability(
   node: InventoryNode,
   partition?: string,
 ): "idle" | "busy" | "unavailable" {
   if (
+    node.allowed === false ||
     !partition ||
     !node.partitions.includes(partition) ||
     !node.states.length ||
@@ -46,4 +47,37 @@ export function dateTime(value?: string): string {
   if (!value) return "-";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+export function rackSelectionEnabled(readiness: Readiness): boolean {
+  return Boolean(readiness.rack_inventory_enabled || (readiness.whole_rack_enabled
+    && readiness.groups?.some((group) => group.kind === "rack" && group.authoritative)));
+}
+
+/** Old summaries may list absent artifacts for a stage the runner deliberately skipped. */
+export function skippedStages(summary: Summary | null | undefined): Record<string, string> {
+  const skipped: Record<string, string> = {};
+  for (const [name, stage] of Object.entries(summary?.stages || {})) {
+    if (stage.exit_status != null) continue;
+    if (stage.status === "SKIPPED") {
+      skipped[name] = stage.reason || "Not run after an earlier failure";
+    } else if (summary?.clusterkit_exit_status && !(name in summary.clusterkit_exit_status)) {
+      if (summary.preflight?.status === "FAIL") {
+        skipped[name] = "Not run because preflight did not complete successfully";
+      } else if (name === "single-path" && summary.clusterkit_exit_status.baseline != null
+        && summary.clusterkit_exit_status.baseline !== 0) {
+        skipped[name] = "Not run because baseline failed";
+      }
+    }
+  }
+  return skipped;
+}
+
+export function summaryIssues(summary: Summary | null | undefined): string[] {
+  const skipped = skippedStages(summary);
+  return (summary?.errors || []).filter((message) => !Object.keys(skipped).some((stage) =>
+    message === stage + ": process did not complete successfully"
+    || message === stage + ": Missing bandwidth JSON"
+    || message === stage + ": Missing latency JSON"
+    || (message.startsWith(stage + " rank ") && message.includes("No such file or directory"))));
 }

@@ -18,7 +18,7 @@
  * offers both. The SU toggle appears only where the cluster actually models SUs.
  */
 import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { RackFloorView } from "./RackFloorView";
 import type { NodeInventoryEntry, RackRow, StatusScalableUnit } from "../types/api";
 
@@ -191,4 +191,20 @@ describe("RackFloorView status source", () => {
     fireEvent.click(screen.getByRole("button", { name: /by su/i }));
     expect(cellStates()).toEqual(["running", "idle", "drained", "drained"]);
   });
+});
+
+it("uses literal rack labels and no fabricated rows in the opt-in tile overview", () => {
+  const rows = ["Q4", "Q25", "V19"].map((rack) => ({
+    rack, nemo: "-", last_job: "-", ct_down_unk: "-", sinfo: "",
+  }));
+  const onSelect = vi.fn();
+  render(<RackFloorView rows={rows} unconfiguredLayout="tiles" selectedRack="" onRackSelect={onSelect} />);
+  expect(screen.getByRole("group", { name: "Rack tiles" })).toBeInTheDocument();
+  expect(screen.queryByText(/^Row /)).toBeNull();
+  for (const name of ["Q4", "Q25", "V19"]) {
+    expect(screen.getByText(name)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Select rack " + name }));
+  }
+  expect(onSelect.mock.calls.map(([name]) => name)).toEqual(["Q4", "Q25", "V19"]);
+  expect(screen.getAllByText("No mapped nodes")).toHaveLength(3);
 });

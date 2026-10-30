@@ -57,8 +57,25 @@ def capture(scripts_dir, connection=None, platform=None):
             'commands': {name: getattr(provider, name + '_cmd')(MARKER) for name in COMMANDS}}
 
 
+def same_context(expected, current):
+    """Cluster names are display metadata; every execution identity field remains exact."""
+    if not isinstance(expected, dict) or not isinstance(current, dict):
+        return False
+    if any('cluster_name' in value and not isinstance(value['cluster_name'], str)
+           for value in (expected, current)):
+        return False
+    selection = expected.get('selection')
+    if not (isinstance(selection, dict)
+            and all(isinstance(selection.get(key), str) and selection[key].strip()
+                    for key in ('project', 'cluster'))):
+        # Legacy deployments without stable catalog IDs still depend on the name.
+        return expected == current
+    return ({key: value for key, value in expected.items() if key != 'cluster_name'}
+            == {key: value for key, value in current.items() if key != 'cluster_name'})
+
+
 def require_same(expected, current):
-    if not isinstance(expected, dict) or expected != current:
+    if not same_context(expected, current):
         raise ValueError('Execution context changed; select the original cluster/user/configuration before accessing this run')
 
 

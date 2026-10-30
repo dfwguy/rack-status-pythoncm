@@ -860,7 +860,7 @@ Identified by `activity_id`, `id` on the request.
 | `validation.activity:annotate` | mutate | instance | `POST activities.api_validation_activity_corrective_action` |
 | `validation.activity:create` | mutate | instance | `POST clusterkit_modular.clusterkit_submit` |
 | `validation.activity:delete` | mutate | instance | `DELETE activities.api_multirack_job_delete`<br>`DELETE activities.api_validation_activity_delete` |
-| `validation.activity:list` | read | instance | `GET activities.api_multirack_campaign`<br>`GET activities.api_multirack_jobs`<br>`GET activities.api_multirack_status`<br>`GET activities.api_validation_activities`<br>`GET activities.api_validation_activities_ledger`<br>`GET clusterkit_modular.clusterkit_history`<br>`GET clusterkit_modular.clusterkit_inventory`<br>`GET clusterkit_modular.clusterkit_readiness` |
+| `validation.activity:list` | read | instance | `GET activities.api_multirack_campaign`<br>`GET activities.api_multirack_jobs`<br>`GET activities.api_multirack_status`<br>`GET activities.api_validation_activities`<br>`GET activities.api_validation_activities_ledger`<br>`GET clusterkit_modular.clusterkit_history`<br>`GET clusterkit_modular.clusterkit_inventory`<br>`GET clusterkit_modular.clusterkit_racks`<br>`GET clusterkit_modular.clusterkit_readiness` |
 | `validation.activity:preview` | mutate | instance | `POST clusterkit_modular.clusterkit_preview` |
 | `validation.activity:read` | read | instance | `GET activities.api_validation_activity_detail`<br>`GET clusterkit_modular.clusterkit_artifact`<br>`GET clusterkit_modular.clusterkit_artifacts`<br>`GET clusterkit_modular.clusterkit_run` |
 

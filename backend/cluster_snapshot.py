@@ -24,6 +24,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import closing
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -412,3 +413,36 @@ class ClusterSnapshotService:
             return leased
 
         return self._refresh_and_commit(leased.snapshot_key)
+
+
+def read_existing_snapshot(path: str | Path, cluster_id: str, log_root: str, *,
+                           checkpoint_only: bool = True) -> ClusterSnapshot | None:
+    """Read the same canonical inventory without initialization, leases or collectors.
+
+    An explicitly configured checkpoint reader opens SQLite immutable, excluding
+    WAL, so a read-only consumer never creates production WAL/SHM sidecars. Its
+    returned timestamp describes that checkpoint, not an unobserved newer WAL.
+    """
+    if checkpoint_only is not True:
+        raise ValueError("Read-only inventory requires immutable checkpoint access without WAL/SHM writes")
+    target = Path(path)
+    if not target.is_file():
+        return None
+    before = target.stat()
+    uri = target.resolve().as_uri() + "?mode=ro" + ("&immutable=1" if checkpoint_only else "")
+    try:
+        with closing(sqlite3.connect(uri, uri=True, timeout=2)) as connection:
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA query_only=ON")
+            row = connection.execute(
+                "SELECT * FROM cluster_snapshots WHERE cluster_id = ? AND log_root = ? "
+                "ORDER BY configuration_generation DESC LIMIT 1", (cluster_id, log_root),
+            ).fetchone()
+    except sqlite3.Error as exc:
+        raise ValueError("Canonical inventory cannot be read without modifying the source database") from exc
+    after = target.stat()
+    if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        raise ValueError("Canonical checkpoint changed while reading; refresh inventory")
+    if row is not None and row["payload_json"] is not None and len(row["payload_json"]) > 32 * 1024 * 1024:
+        raise ValueError("Canonical inventory snapshot exceeds its size limit")
+    return SnapshotRepository._from_row(row) if row is not None else None

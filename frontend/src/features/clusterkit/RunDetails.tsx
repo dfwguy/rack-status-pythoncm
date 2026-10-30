@@ -9,17 +9,21 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
+  Accordion,
   Banner,
   Button,
   FormField,
   SegmentedControl,
   Tag,
+  Text,
   TextInput,
 } from "@nvidia/foundations-react-core";
 import { Download, RefreshCw } from "lucide-react";
-import { dateTime, functionalStatus } from "./model";
+import { dateTime, functionalStatus, skippedStages, summaryIssues } from "./model";
+import { failureDiagnosis } from "./failureDiagnosis";
+import { FailureDetails } from "./FailureDetails";
 import { downloadArtifact, getArtifacts } from "./service";
 import type { Artifact, RunStatus } from "./types";
 
@@ -37,6 +41,7 @@ export function RunDetails({
   refresh: () => void;
 }) {
   const [tab, setTab] = useState("coverage");
+  const nodeDetails = useRef<HTMLDivElement>(null);
   const [filter, setFilter] = useState("");
   const [files, setFiles] = useState<Artifact[]>([]);
   const [fileError, setFileError] = useState("");
@@ -70,7 +75,41 @@ export function RunDetails({
 
   const summary = run?.summary_error ? null : run?.summary;
   const functional = run ? functionalStatus(run) : "PENDING";
+  const diagnosis = run ? failureDiagnosis(run) : null;
+  const reportingNodes = new Set(diagnosis?.nodes || []);
+  const skipped = skippedStages(summary);
   const stages = Object.entries(summary?.stages || {});
+  const uniqueMessages = (messages: (string | undefined | null)[]) =>
+    [...new Set(messages.filter((message): message is string =>
+      typeof message === "string" && Boolean(message.trim())).map((message) => message.trim()))];
+  const issues = uniqueMessages([run?.error, run?.summary_error, ...summaryIssues(summary)]);
+  const notes = uniqueMessages([error, run?.scheduler_error, ...(summary?.warnings || []),
+    ...Object.entries(skipped).map(([name, reason]) => name + ": " + reason)])
+    .filter((message) => !issues.includes(message));
+  const noteCount = issues.length + notes.length;
+  const notesPanel = noteCount ? (
+    <Accordion className="ck-run-notes" items={[{
+      value: "notes",
+      slotTrigger: <Text kind="body/regular/sm">Run notes ({noteCount})</Text>,
+      slotContent: (
+        <>
+          {issues.length ? (
+            <>
+              <Text kind="label/bold/sm">Issues</Text>
+              <ul className="ck-notes-list" aria-label="Run issues">
+                {issues.map((message) => <li key={message}>{message}</li>)}
+              </ul>
+            </>
+          ) : null}
+          {notes.length ? (
+            <ul className="ck-notes-list" aria-label="Run notices">
+              {notes.map((message) => <li key={message}>{message}</li>)}
+            </ul>
+          ) : null}
+        </>
+      ),
+    }]} />
+  ) : null;
   async function download(name: string) {
     setDownloading(name);
     setFileError("");
@@ -100,20 +139,14 @@ export function RunDetails({
       <p className="ck-meta ck-mono" style={{ marginTop: 8 }}>
         {activityId}
       </p>
-      {submitting ? (
-        <Banner status="info" kind="inline" style={{ marginTop: 16 }}>
-          Submission in progress
-        </Banner>
-      ) : null}
-      {error ? (
-        <Banner status="warning" kind="inline" style={{ marginTop: 16 }}>
-          {error}
-        </Banner>
-      ) : null}
+      {submitting ? <p className="ck-run-update ck-meta" role="status">Submission in progress</p> : null}
       {!run ? (
-        <p className="ck-empty">
-          {submitting ? "Waiting for submission receipt" : "Status unavailable"}
-        </p>
+        <>
+          <p className="ck-empty">
+            {submitting ? "Waiting for submission receipt" : "Status unavailable"}
+          </p>
+          {notesPanel}
+        </>
       ) : (
         <>
           <div className="ck-summary-strip">
@@ -136,7 +169,7 @@ export function RunDetails({
             </div>
             <div>
               <p className="ck-meta">Performance</p>
-              <Tag readOnly color="yellow">
+              <Tag readOnly color="gray" title="Performance acceptance has not been verified">
                 UNVERIFIED
               </Tag>
             </div>
@@ -154,27 +187,21 @@ export function RunDetails({
               <p>{run.work_phase.replaceAll("_", " ")}</p>
             </div>
           </div>
+          {diagnosis ? <FailureDetails diagnosis={diagnosis}
+            showNodes={() => {
+              setTab("nodes");
+              window.requestAnimationFrame(() => nodeDetails.current?.focus());
+            }} showArtifacts={() => setTab("artifacts")} /> : null}
           {run.work_phase === "submission_unknown" ? (
-            <Banner status="warning" kind="inline" style={{ marginTop: 16 }}>
-              Scheduler acceptance is uncertain. This attempt will be reconciled
-              by its activity ID; no submission is retried.
-            </Banner>
+            <p className="ck-run-update ck-meta" role="status">
+              Checking scheduler acceptance. No submission will be retried.
+            </p>
+          ) : issues.length && !diagnosis ? (
+            <p className="ck-run-update ck-meta">This run needs attention. See Run notes for details.</p>
+          ) : error || run.scheduler_error ? (
+            <p className="ck-run-update ck-meta">Status update unavailable. See Run notes for details.</p>
           ) : null}
-          <div className="ck-errors">
-            {[
-              run.error,
-              run.scheduler_error,
-              run.summary_error,
-              ...(summary?.errors || []),
-              ...(summary?.warnings || []),
-            ]
-              .filter(Boolean)
-              .map((message, i) => (
-                <Banner key={i} status="warning" kind="inline">
-                  {message}
-                </Banner>
-              ))}
-          </div>
+          {notesPanel}
           <dl className="ck-facts">
             <div>
               <dt>Started</dt>
@@ -244,11 +271,12 @@ export function RunDetails({
                         </h3>
                         <Tag
                           readOnly
-                          color={stage.exit_status === 0 ? "gray" : "red"}
+                          color={name in skipped || stage.exit_status === 0 ? "gray" : "red"}
                         >
-                          Exit {stage.exit_status}
+                          {name in skipped ? "Not run" : `Exit ${stage.exit_status ?? "unknown"}`}
                         </Tag>
                       </div>
+                      {name in skipped ? <p className="ck-meta">{skipped[name]}</p> : <>
                       <div className="ck-table-wrap">
                         <table className="ck-table">
                           <thead>
@@ -333,6 +361,7 @@ export function RunDetails({
                           </div>
                         ),
                       )}
+                      </>}
                     </section>
                   ))}
                 </>
@@ -340,12 +369,13 @@ export function RunDetails({
             </>
           ) : null}
           {tab === "nodes" ? (
-            <div className="ck-table-wrap">
+            <div className="ck-table-wrap" ref={nodeDetails} tabIndex={-1} role="region" aria-label="Node diagnostics">
               <table className="ck-table">
                 <thead>
                   <tr>
                     <th>Node / rank</th>
-                    <th>Preflight</th>
+                    <th>Local preflight</th>
+                    <th>Run evidence</th>
                     <th>HCA / GID index</th>
                     <th>Link / architecture</th>
                     <th>CPU affinity</th>
@@ -353,17 +383,20 @@ export function RunDetails({
                 </thead>
                 <tbody>
                   {(summary?.preflight?.nodes || []).map((node) => (
-                    <tr key={node.rank}>
+                    <tr key={node.rank} data-run-finding={reportingNodes.has(node.host) || undefined}>
                       <td>
                         <span className="ck-mono">{node.host}</span>
                         <p className="ck-meta">Rank {node.rank}</p>
                       </td>
                       <td>
                         {node.status}
-                        {(node.errors || []).map((e) => (
+                        {[...new Set([...(node.errors || []), ...(node.error ? [node.error] : [])])].map((e) => (
                           <p key={e}>{e}</p>
                         ))}
                       </td>
+                      <td>{reportingNodes.has(node.host)
+                        ? <Tag readOnly color="gray" density="compact">{diagnosis?.nodeFinding}</Tag>
+                        : "No node-specific finding"}</td>
                       <td>
                         {node.hca || "-"} / {node.gid_index ?? "-"}
                         <p className="ck-meta">{node.global_v2_gid?.gid}</p>

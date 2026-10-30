@@ -2931,6 +2931,7 @@
             "GET activities.api_validation_activities_ledger",
             "GET clusterkit_modular.clusterkit_history",
             "GET clusterkit_modular.clusterkit_inventory",
+            "GET clusterkit_modular.clusterkit_racks",
             "GET clusterkit_modular.clusterkit_readiness"
           ]
         },

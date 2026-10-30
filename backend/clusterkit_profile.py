@@ -21,7 +21,14 @@ from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
 
 SETTING = "RACK_CLUSTERKIT_SITE_PROFILE"
-PAIRWISE_COUNTS = (2, 4, 8)  # Product capabilities, not site defaults/geometry.
+PAIRWISE_COUNTS = (2, 4, 8)  # Recommended legacy choices, not site geometry.
+MAX_PAIRWISE_NODES = 64  # Reviewed bounded capability; administrator limits may be smaller.
+
+
+def valid_pairwise_count(value):
+    return type(value) is int and 2 <= value <= MAX_PAIRWISE_NODES and value % 2 == 0
+
+
 HOST = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9])?")
 LABEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
@@ -86,16 +93,40 @@ class SiteProfile:
     node_allowlist: tuple[str, ...] = ()
     node_regex: str = ""
     topology_groups: tuple[TopologyGroup, ...] = ()
+    rack_inventory: dict | None = None
+    whole_rack_enabled: bool = False
     functional: FunctionalParameters = FunctionalParameters()
     performance: PerformancePolicy = PerformancePolicy()
 
     def as_dict(self):
         values = asdict(self)
+        if not values["whole_rack_enabled"]:
+            values.pop("whole_rack_enabled")  # Existing plan/profile hashes stay stable.
+        if values["rack_inventory"] is None:
+            values.pop("rack_inventory")  # Preserve legacy profile/plan serialization.
         values["topology_groups"] = {
             group.name: {key: value for key, value in asdict(group).items() if key != "name"}
             for group in self.topology_groups
         }
         return json.loads(json.dumps(values))
+
+    def whole_rack_reason(self, group):
+        """One capability check shared by planning and the directory."""
+        if not self.whole_rack_enabled:
+            return "Whole-rack testing is disabled by the administrator"
+        if group is None or group.kind != "rack" or not group.authoritative:
+            return "Whole-rack testing requires authoritative physical rack membership"
+        if not valid_pairwise_count(len(group.nodes)):
+            return "Whole-rack pairwise testing requires an even supported node count"
+        if len(group.nodes) > self.max_nodes:
+            return "Rack exceeds the administrator node limit"
+        if any(not self.allows(node) for node in group.nodes):
+            return "Every mapped rack member must be permitted by the administrator"
+        members = set(group.nodes)
+        if any(other.kind == "rack" and other.name != group.name and members.intersection(other.nodes)
+               for other in self.topology_groups):
+            return "Ambiguous physical rack membership; resolve overlapping rack mappings first"
+        return ""
 
     def allows(self, node):
         return (valid_node(node)
@@ -107,6 +138,7 @@ class SiteProfile:
 class ProfileResolution:
     profile: SiteProfile | None
     errors: tuple[str, ...] = ()
+    inventory: dict | None = None
 
     @property
     def ready(self):
@@ -145,7 +177,7 @@ def parse_profile(raw) -> ProfileResolution:
     for key in SiteProfile.__dataclass_fields__:
         values[key] = raw.get(key, getattr(defaults, key))
 
-    for key in ("enabled", "path_comparison"):
+    for key in ("enabled", "path_comparison", "whole_rack_enabled"):
         if type(values[key]) is not bool:
             errors.append(f"{key} must be a boolean")
     for key in ("partition", "hpcx_init", "results_root", "expected_architecture", "hca_policy",
@@ -160,8 +192,8 @@ def parse_profile(raw) -> ProfileResolution:
     if values["default_wall_seconds"] > values["max_wall_seconds"]:
         errors.append("default_wall_seconds exceeds max_wall_seconds")
     sizes = values["allowed_node_counts"]
-    if not isinstance(sizes, (list, tuple)) or any(type(n) is not int or n not in PAIRWISE_COUNTS for n in sizes):
-        errors.append("allowed_node_counts must be a selection of supported sizes 2, 4, 8")
+    if not isinstance(sizes, (list, tuple)) or any(not valid_pairwise_count(n) for n in sizes):
+        errors.append(f"allowed_node_counts must contain even sizes between 2 and {MAX_PAIRWISE_NODES}")
     elif len(set(sizes)) != len(sizes) or any(n > values["max_nodes"] for n in sizes):
         errors.append("allowed_node_counts must be unique and within max_nodes")
     else:
@@ -208,6 +240,21 @@ def parse_profile(raw) -> ProfileResolution:
             re.compile(pattern)
         except (ValueError, re.error):
             errors.append("node_regex must be a valid simple pattern without groups or alternation")
+
+    source = values["rack_inventory"]
+    if source is not None:
+        if not isinstance(source, dict) or set(source) - {"snapshot_db", "cluster_id", "log_root", "checkpoint_only", "max_age_seconds"}:
+            errors.append("Invalid rack_inventory source")
+        else:
+            source = {"checkpoint_only": True, "max_age_seconds": 300, **source}
+            if (not valid_path(source.get("snapshot_db")) or not valid_path(source.get("log_root"))
+                    or not isinstance(source.get("cluster_id"), str) or not source["cluster_id"].strip()
+                    or len(source["cluster_id"]) > 256 or any(ord(c) < 32 for c in source["cluster_id"])
+                    or source["checkpoint_only"] is not True
+                    or type(source["max_age_seconds"]) is not int or not 1 <= source["max_age_seconds"] <= 86400):
+                errors.append("rack_inventory requires safe paths, an exact cluster identity and a bounded freshness limit")
+            else:
+                values["rack_inventory"] = source
 
     groups = values["topology_groups"]
     normalized = []
@@ -290,6 +337,10 @@ def resolve_profile() -> ProfileResolution:
     try:
         from config_env import read_only_values
 
-        return parse_profile(read_only_values((SETTING,))[SETTING])
+        resolution = parse_profile(read_only_values((SETTING,))[SETTING])
+        if resolution.profile and resolution.profile.rack_inventory:
+            from clusterkit_inventory import resolve_inventory
+            return resolve_inventory(resolution)
+        return resolution
     except (OSError, ValueError, TypeError) as exc:
         return ProfileResolution(None, (f"Cannot resolve ClusterKit configuration: {exc}",))

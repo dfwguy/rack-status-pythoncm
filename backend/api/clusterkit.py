@@ -88,9 +88,20 @@ def clusterkit_readiness():
 def clusterkit_inventory():
     try:
         _, connection, platform = _runtime()
-        snapshot = clusterkit_service.inventory(resolve_profile(), _reader(connection, platform))
+        snapshot = clusterkit_service.inventory(resolve_profile(), _reader(connection, platform), group=request.args.get("group", ""))
         return jsonify({"ok": True, "inventory": snapshot})
     except (OSError, RuntimeError, ValueError, PlanningError) as exc:
+        return _error(exc, 409)
+
+
+@bp.get("/racks")
+@action(get="validation.activity:list")
+def clusterkit_racks():
+    """The shared canonical rack inventory; never schedules collection or work."""
+    from clusterkit_inventory import directory
+    try:
+        return jsonify({"ok": True, **directory(resolve_profile())})
+    except (OSError, RuntimeError, ValueError) as exc:
         return _error(exc, 409)
 
 

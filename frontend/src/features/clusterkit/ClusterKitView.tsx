@@ -21,6 +21,7 @@ import {
 import { RefreshCw } from "lucide-react";
 import { PageHeader } from "../../components/layout/PageHeader";
 import { useActiveCluster } from "../../context/ActiveClusterContext";
+import { rackSelectionEnabled } from "./model";
 import { getInventory, getReadiness } from "./service";
 import { useRackCommandsStore } from "../../context/RackCommandsStoreContext";
 import { RunComposer } from "./RunComposer";
@@ -70,7 +71,7 @@ export function ClusterKitWorkspace({ clusterName }: { clusterName: string }) {
         const state = await getReadiness(abort.signal);
         if (abort.signal.aborted) return;
         setReadiness(state);
-        if (state.configuration_ready && state.execution_context_ready) {
+        if (state.configuration_ready && state.execution_context_ready && !rackSelectionEnabled(state)) {
           const nodes = await getInventory(abort.signal);
           if (!abort.signal.aborted) setInventory(nodes);
         }

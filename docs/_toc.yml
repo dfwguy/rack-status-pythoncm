@@ -46,6 +46,7 @@ subtrees:
       - file: how-to/clusterkit-ui-isolated-validation
         title: How to validate the ClusterKit UI in an isolated instance
       - file: how-to/clusterkit-deployment-plan
+      - file: how-to/clusterkit-rack-selection
         title: How to prepare a reviewed ClusterKit rollout on NC
 
   - caption: Reference — the machinery, described

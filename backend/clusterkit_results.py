@@ -125,6 +125,33 @@ def preflight_evidence(plan, root, job_id):
     return observations, errors
 
 
+def process_failure(root, stage, nodes, exit_status):
+    """Extract bounded primary evidence; a transport timeout is not a fabric diagnosis."""
+    message = f'{stage}: process failed (exit {exit_status}); see {stage}.log'
+    failure = {'category': 'PROCESS_FAILED', 'message': message, 'evidence': [], 'affected_nodes': []}
+    path = Path(root) / f'{stage}.log'
+    try:
+        if path.is_symlink():
+            return failure
+        with path.open('rb') as handle:
+            text = handle.read(128 * 1024).decode('utf-8', errors='replace')
+    except OSError:
+        return failure
+    for number, line in enumerate(text.splitlines(), 1):
+        if (('ud_ep.c' in line and 'Fatal:' in line and 'unhandled timeout error' in line)
+                or ('UCX' in line and 'Endpoint timeout' in line)):
+            failure['category'] = 'UCX_COMMUNICATION_TIMEOUT'
+            if len(failure['evidence']) < 4:
+                failure['evidence'].append({'artifact': f'{stage}.log', 'line': number, 'excerpt': line[:512]})
+            host = line.split(']', 1)[0].lstrip('[').split(':', 1)[0]
+            if host in nodes and host not in failure['affected_nodes']:
+                failure['affected_nodes'].append(host)
+    if failure['category'] == 'UCX_COMMUNICATION_TIMEOUT':
+        phase = 'MPI setup' if 'PMPI_Comm_split_type' in text else 'MPI communication'
+        failure['message'] = f'{stage}: UCX communication timed out during {phase} (exit {exit_status}); see {stage}.log'
+    return failure
+
+
 def summarize(plan, root, outcome):
     """No functional PASS from exit=0 alone: require evidence and full coverage."""
     root = Path(root)
@@ -137,15 +164,35 @@ def summarize(plan, root, outcome):
     required_stages = [] if plan['scope'] == 'preflight' else ['baseline'] + (
         ['single-path'] if plan['request']['path_comparison'] is True or (
             plan['request']['path_comparison'] is None and plan['effective_profile']['path_comparison']) else [])
+    prerequisite = None if preflight_ok else 'preflight did not complete successfully'
+    if not preflight_ok and not preflight_errors:
+        errors.append('Preflight did not complete successfully')
+    exits = outcome.get('stages', {})
     for stage in required_stages:
-        result = {'exit_status': outcome.get('stages', {}).get(stage),
+        if stage not in exits:
+            reason = (f'Not run because {prerequisite}' if prerequisite else
+                      'Planned stage has no execution record')
+            stages[stage] = {'status': 'SKIPPED' if prerequisite else 'FAIL',
+                             'reason': reason, 'exit_status': None, 'metrics': {}, 'placements': []}
+            if prerequisite:
+                warnings.append(f'{stage}: {reason}')
+            else:
+                errors.append(f'{stage}: {reason}')
+                prerequisite = f'{stage} did not run'
+            continue
+        artifact_errors = []
+        result = {'status': 'PASS' if type(exits[stage]) is int and exits[stage] == 0 else 'FAIL',
+                  'exit_status': exits[stage],
                   'metrics': {test: {'units': units, 'pairs': [], 'observed_pair_count': 0,
                                      'missing_pairs': plan['expected_pairs'], 'failed_pairs': [], 'source': None}
                               for test, units in (('bandwidth', 'MB/s'), ('latency', 'usec'))},
                   'placements': []}
         stages[stage] = result
-        if result['exit_status'] != 0:
-            errors.append(f'{stage}: process did not complete successfully')
+        if result['status'] == 'FAIL':
+            result['failure'] = process_failure(root, stage, nodes, result['exit_status'])
+            errors.append(result['failure']['message'])
+            prerequisite = f'{stage} failed'
+
         for rank in range(len(nodes)):
             try:
                 placement = read_json(root / f'rank-placement-{stage}-{rank}.json')
@@ -161,7 +208,7 @@ def summarize(plan, root, outcome):
                     raise ValueError('Placement differs from verified preflight')
                 result['placements'].append(placement)
             except (OSError, ValueError, TypeError, StopIteration) as exc:
-                errors.append(f'{stage} rank {rank}: {exc}')
+                artifact_errors.append(f'{stage} rank {rank}: {exc}')
         payloads = {}
         try:
             for path in metric_files(root / stage):
@@ -182,10 +229,16 @@ def summarize(plan, root, outcome):
                 metrics['source'] = str(path.relative_to(root))
                 result['metrics'][test] = metrics
                 if metrics['missing_pairs'] or metrics['failed_pairs']:
-                    errors.append(f'{stage} {test}: incomplete/failed pair coverage')
+                    artifact_errors.append(f'{stage} {test}: incomplete/failed pair coverage')
         except (OSError, ValueError, TypeError) as exc:
-            errors.append(f'{stage}: {exc}')
-    if outcome.get('primary_exit') != 0:
+            artifact_errors.append(f'{stage}: {exc}')
+        if artifact_errors:
+            result['evidence_errors'] = artifact_errors
+            # Preserve secondary evidence details without burying the primary process failure.
+            if result['status'] == 'PASS':
+                result['status'] = 'FAIL'
+                errors.extend(artifact_errors)
+    if outcome.get('primary_exit') != 0 and not errors:
         errors.append('Primary attempt failed; diagnostics cannot change its result')
     diagnostic_warning = outcome.get('diagnostics', {}).get('after_exit') not in (None, 0)
     if diagnostic_warning:

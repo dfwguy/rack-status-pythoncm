@@ -16,6 +16,14 @@ from contextlib import contextmanager
 from pathlib import Path
 
 MAX_ARTIFACT_BYTES = 2 * 1024 * 1024
+MAX_ARTIFACT_ENTRIES = 4096
+MAX_ARTIFACT_FILES = 2048
+
+
+class ArtifactListingLimitError(ValueError):
+    pass
+
+
 PART = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 
 
@@ -82,8 +90,8 @@ def artifacts(root):
         with os.scandir(fd) as iterator:
             for item in iterator:
                 entries += 1
-                if entries > 256 or len(rows) >= 128:
-                    return
+                if entries > MAX_ARTIFACT_ENTRIES or len(rows) >= MAX_ARTIFACT_FILES:
+                    raise ArtifactListingLimitError("Artifact listing exceeds its bounded limit; no partial list returned")
                 if not PART.fullmatch(item.name) or item.name in {".", ".."}:
                     continue
                 name = prefix + item.name
@@ -98,12 +106,16 @@ def artifacts(root):
                     elif stat.S_ISREG(info.st_mode):
                         rows.append({"name": name, "size": info.st_size,
                                      "downloadable": info.st_size <= MAX_ARTIFACT_BYTES})
+                except ArtifactListingLimitError:
+                    raise
                 except (OSError, ValueError):
                     continue  # Concurrent replacement is not permission to follow a link.
 
     try:
         with directory(root) as fd:
             visit(fd, "", 0)
+    except ArtifactListingLimitError:
+        raise
     except (OSError, ValueError):
         return []
     return sorted(rows, key=lambda row: row["name"])

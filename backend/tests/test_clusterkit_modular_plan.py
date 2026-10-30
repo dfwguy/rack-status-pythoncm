@@ -85,10 +85,10 @@ class ProfileTests(unittest.TestCase):
         with mock.patch.object(C, "read_only_values", side_effect=ValueError("bad snapshot")):
             self.assertIn("bad snapshot", resolve_profile().errors[0])
 
-    def test_preflight_only_and_larger_admin_ceiling_do_not_expand_capabilities(self):
+    def test_preflight_only_and_larger_sizes_require_explicit_configuration(self):
         self.assertTrue(parse_profile(profile(max_nodes=1, allowed_node_counts=[])).ready)
         self.assertTrue(parse_profile(profile(max_nodes=64)).ready)
-        self.assertFalse(parse_profile(profile(max_nodes=64, allowed_node_counts=[16])).ready)
+        self.assertTrue(parse_profile(profile(max_nodes=64, allowed_node_counts=[16])).ready)
 
     def test_verified_thresholds_still_do_not_accept_an_unrun_test(self):
         raw = profile(performance={"enabled": True, "verified": True, "reference": "fabric-team approval",

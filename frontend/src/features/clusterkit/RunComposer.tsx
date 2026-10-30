@@ -22,9 +22,10 @@ import {
   TextInput,
 } from "@nvidia/foundations-react-core";
 import { ClipboardCheck, Play, Server } from "lucide-react";
-import { nodeAvailability } from "./model";
-import { confirmRun, previewRun } from "./service";
-import type { Inventory, Preview, Readiness, RunRequest } from "./types";
+import { nodeAvailability, rackSelectionEnabled } from "./model";
+import { confirmRun, getInventory, getRackDirectory, previewRun } from "./service";
+import { RackSelector } from "./RackSelector";
+import type { Inventory, Preview, Readiness, RunRequest, RackDirectory } from "./types";
 
 interface Props {
   readiness: Readiness;
@@ -38,7 +39,16 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
       ? 2
       : readiness.allowed_node_counts[0] || 1,
   );
-  const [source, setSource] = useState("nodes");
+  const rackMode = rackSelectionEnabled(readiness);
+  const [wholeRack, setWholeRack] = useState(false);
+  const [source, setSource] = useState(rackMode ? "group" : "nodes");
+  const [directory, setDirectory] = useState<RackDirectory | null>(null);
+  const [rackLoading, setRackLoading] = useState(rackMode);
+  const [rackError, setRackError] = useState("");
+  const [rackTick, setRackTick] = useState(0);
+  const [liveInventory, setLiveInventory] = useState<Inventory | null>(null);
+  const [nodeLoading, setNodeLoading] = useState(false);
+  const [nodeError, setNodeError] = useState("");
   const [group, setGroup] = useState("");
   const [nodes, setNodes] = useState<string[]>([]);
   const [typedNodes, setTypedNodes] = useState("");
@@ -59,10 +69,17 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
   const selectedNodes = [
     ...new Set([...nodes, ...typedNodes.split(/[\s,]+/).filter(Boolean)]),
   ];
-  const valid =
-    source === "group" && count !== 1
-      ? Boolean(group)
-      : selectedNodes.length === count;
+  const currentInventory = rackMode ? (liveInventory?.group === group ? liveInventory : null) : inventory;
+  const selectedRack = directory?.racks.find((rack) => rack.name === group);
+  const idleCount = (currentInventory?.nodes || []).filter((node) => nodeAvailability(node, readiness.partition) === "idle").length;
+  const rackAllowed = !rackMode || Boolean(selectedRack?.test_enabled && currentInventory && !nodeLoading && !nodeError);
+  const effectiveCount = wholeRack ? (selectedRack?.node_count || 0) : count;
+  const wholeRackAvailable = Boolean(readiness.whole_rack_enabled && selectedRack?.whole_rack_enabled
+    && rackAllowed && currentInventory?.nodes.length === selectedRack?.node_count
+    && idleCount === selectedRack?.node_count && (selectedRack?.node_count || 0) >= 2);
+  const valid = wholeRack ? Boolean(group) && wholeRackAvailable : source === "group" && (count !== 1 || rackMode)
+    ? Boolean(group) && rackAllowed && (!rackMode || idleCount >= count)
+    : selectedNodes.length === count && rackAllowed;
   const configured =
     readiness.configuration_ready && readiness.execution_context_ready;
 
@@ -73,6 +90,37 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
     setPreview(null);
     setError("");
   };
+  useEffect(() => {
+    if (!rackMode) return;
+    const abort = new AbortController();
+    void getRackDirectory(abort.signal).then((value) => {
+      if (!abort.signal.aborted) setDirectory(value);
+    }).catch((reason) => {
+      if (!abort.signal.aborted) setRackError(reason instanceof Error ? reason.message : String(reason));
+    }).finally(() => { if (!abort.signal.aborted) setRackLoading(false); });
+    return () => abort.abort();
+  }, [rackMode, rackTick]);
+  useEffect(() => {
+    if (!rackMode || !group) return;
+    const abort = new AbortController();
+    void getInventory(abort.signal, group).then((value) => {
+      if (!abort.signal.aborted) setLiveInventory(value);
+    }).catch((reason) => {
+      if (!abort.signal.aborted) setNodeError(reason instanceof Error ? reason.message : String(reason));
+    }).finally(() => { if (!abort.signal.aborted) setNodeLoading(false); });
+    return () => abort.abort();
+  }, [rackMode, group, rackTick]);
+  function selectRack(value: string) {
+    invalidate();
+    setGroup(value); setNodes([]); setTypedNodes(""); setSearch("");
+    setLiveInventory(null); setNodeError(""); setNodeLoading(true);
+    if (value === group) setRackTick((tick) => tick + 1);
+  }
+  function refreshRacks() {
+    invalidate(); setRackError(""); setRackLoading(true);
+    setNodeError(""); setNodeLoading(Boolean(group)); setLiveInventory(null);
+    setRackTick((tick) => tick + 1);
+  }
   useEffect(
     () => () => {
       generation.current += 1;
@@ -86,7 +134,7 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
     return () => window.clearInterval(timer);
   }, [preview]);
 
-  async function review() {
+  async function handlePreview() {
     if (!configured || !valid || busy) return;
     invalidate();
     const epoch = generation.current;
@@ -95,21 +143,22 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
     setBusy(true);
     const request: RunRequest = {
       scope:
-        count === 1 ? "preflight" : source === "group" ? "group" : "explicit",
-      node_count: count,
+        wholeRack ? "rack" : count === 1 ? "preflight" : source === "group" ? "group" : "explicit",
+      node_count: effectiveCount,
     };
-    if (request.scope === "group") request.group = group;
+    if (request.scope === "rack" || request.scope === "group" || (rackMode && source === "group")) request.group = group;
     else request.nodes = selectedNodes;
-    if (count > 1) request.path_comparison = compare;
+    if (effectiveCount > 1) request.path_comparison = compare;
     try {
       const response = await previewRun(request, abort.signal);
       if (generation.current !== epoch) return;
       consumed.current = false;
       setPreview(response);
-      setNow(Date.now());
-      setExpiresAt(
-        Date.now() + response.confirmation_expires_in_seconds * 1000,
-      );
+      // This continuation runs after the user's click and awaited API response, never during render.
+      // eslint-disable-next-line react-hooks/purity -- Event-time receipt clock; compiler misclassifies this async continuation.
+      const receivedAt = Date.now();
+      setNow(receivedAt);
+      setExpiresAt(receivedAt + response.confirmation_expires_in_seconds * 1000);
     } catch (reason) {
       if (generation.current === epoch && !abort.signal.aborted)
         setError(reason instanceof Error ? reason.message : String(reason));
@@ -132,18 +181,39 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
     onSubmit(id, () => confirmRun(preview.confirmation_token));
   }
 
-  const visible = (inventory?.nodes || []).filter((node) =>
+  const visible = (currentInventory?.nodes || []).filter((node) =>
     node.node.toLowerCase().includes(search.toLowerCase()),
   );
   const remaining = Math.max(0, Math.ceil((expiresAt - now) / 1000));
   return (
+    <>
+      {rackMode ? <RackSelector directory={directory} loading={rackLoading} error={rackError}
+        selected={group} onSelect={selectRack} onRefresh={refreshRacks} /> : null}
     <div className="ck-layout ck-section">
       <section aria-label="Run configuration">
         <div className="ck-bar">
           <Server size={20} />
-          <h2>New run</h2>
+          <h2>{rackMode ? "2. Configure the test" : "New run"}</h2>
         </div>
-        <div className="ck-fields">
+        {rackMode && readiness.whole_rack_enabled ? (
+          <div className="ck-fields">
+            <FormField slotLabel="Coverage" name="ck-coverage">
+              <Select aria-label="Coverage" value={wholeRack ? "rack" : "subset"}
+                items={[{ value: "subset", children: "Selected size" },
+                  { value: "rack", children: "Whole rack", disabled: !selectedRack?.whole_rack_enabled }]}
+                onValueChange={(value: string) => {
+                  invalidate(); setWholeRack(value === "rack");
+                  if (value === "rack") { setSource("group"); setNodes([]); setTypedNodes(""); }
+                }} />
+            </FormField>
+            {wholeRack && selectedRack ? <span className="ck-meta" role="status">
+              Entire rack: {effectiveCount} nodes / {effectiveCount * (effectiveCount - 1) / 2} pairs.
+              All mapped nodes must be idle; no smaller subset will be selected.
+            </span> : selectedRack?.whole_rack_reason ? <span className="ck-meta">{selectedRack.whole_rack_reason}</span> : null}
+          </div>
+        ) : null}
+        {wholeRack && selectedRack?.whole_rack_reason ? <Banner status="warning">{selectedRack.whole_rack_reason}</Banner> : null}
+        {!wholeRack ? <div className="ck-fields">
           <FormField slotLabel="Nodes" name="ck-count">
             <SegmentedControl
               aria-label="Node count"
@@ -151,6 +221,8 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
               items={counts.map((n) => ({
                 value: String(n),
                 children: String(n),
+                disabled: rackMode && Boolean(selectedRack) && (!selectedRack?.allowed_node_counts.includes(n)
+                  || (source === "group" && Boolean(currentInventory) && idleCount < n)),
               }))}
               onValueChange={(value) => {
                 invalidate();
@@ -161,13 +233,13 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
           <FormField slotLabel="Selection" name="ck-source">
             <SegmentedControl
               aria-label="Selection"
-              value={count === 1 ? "nodes" : source}
+              value={count === 1 && !rackMode ? "nodes" : source}
               items={[
                 { value: "nodes", children: "Exact nodes" },
                 {
                   value: "group",
-                  children: "Configured group",
-                  disabled: count === 1,
+                  children: rackMode ? "Rack" : "Configured group",
+                  disabled: count === 1 && !rackMode,
                 },
               ]}
               onValueChange={(value) => {
@@ -176,8 +248,8 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
               }}
             />
           </FormField>
-        </div>
-        {count === 1 ? (
+        </div> : null}
+        {effectiveCount === 1 ? (
           <p className="ck-meta">Preflight</p>
         ) : (
           <Checkbox
@@ -190,7 +262,9 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
             }}
           />
         )}
-        {source === "group" && count > 1 ? (
+        {rackMode && source === "group" ? (
+          <div className="ck-fields"><span className="ck-meta">{!group ? "Select a rack above." : nodeLoading ? "Checking selected rack in Slurm..." : `${idleCount} permitted idle nodes in ${group}. Preview selects exactly ${effectiveCount}.`}</span></div>
+        ) : source === "group" && count > 1 ? (
           <div className="ck-fields">
             <FormField slotLabel="Group" name="ck-group">
               <Select
@@ -222,7 +296,7 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
                 {selectedNodes.length} / {count} selected
               </span>
             </div>
-            {inventory?.nodes.length ? (
+            {currentInventory?.nodes.length ? (
               <div className="ck-node-table">
                 <table className="ck-table">
                   <thead>
@@ -287,7 +361,7 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
             ) : (
               <p className="ck-empty">No finite node inventory configured</p>
             )}
-            {readiness.regex_selection_enabled ? (
+            {readiness.regex_selection_enabled && !rackMode ? (
               <div style={{ marginTop: 16 }}>
                 <FormField
                   slotLabel="Additional exact hostnames"
@@ -306,6 +380,9 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
             ) : null}
           </>
         )}
+        {rackMode && nodeError ? <Banner status="error" style={{ marginTop: 16 }}>{nodeError}</Banner> : null}
+        {rackMode && group && !nodeLoading && idleCount < count && source === "group" ?
+          <Banner status="warning" style={{ marginTop: 16 }}>This rack currently has {idleCount} permitted idle nodes; {count} are required. No nodes will be added from another rack.</Banner> : null}
         {error ? (
           <Banner status="error" kind="inline" style={{ marginTop: 16 }}>
             {error}
@@ -314,8 +391,9 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
         <div className="ck-bar" style={{ marginTop: 20 }}>
           <Button
             kind="primary"
+            color="brand"
             disabled={!configured || !valid || busy}
-            onClick={() => void review()}
+            onClick={handlePreview}
           >
             <ClipboardCheck size={16} />
             {busy ? "Preparing preview..." : "Preview run"}
@@ -394,6 +472,7 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
             <div className="ck-bar">
               <Button
                 kind="primary"
+                color="brand"
                 disabled={!remaining || !preview.plan.submission_enabled}
                 onClick={submit}
               >
@@ -408,5 +487,6 @@ export function RunComposer({ readiness, inventory, onSubmit }: Props) {
         )}
       </section>
     </div>
+    </>
   );
 }

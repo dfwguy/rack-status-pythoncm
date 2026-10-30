@@ -18,6 +18,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from clusterkit_artifacts import directory, read_json, relative_parts
+from clusterkit_context import same_context
 
 
 def write_record(root, name, value):
@@ -108,7 +109,7 @@ def reject_unresolved_overlap(plan, context):
                 intent = read_json(candidate, 'submission-intent.json')
             except FileNotFoundError:
                 continue
-            if not isinstance(intent, dict) or intent.get('context') != context:
+            if not isinstance(intent, dict) or not same_context(intent.get('context'), context):
                 continue
             try:
                 read_json(candidate, 'submission-started.json')

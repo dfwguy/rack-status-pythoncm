@@ -24,9 +24,10 @@ from pathlib import PurePosixPath
 from clusterkit_job import job_spec
 from clusterkit_profile import (
     LABEL,
-    PAIRWISE_COUNTS,
+    MAX_PAIRWISE_NODES,
     ProfileResolution,
     valid_node,
+    valid_pairwise_count,
     valid_path,
 )
 from schedulers.slurm import SlurmScheduler
@@ -51,22 +52,24 @@ def parse_request(raw):
     if not isinstance(raw, dict) or set(raw) - set(RunRequest.__dataclass_fields__):
         raise PlanningError("Request contains unknown fields; deployment overrides are not run inputs")
     scope = raw.get("scope")
-    if scope not in ("preflight", "explicit", "group"):
-        raise PlanningError("scope must be preflight, explicit or group")
+    if scope not in ("preflight", "explicit", "group", "rack"):
+        raise PlanningError("scope must be preflight, explicit, group or rack")
     nodes = raw.get("nodes", [])
-    if not isinstance(nodes, list) or len(nodes) > max(PAIRWISE_COUNTS) or any(not valid_node(n) for n in nodes):
+    if not isinstance(nodes, list) or len(nodes) > MAX_PAIRWISE_NODES or any(not valid_node(n) for n in nodes):
         raise PlanningError("nodes must be a bounded list of literal hostnames")
     if len({n.casefold() for n in nodes}) != len(nodes):
         raise PlanningError("Duplicate nodes are forbidden")
-    count = raw.get("node_count", len(nodes) if scope != "group" else None)
+    count = raw.get("node_count", len(nodes) if scope not in ("group", "rack") else None)
     if type(count) is not int or count < 1:
         raise PlanningError("node_count must be a positive integer")
+    if scope != "preflight" and not valid_pairwise_count(count):
+        raise PlanningError(f"Pairwise node_count must be even and between 2 and {MAX_PAIRWISE_NODES}")
     group, label = raw.get("group", ""), raw.get("label", "clusterkit")
     if not isinstance(label, str) or not LABEL.fullmatch(label):
         raise PlanningError("label must contain 1–64 letters/digits/underscore/dash and start alphanumeric")
     if not isinstance(group, str) or (group and not LABEL.fullmatch(group)):
         raise PlanningError("Invalid group name")
-    if scope == "group":
+    if scope in ("group", "rack") or (scope == "preflight" and group):
         if not group or nodes:
             raise PlanningError("Group selection requires a configured group and no explicit nodes")
     elif group or not nodes or len(nodes) != count:
@@ -91,13 +94,21 @@ def candidates_for(resolution, request):
     profile = resolution.profile
     if request.node_count > profile.max_nodes:
         raise PlanningError("Requested node count exceeds the administrator maximum")
-    if request.scope != "preflight" and request.node_count not in profile.allowed_node_counts:
+    if request.scope not in ("preflight", "rack") and request.node_count not in profile.allowed_node_counts:
         raise PlanningError("Requested node count is not enabled by the administrator")
-    if request.scope == "group":
+    if request.scope in ("group", "rack") or (request.scope == "preflight" and request.group):
         group = next((g for g in profile.topology_groups if g.name == request.group), None)
         if group is None:
             raise PlanningError("Unknown configured topology group")
-        candidates = tuple(n for n in group.nodes if profile.allows(n))
+        if request.scope == "rack":
+            reason = profile.whole_rack_reason(group)
+            if reason:
+                raise PlanningError(reason)
+            if request.node_count != len(group.nodes):
+                raise PlanningError("Whole-rack node_count must match every mapped rack member; no subset is permitted")
+            candidates = tuple(group.nodes)
+        else:
+            candidates = tuple(n for n in group.nodes if profile.allows(n))
     else:
         candidates = request.nodes
     if not candidates or any(not profile.allows(n) for n in candidates):
@@ -207,7 +218,13 @@ def build_plan(raw_request, resolution, inventory, *, scripts_dir, attempt_id=No
         status[node] = {"node": node, "states": states, "partitions": partitions,
                         "eligible": not reason, "currently_idle": bool(idle),
                         "eligible_but_busy": not reason and not idle, "reason": reason}
-    if request.scope == "group":
+    if request.scope == "rack":
+        unavailable = [n for n in candidates if not status[n]["currently_idle"]]
+        if unavailable:
+            raise PlanningError("Whole-rack testing requires all mapped nodes idle in the configured partition; "
+                                + unavailable[0] + " is busy, unavailable or unknown; no subset was selected")
+        selected = sorted(candidates, key=_natural_key)
+    elif request.scope == "group" or (request.scope == "preflight" and request.group):
         eligible = sorted((n for n in candidates if status[n]["currently_idle"]), key=_natural_key)
         if len(eligible) < request.node_count:
             busy = sum(status[n]["eligible_but_busy"] for n in candidates)
@@ -288,4 +305,7 @@ def plan_request(raw_request, resolution, reader, *, scripts_dir):
     """Validate before discovery; reader is the existing transport-backed adapter."""
     request = parse_request(raw_request)
     candidates = candidates_for(resolution, request)
+    if resolution.profile.rack_inventory:
+        from clusterkit_inventory import require_current_inventory
+        require_current_inventory(resolution)
     return build_plan(raw_request, resolution, reader.query(candidates), scripts_dir=scripts_dir)

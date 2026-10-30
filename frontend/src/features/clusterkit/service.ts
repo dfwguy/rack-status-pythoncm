@@ -16,6 +16,7 @@ import type {
   Inventory,
   Preview,
   Readiness,
+  RackDirectory,
   RunRequest,
   RunStatus,
 } from "./types";
@@ -40,8 +41,9 @@ async function json<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const getReadiness = (signal?: AbortSignal) =>
   json<Readiness>("/readiness", { signal });
-export const getInventory = async (signal?: AbortSignal) =>
-  (await json<{ inventory: Inventory }>("/inventory", { signal })).inventory;
+export const getInventory = async (signal?: AbortSignal, group = "") =>
+  (await json<{ inventory: Inventory }>(`/inventory${group ? `?group=${encodeURIComponent(group)}` : ""}`, { signal })).inventory;
+export const getRackDirectory = (signal?: AbortSignal) => json<RackDirectory>("/racks", { signal });
 export const previewRun = (request: RunRequest, signal?: AbortSignal) =>
   json<Preview>("/preview", {
     method: "POST",

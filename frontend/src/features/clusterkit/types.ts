@@ -9,6 +9,9 @@
  * without an express license agreement from NVIDIA CORPORATION or
  * its affiliates is strictly prohibited.
  */
+import type { NodeInventoryEntry, NodeSources, RackHierarchy, StatusScalableUnit } from "../../types/api";
+import type { NvisNamingSchema } from "../../types/naming";
+
 export interface ExecutionContext {
   hostname: string;
   user: string;
@@ -29,6 +32,10 @@ export interface Readiness {
   regex_selection_enabled?: boolean;
   allowed_node_counts: number[];
   max_nodes: number | null;
+  rack_inventory_enabled?: boolean;
+  whole_rack_enabled?: boolean;
+  rack_inventory_ready?: boolean;
+  rack_inventory_error?: string;
   groups?: {
     name: string;
     kind: string;
@@ -41,16 +48,18 @@ export interface Readiness {
 
 export interface InventoryNode {
   node: string;
+  allowed?: boolean;
   states: string[];
   partitions: string[];
 }
 export interface Inventory {
+  group?: string;
   nodes: InventoryNode[];
   captured_at: string | null;
   note?: string;
 }
 export interface RunRequest {
-  scope: "preflight" | "explicit" | "group";
+  scope: "preflight" | "explicit" | "group" | "rack";
   nodes?: string[];
   group?: string;
   node_count: number;
@@ -106,7 +115,15 @@ export interface NodeDiagnostic {
   link_layer?: string;
   affinity_after?: number[];
   errors?: string[];
+  error?: string;
   global_v2_gid?: { gid: string };
+}
+export interface StageFailure {
+  category: string;
+  message: string;
+  // Historical backend field: nodes reporting the log error, not proven faulty hardware.
+  affected_nodes?: string[];
+  evidence?: { artifact: string; line?: number; excerpt: string }[];
 }
 export interface Summary {
   functional_status: string;
@@ -115,10 +132,11 @@ export interface Summary {
   nodes: string[];
   errors: string[];
   warnings?: string[];
-  preflight?: { status: string; nodes?: NodeDiagnostic[] };
+  preflight?: { status: string; nodes?: NodeDiagnostic[]; exit_status?: number | null };
+  clusterkit_exit_status?: Record<string, number>;
   stages?: Record<
     string,
-    { exit_status: number; metrics?: Record<string, PairMetric> }
+    { exit_status: number | null; status?: "PASS" | "FAIL" | "SKIPPED"; reason?: string; failure?: StageFailure | null; metrics?: Record<string, PairMetric> }
   >;
 }
 export interface Activity {
@@ -160,4 +178,29 @@ export interface Artifact {
 export interface HistoryPage {
   runs: Activity[];
   next_cursor: string | null;
+}
+
+export interface RackDirectoryEntry {
+  whole_rack_enabled?: boolean;
+  whole_rack_reason?: string;
+  name: string;
+  node_count: number;
+  nodes: string[];
+  counts: { idle: number; busy: number; drain: number; down: number; reserved: number; unknown: number };
+  allowed_node_count: number;
+  allowed_node_counts: number[];
+  authoritative: boolean;
+  test_enabled: boolean;
+  reason: string;
+}
+export interface RackDirectory {
+  racks: RackDirectoryEntry[];
+  nodes: NodeInventoryEntry[];
+  snapshot: { state: string; source?: string; age_seconds: number | null; last_success_at?: string | null; checkpoint_only?: boolean };
+  node_sources: NodeSources;
+  unplaced_node_count: number;
+  error?: string;
+  naming?: NvisNamingSchema | null;
+  hierarchy?: RackHierarchy | null;
+  scalable_units?: StatusScalableUnit[];
 }

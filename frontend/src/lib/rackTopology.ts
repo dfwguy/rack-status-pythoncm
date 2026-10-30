@@ -45,6 +45,11 @@ export interface RackParts {
 // row-letter sites (e.g. Boston ``bos01-a05``) still group into rows a/b.
 const TOKEN_RE = /\[\\d\+\]|\[\d{2}-\d{2}\]|\[[A-Za-z]-[A-Za-z]\]/g;
 
+/** Only explicit layout metadata can make a physical row view meaningful. */
+export function hasConfiguredFloorLayout(hierarchy?: RackHierarchy | null, naming?: NvisNamingSchema | null): boolean {
+  return Boolean(hierarchy?.sections.length || (naming?.rack_id.match(TOKEN_RE)?.length ?? 0) >= 2);
+}
+
 interface TemplateSeg {
   kind: "lit" | "slot";
   text: string; // literal text (lit) or "" (slot)
