@@ -77,6 +77,8 @@ subtrees:
         title: P2P catalog distribution — components, parameters, scripts
       - file: reference/clusterkit-v19-validation-2026-10-23
         title: ClusterKit V19 validation, 2026-10-23
+      - file: reference/clusterkit-mac-integration-2026-10-30
+        title: ClusterKit Mac integration, 2026-10-30
 
   - caption: Explanation — why it is like this
     entries:

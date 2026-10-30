@@ -438,6 +438,12 @@
   "variant": "sync"
  },
  {
+  "endpoint": "clusterkit_modular.clusterkit_racks",
+  "method": "GET",
+  "action": "validation.activity:list",
+  "variant": "sync"
+ },
+ {
   "endpoint": "clusterkit_modular.clusterkit_readiness",
   "method": "GET",
   "action": "validation.activity:list",

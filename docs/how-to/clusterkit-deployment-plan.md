@@ -55,9 +55,13 @@ before any production promotion is proposed.
    colocation. The AppServer is x86_64; allocated compute nodes are aarch64. Run
    ARM binaries only on compute nodes. Keep site paths, exact allowlists,
    HCA/GID policy, groups, counts and limits in Settings/catalog configuration.
-5. Keep the tested CPU/RoCE recipe, maximum eight nodes and reviewed resource and
-   wall-time bounds. Leave performance acceptance disabled. Treat V19 membership
-   as user-declared topology until independently confirmed by the fabric team.
+5. Keep the reviewed CPU/RoCE recipe and the administrator-approved node/resource
+   and wall-time bounds. V19 was validated up to eight nodes; the
+   [October 30 handoff](../reference/clusterkit-mac-integration-2026-10-30.md)
+   additionally reports one successful 18-node Q4 control. That does not approve
+   a larger limit, all racks or every size supported by the software. Leave
+   performance acceptance disabled. Treat user-declared group membership as
+   unverified physical topology until independently confirmed by the fabric team.
 
 **Gate:** the intended service environment must pass clean-start checks without
 root, compute-node package installation or production state access.
